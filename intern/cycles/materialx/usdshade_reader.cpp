@@ -5701,6 +5701,11 @@ bool read_image_vector_controls(const pxr::UsdShadeShader &source,
   return true;
 }
 
+bool read_image_sdk_empty_filename(const pxr::UsdShadeShader &source,
+                                   const string &nodedef,
+                                   bool *empty,
+                                   string *error_message);
+
 bool read_gltf_texture_texcoord(const pxr::UsdShadeShader &source,
                                 const string &nodedef,
                                 const string &shader_path,
@@ -6176,16 +6181,22 @@ bool compose_gltf_colorimage_color4(const pxr::UsdShadeShader &source,
   string file_path;
   string filter;
   string address;
-  if (!read_gltf_texture_asset(source, gltf_colorimage_id, &file_path, error_message) ||
-      !read_periodic_gltf_texture_options(
-          source, gltf_colorimage_id, &filter, error_message, &address))
-  {
+  bool empty_file = false;
+  if (!read_image_sdk_empty_filename(source, gltf_colorimage_id, &empty_file, error_message)) {
     return false;
   }
-  if (filter != "linear" && filter != "closest") {
-    set_error(error_message,
-              string(gltf_colorimage_id) + " supports literal linear or closest filtertype");
-    return false;
+  if (!empty_file) {
+    if (!read_gltf_texture_asset(source, gltf_colorimage_id, &file_path, error_message) ||
+        !read_periodic_gltf_texture_options(
+            source, gltf_colorimage_id, &filter, error_message, &address))
+    {
+      return false;
+    }
+    if (filter != "linear" && filter != "closest") {
+      set_error(error_message,
+                string(gltf_colorimage_id) + " supports literal linear or closest filtertype");
+      return false;
+    }
   }
 
   const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
@@ -6234,26 +6245,33 @@ bool compose_gltf_colorimage_color4(const pxr::UsdShadeShader &source,
     return false;
   }
 
-  Link texcoord;
-  if (!read_gltf_texture_texcoord(
-          source, gltf_colorimage_id, shader_path, graph, &texcoord, depth, error_message))
-  {
-    return false;
-  }
-
   Node image;
   image.name = unique_node_name(
       *graph, source.GetPrim().GetName().GetString() + ".image", shader_path + ".image");
-  image.nodedef = image_color4_id;
-  image.asset_inputs["file"] = file_path;
-  image.float4_inputs["default"] = make_float4(
-      default_value[0], default_value[1], default_value[2], default_value[3]);
-  image.links["texcoord"] = texcoord;
-  if (filter != "linear") {
-    image.string_inputs["filtertype"] = filter;
+  if (empty_file) {
+    /* Batch 15 (b11x packet i D0): the NG image returns its default. */
+    image.nodedef = constant_color4_id;
+    image.float4_inputs["value"] = make_float4(
+        default_value[0], default_value[1], default_value[2], default_value[3]);
   }
-  if (address != "periodic") {
-    image.string_inputs["addressmode"] = address;
+  else {
+    Link texcoord;
+    if (!read_gltf_texture_texcoord(
+            source, gltf_colorimage_id, shader_path, graph, &texcoord, depth, error_message))
+    {
+      return false;
+    }
+    image.nodedef = image_color4_id;
+    image.asset_inputs["file"] = file_path;
+    image.float4_inputs["default"] = make_float4(
+        default_value[0], default_value[1], default_value[2], default_value[3]);
+    image.links["texcoord"] = texcoord;
+    if (filter != "linear") {
+      image.string_inputs["filtertype"] = filter;
+    }
+    if (address != "periodic") {
+      image.string_inputs["addressmode"] = address;
+    }
   }
   image.outputs["out"] = Type::Color4;
   Link chain = {image.name, "out", Type::Color4};
@@ -6331,21 +6349,29 @@ bool read_gltf_texture_common(const pxr::UsdShadeShader &source,
   string file_path;
   string filter;
   string address;
-  if (!read_gltf_texture_asset(source, nodedef, &file_path, error_message) ||
-      !read_periodic_gltf_texture_options(source, nodedef, &filter, error_message, &address))
-  {
+  /* Batch 15 (b11x packet i D0): an unvalued or empty file samples nothing;
+   * the NG image returns its literal default, lowered as a constant. */
+  bool empty_file = false;
+  if (!read_image_sdk_empty_filename(source, nodedef, &empty_file, error_message)) {
     return false;
   }
-  if (filter != "linear" && filter != "closest") {
-    set_error(error_message, nodedef + " supports literal linear or closest filtertype");
-    return false;
-  }
-  /* Batch 11: non-default sampler controls ride on the image node. */
-  if (filter != "linear") {
-    image->string_inputs["filtertype"] = filter;
-  }
-  if (address != "periodic") {
-    image->string_inputs["addressmode"] = address;
+  if (!empty_file) {
+    if (!read_gltf_texture_asset(source, nodedef, &file_path, error_message) ||
+        !read_periodic_gltf_texture_options(source, nodedef, &filter, error_message, &address))
+    {
+      return false;
+    }
+    if (filter != "linear" && filter != "closest") {
+      set_error(error_message, nodedef + " supports literal linear or closest filtertype");
+      return false;
+    }
+    /* Batch 11: non-default sampler controls ride on the image node. */
+    if (filter != "linear") {
+      image->string_inputs["filtertype"] = filter;
+    }
+    if (address != "periodic") {
+      image->string_inputs["addressmode"] = address;
+    }
   }
   const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
   const bool default_type_ok =
@@ -6362,6 +6388,10 @@ bool read_gltf_texture_common(const pxr::UsdShadeShader &source,
       set_error(error_message, nodedef + " requires finite float default");
       return false;
     }
+    if (empty_file) {
+      image->nodedef = constant_float_id;
+      image->inputs["value"] = value;
+    }
   }
   else if (output_type == pxr::SdfValueTypeNames->Color4f) {
     pxr::GfVec4f value;
@@ -6369,7 +6399,13 @@ bool read_gltf_texture_common(const pxr::UsdShadeShader &source,
       set_error(error_message, nodedef + " requires finite color4 default");
       return false;
     }
-    image->float4_inputs["default"] = make_float4(value[0], value[1], value[2], value[3]);
+    if (empty_file) {
+      image->nodedef = constant_color4_id;
+      image->float4_inputs["value"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
+    else {
+      image->float4_inputs["default"] = make_float4(value[0], value[1], value[2], value[3]);
+    }
   }
   else if (output_type == pxr::SdfValueTypeNames->Color3f ||
            output_type == pxr::SdfValueTypeNames->Float3)
@@ -6381,6 +6417,18 @@ bool read_gltf_texture_common(const pxr::UsdShadeShader &source,
       set_error(error_message, nodedef + " requires finite vector/color3 default");
       return false;
     }
+    if (empty_file && output_type == pxr::SdfValueTypeNames->Color3f) {
+      image->nodedef = constant_color3_id;
+      image->color3_inputs["value"] = make_float3(value[0], value[1], value[2]);
+    }
+    else if (empty_file) {
+      image->nodedef = constant_vector3_id;
+      image->vector3_inputs["value"] = make_float3(value[0], value[1], value[2]);
+    }
+  }
+  if (empty_file) {
+    *result = {image->name, "out", image->outputs.at("out")};
+    return true;
   }
   image->asset_inputs["file"] = file_path;
   image->links["texcoord"] = texcoord;
@@ -6412,22 +6460,29 @@ bool read_gltf_normalmap_image(const pxr::UsdShadeShader &source,
   string file_path;
   string filter;
   string address;
-  if (!read_gltf_texture_asset(source, gltf_normalmap_vector3_id, &file_path, error_message) ||
-      !read_periodic_gltf_texture_options(
-          source, gltf_normalmap_vector3_id, &filter, error_message, &address))
+  bool empty_file = false;
+  if (!read_image_sdk_empty_filename(source, gltf_normalmap_vector3_id, &empty_file, error_message))
   {
     return false;
   }
-  if (filter != "linear" && filter != "closest") {
-    set_error(error_message,
-              string(gltf_normalmap_vector3_id) + " supports literal linear or closest filtertype");
-    return false;
-  }
-  if (filter != "linear") {
-    image->string_inputs["filtertype"] = filter;
-  }
-  if (address != "periodic") {
-    image->string_inputs["addressmode"] = address;
+  if (!empty_file) {
+    if (!read_gltf_texture_asset(source, gltf_normalmap_vector3_id, &file_path, error_message) ||
+        !read_periodic_gltf_texture_options(
+            source, gltf_normalmap_vector3_id, &filter, error_message, &address))
+    {
+      return false;
+    }
+    if (filter != "linear" && filter != "closest") {
+      set_error(error_message,
+                string(gltf_normalmap_vector3_id) + " supports literal linear or closest filtertype");
+      return false;
+    }
+    if (filter != "linear") {
+      image->string_inputs["filtertype"] = filter;
+    }
+    if (address != "periodic") {
+      image->string_inputs["addressmode"] = address;
+    }
   }
   const pxr::UsdShadeInput default_input = source.GetInput(pxr::TfToken("default"));
   pxr::GfVec3f default_value;
@@ -6451,11 +6506,18 @@ bool read_gltf_normalmap_image(const pxr::UsdShadeShader &source,
                   " scale must be a literal vector2 with equal finite components");
     return false;
   }
+  image->outputs["out"] = Type::Vector3;
+  *normalmap_scale = make_float2(scale[0], scale[1]);
+  if (empty_file) {
+    /* Batch 15 (b11x packet i D0): the NG image returns its default. */
+    image->nodedef = constant_vector3_id;
+    image->vector3_inputs["value"] = make_float3(
+        default_value[0], default_value[1], default_value[2]);
+    return true;
+  }
   image->nodedef = image_vector3_id;
   image->asset_inputs["file"] = file_path;
   image->links["texcoord"] = texcoord;
-  image->outputs["out"] = Type::Vector3;
-  *normalmap_scale = make_float2(scale[0], scale[1]);
   return true;
 }
 

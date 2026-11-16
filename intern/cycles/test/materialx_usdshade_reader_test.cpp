@@ -23568,6 +23568,99 @@ TEST(materialx_usdshade_reader, gltf_colorimage_connected_modulators_multiply_th
   ASSERT_TRUE(materialx::lower(graph, &lowered, &lower_error)) << lower_error;
 }
 
+/* Batch 15 (b11x packet i D0): an unvalued glTF texture file samples
+ * nothing; the NG image returns its literal default (as ND_image does). */
+TEST(materialx_usdshade_reader, gltf_textures_with_unvalued_file_lower_to_their_default)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::SdfPath root("/Looks/GltfEmptyFile");
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+  const auto define = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset);
+    result.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2);
+    result.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 1.0f));
+    result.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(1.0f, 1.0f));
+    result.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    result.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+        .Set(pxr::GfVec2f(0.0f, 0.0f));
+    result.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Int).Set(0);
+    result.CreateInput(pxr::TfToken("uaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    result.CreateInput(pxr::TfToken("vaddressmode"), pxr::SdfValueTypeNames->String).Set("periodic");
+    result.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String).Set("linear");
+    return result;
+  };
+  pxr::UsdShadeShader color3 = define("Color3", "ND_gltf_image_color3_color3_1_0");
+  color3.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+  color3.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+  color3.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Color3f).Set(pxr::GfVec3f(1.0f));
+  pxr::UsdShadeShader scalar = define("Float", "ND_gltf_image_float_float_1_0");
+  scalar.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  scalar.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(0.375f);
+  scalar.CreateInput(pxr::TfToken("factor"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+  pxr::UsdShadeShader normalmap = define("NormalMap", "ND_gltf_normalmap_vector3_1_0");
+  normalmap.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Vector3f);
+  normalmap.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(0.5f, 0.5f, 1.0f));
+  pxr::UsdShadeShader extract = define("Extract", "ND_extract_vector3");
+  extract.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+  ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Vector3f)
+                  .ConnectToSource(normalmap.ConnectableAPI(), pxr::TfToken("out")));
+  extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(2);
+  pxr::UsdShadeShader colorimage = define("ColorImage", "ND_gltf_colorimage");
+  colorimage.CreateOutput(pxr::TfToken("outcolor"), pxr::SdfValueTypeNames->Color3f);
+  colorimage.CreateOutput(pxr::TfToken("outa"), pxr::SdfValueTypeNames->Float);
+  colorimage.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(0.5f, 0.25f, 0.125f, 0.75f));
+  colorimage.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f));
+  colorimage.CreateInput(pxr::TfToken("geomcolor"), pxr::SdfValueTypeNames->Color4f)
+      .Set(pxr::GfVec4f(1.0f));
+
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(stage, root.AppendChild(pxr::TfToken("OpenPBR")));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(color3.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(scalar.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(colorimage.ConnectableAPI(), pxr::TfToken("outcolor")));
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_opacity"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(colorimage.ConnectableAPI(), pxr::TfToken("outa")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  bool saw_color3 = false, saw_float = false, saw_vector3 = false, saw_color4 = false;
+  for (const materialx::Node &node : graph.nodes) {
+    EXPECT_TRUE(node.asset_inputs.empty()) << node.name;
+    saw_color3 |= node.nodedef == "ND_constant_color3" &&
+                  node.color3_inputs.at("value") == make_float3(0.25f, 0.5f, 0.75f);
+    saw_float |= node.nodedef == "ND_constant_float" && node.inputs.at("value") == 0.375f;
+    saw_vector3 |= node.nodedef == "ND_constant_vector3" &&
+                   node.vector3_inputs.at("value") == make_float3(0.5f, 0.5f, 1.0f);
+    saw_color4 |= node.nodedef == "ND_constant_color4" &&
+                  node.float4_inputs.at("value") == make_float4(0.5f, 0.25f, 0.125f, 0.75f);
+  }
+  EXPECT_TRUE(saw_color3);
+  EXPECT_TRUE(saw_float);
+  EXPECT_TRUE(saw_vector3);
+  EXPECT_TRUE(saw_color4);
+  ShaderGraph lowered;
+  string lower_error;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &lower_error)) << lower_error;
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_gltf_image_helpers_with_literal_texcoords)
 {
   const TemporaryImage image_asset;
