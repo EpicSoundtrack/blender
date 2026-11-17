@@ -826,6 +826,29 @@ TEST(materialx_graph, connected_fractal_heighttonormal_keeps_height_and_uv_deriv
   EXPECT_EQ(color_conversion->inputs[0]->link, native_height->output("Vector"));
 }
 
+/* Track B6/B7: the MaterialX-only hidden BSDF sockets default to values for which
+ * the SVM/OSL kernels compute exactly the upstream closures (weight 1, Oren-Nayar,
+ * negative physical alpha = stock roughness path, Base Color drives subsurface). */
+TEST(materialx_graph, stock_bsdf_hidden_materialx_sockets_default_to_stock)
+{
+  ShaderGraph graph;
+  const DiffuseBsdfNode *diffuse = graph.create_node<DiffuseBsdfNode>();
+  EXPECT_EQ(diffuse->get_method(), CLOSURE_BSDF_DIFFUSE_ID);
+  EXPECT_EQ(diffuse->get_closure_weight(), 1.0f);
+  const MetallicBsdfNode *metallic = graph.create_node<MetallicBsdfNode>();
+  EXPECT_EQ(metallic->get_tint(), one_float3());
+  EXPECT_LT(metallic->get_alpha_x(), 0.0f);
+  EXPECT_LT(metallic->get_alpha_y(), 0.0f);
+  const GlassBsdfNode *glass = graph.create_node<GlassBsdfNode>();
+  EXPECT_LT(glass->get_alpha_x(), 0.0f);
+  EXPECT_LT(glass->get_alpha_y(), 0.0f);
+  const PrincipledBsdfNode *principled = graph.create_node<PrincipledBsdfNode>();
+  EXPECT_EQ(principled->get_base_weight(), 1.0f);
+  EXPECT_FALSE(principled->get_use_independent_subsurface_color());
+  const SubsurfaceScatteringNode *sss = graph.create_node<SubsurfaceScatteringNode>();
+  EXPECT_EQ(sss->get_closure_weight(), 1.0f);
+}
+
 /* Track B9: derivative propagation through Math/Noise is MaterialX-only. Stock nodes
  * report NODE_NONE (zero derivatives, as upstream); nodes created by lower() opt in.
  * The Voronoi F3 feature is appended so Blender's integer feature sync keeps
