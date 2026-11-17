@@ -23,6 +23,7 @@
 #include "kernel/svm/materialx_blackbody.h"
 #include "kernel/svm/materialx_cellnoise.h"
 #include "kernel/svm/materialx_heighttonormal.h"
+#include "kernel/svm/materialx_noise.h"
 #include "kernel/svm/map_range.h"
 #include "kernel/svm/math.h"
 #include "kernel/svm/color_util.h"
@@ -903,10 +904,9 @@ TEST(materialx_graph, math_and_noise_derivatives_are_materialx_only)
       EXPECT_TRUE(math->get_use_materialx_derivatives()) << node->name;
       EXPECT_EQ(math->shader_node_type(), NODE_MATH) << node->name;
     }
-    if (auto *noise = dynamic_cast<NoiseTextureNode *>(node)) {
+    if (auto *noise = dynamic_cast<MaterialXNoiseNode *>(node)) {
       noise_nodes++;
-      EXPECT_TRUE(noise->get_use_materialx_derivatives()) << node->name;
-      EXPECT_EQ(noise->shader_node_type(), NODE_TEX_NOISE) << node->name;
+      EXPECT_EQ(noise->shader_node_type(), NODE_MATERIALX_NOISE) << node->name;
     }
   }
   EXPECT_GT(math_nodes + noise_nodes, 0);
@@ -1087,23 +1087,21 @@ TEST(materialx_graph, procedural_height_derivative_includes_seven_octaves_and_am
   float stack[SVM_STACK_SIZE] = {};
   stack_store(stack, 0, dual3(p, dx, dy));
   const auto literal = [](float value) { return SVMInputFloat{__float_as_uint(value)}; };
-  const SVMNodeTexNoise noise{
+  const SVMNodeMaterialXNoise noise{
       .dimensions = 3,
       .noise_type = NODE_NOISE_FBM,
       .normalize = 0,
-      .w = literal(0.0f),
+      .vector_fbm = 1,
       .scale = literal(1.0f),
       .detail = literal(6.0f),
       .roughness = literal(0.5f),
       .lacunarity = literal(2.0f),
-      .offset = literal(0.0f),
-      .gain = literal(1.0f),
       .distortion = literal(0.0f),
       .vector = 0,
       .value_offset = 9,
       .color_offset = SVM_STACK_INVALID,
   };
-  svm_node_tex_noise_derivative(stack, noise);
+  svm_node_materialx_noise_derivative(stack, noise);
   const SVMNodeMath multiply{
       .math_type = NODE_MATH_MULTIPLY,
       .value1 = SVMInputFloat{SVM_INPUT_STACK_OFFSET_MASK | 9u},
@@ -1113,7 +1111,7 @@ TEST(materialx_graph, procedural_height_derivative_includes_seven_octaves_and_am
   };
   svm_node_math_derivative(stack, multiply);
   const dual1 actual = stack_load<dual1>(stack, 12);
-  EXPECT_NEAR(actual.val, noise_fbm(p, 6.0f, 0.5f, 2.0f, false) * amplitude, 1.0e-8f);
+  EXPECT_NEAR(actual.val, mtlx_fractal_noise_float(p, 6.0f, 0.5f, 2.0f) * amplitude, 1.0e-8f);
   const float step = 0.05f;
   const auto expected_derivative = [&](const float3 direction) {
     return amplitude *
@@ -1134,25 +1132,23 @@ TEST(materialx_graph, normalized_fractal_height_keeps_amber_noise_derivatives)
   for (const float detail : {2.0f, 3.0f, 2.25f}) {
     float stack[SVM_STACK_SIZE] = {};
     stack_store(stack, 0, dual3(p, dx, dy));
-    const SVMNodeTexNoise noise{
+    const SVMNodeMaterialXNoise noise{
         .dimensions = 3,
         .noise_type = NODE_NOISE_FBM,
         .normalize = 1,
-        .w = literal(0.0f),
+        .vector_fbm = 1,
         .scale = literal(1.0f),
         .detail = literal(detail),
         .roughness = literal(0.5f),
         .lacunarity = literal(2.0f),
-        .offset = literal(0.0f),
-        .gain = literal(1.0f),
         .distortion = literal(0.0f),
         .vector = 0,
         .value_offset = 9,
         .color_offset = SVM_STACK_INVALID,
     };
-    svm_node_tex_noise_derivative(stack, noise);
+    svm_node_materialx_noise_derivative(stack, noise);
     const dual1 actual = stack_load<dual1>(stack, 9);
-    EXPECT_NEAR(actual.val, noise_fbm(p, detail, 0.5f, 2.0f, true), 1.0e-6f);
+    EXPECT_NEAR(actual.val, mtlx_fractal_noise_float(p, detail, 0.5f, 2.0f), 1.0e-6f);
     const float step = 0.001f;
     const auto expected_derivative = [&](const float3 direction) {
       return (noise_fbm(p + step * direction, detail, 0.5f, 2.0f, true) -
@@ -1249,23 +1245,21 @@ TEST(materialx_graph, amber_joined_noise_height_derivative_matches_scalar_finite
           svm_node_vector_math<dual3>(stack, node);
         };
     const auto noise = [&](uint coordinate, uint result, float detail) {
-      const SVMNodeTexNoise node{
+      const SVMNodeMaterialXNoise node{
           .dimensions = 3,
           .noise_type = NODE_NOISE_FBM,
           .normalize = 1,
-          .w = literal(0.0f),
+          .vector_fbm = 1,
           .scale = literal(1.0f),
           .detail = literal(detail),
           .roughness = literal(0.5f),
           .lacunarity = literal(2.0f),
-          .offset = literal(0.0f),
-          .gain = literal(1.0f),
           .distortion = literal(0.0f),
           .vector = SVMStackOffset(coordinate),
           .value_offset = SVMStackOffset(result),
           .color_offset = SVM_STACK_INVALID,
       };
-      svm_node_tex_noise_derivative(stack, node);
+      svm_node_materialx_noise_derivative(stack, node);
     };
     const auto range = [&](uint source, uint result) {
       const SVMNodeMapRange node{
@@ -1314,7 +1308,11 @@ TEST(materialx_graph, amber_joined_noise_height_derivative_matches_scalar_finite
               authored_height(rest - step * direction)) /
              (2.0f * step);
     };
-    EXPECT_NEAR(actual.val, authored_height(rest), 1.0e-10f);
+    const auto authored_value = [fine_amplitude](float3 position) {
+      return fine_amplitude * mtlx_fractal_noise_float(position * 240.0f, 3.0f, 0.5f, 2.0f) +
+             3.0e-5f * mtlx_fractal_noise_float(position * 5.0f, 4.0f, 0.5f, 2.0f);
+    };
+    EXPECT_NEAR(actual.val, authored_value(rest), 1.0e-10f);
     EXPECT_GT(std::max(fabsf(actual.dx), fabsf(actual.dy)), 1.0e-8f);
     EXPECT_NEAR(actual.dx, finite_difference(rest_dx), 2.0e-9f);
     EXPECT_NEAR(actual.dy, finite_difference(rest_dy), 2.0e-9f);
@@ -1331,23 +1329,21 @@ TEST(materialx_graph, scalar_noise_derivative_keeps_color_derivatives_zero)
     stack[i] = 123.0f;
   }
   const auto literal = [](float value) { return SVMInputFloat{__float_as_uint(value)}; };
-  const SVMNodeTexNoise noise{
+  const SVMNodeMaterialXNoise noise{
       .dimensions = 3,
       .noise_type = NODE_NOISE_FBM,
       .normalize = 0,
-      .w = literal(0.0f),
+      .vector_fbm = 1,
       .scale = literal(1.0f),
       .detail = literal(6.0f),
       .roughness = literal(0.5f),
       .lacunarity = literal(2.0f),
-      .offset = literal(0.0f),
-      .gain = literal(1.0f),
       .distortion = literal(0.0f),
       .vector = 0,
       .value_offset = 9,
       .color_offset = 12,
   };
-  svm_node_tex_noise_derivative(stack, noise);
+  svm_node_materialx_noise_derivative(stack, noise);
   for (int i = 15; i < 21; ++i) {
     EXPECT_FLOAT_EQ(stack[i], 0.0f) << i;
   }
@@ -15217,7 +15213,7 @@ TEST(materialx_graph, lowers_noise3d_contract_forms_with_post_noise_transforms)
   for (const auto &test : cases) {
     materialx::Node noise{"Noise", test.id}; noise.inputs["pivot"] = 0.25f; if (test.vector_amplitude) noise.vector3_inputs["amplitude"] = make_float3(0.5f, 0.75f, 1.0f); else noise.inputs["amplitude"] = 0.5f; noise.links["position"] = {"Position", "out", materialx::Type::Vector3}; noise.outputs["out"] = test.type;
     ShaderGraph graph; ASSERT_TRUE(materialx::lower({{position, noise}}, &graph)) << test.id;
-    NoiseTextureNode *texture = nullptr; for (ShaderNode *node : graph.nodes) texture = texture ? texture : dynamic_cast<NoiseTextureNode *>(node);
+    MaterialXNoiseNode *texture = nullptr; for (ShaderNode *node : graph.nodes) texture = texture ? texture : dynamic_cast<MaterialXNoiseNode *>(node);
     ASSERT_NE(texture, nullptr) << test.id; EXPECT_EQ(texture->get_dimensions(), 3) << test.id;
     EXPECT_FALSE(texture->get_use_normalize()) << test.id;
     EXPECT_FLOAT_EQ(texture->get_detail(), 0.0f) << test.id;
@@ -15358,12 +15354,11 @@ TEST(materialx_graph, lowers_multichannel_noise_with_materialx_channel_hashes)
       lowered[node->name.string()] = node;
     }
 
-    auto *noise_texture = dynamic_cast<NoiseTextureNode *>(lowered["Noise.noise"]);
+    auto *noise_texture = dynamic_cast<MaterialXNoiseNode *>(lowered["Noise.noise"]);
     auto *separate = dynamic_cast<SeparateColorNode *>(lowered["Noise.separate"]);
     ASSERT_NE(noise_texture, nullptr) << test.id;
     ASSERT_NE(separate, nullptr) << test.id;
     EXPECT_EQ(noise_texture->get_dimensions(), test.dimensions) << test.id;
-    EXPECT_TRUE(noise_texture->get_use_materialx_vector_color()) << test.id;
     EXPECT_FALSE(noise_texture->get_use_materialx_vector_fbm()) << test.id;
     EXPECT_EQ(separate->input("Color")->link, noise_texture->output("Color")) << test.id;
 
@@ -15383,7 +15378,7 @@ TEST(materialx_graph, lowers_multichannel_noise_with_materialx_channel_hashes)
     }
 
     if (test.four_channel) {
-      auto *fourth_noise = dynamic_cast<NoiseTextureNode *>(lowered["Noise.W.noise"]);
+      auto *fourth_noise = dynamic_cast<MaterialXNoiseNode *>(lowered["Noise.W.noise"]);
       auto *w_offset = dynamic_cast<VectorMathNode *>(lowered["Noise.W.offset"]);
       ASSERT_NE(fourth_noise, nullptr) << test.id;
       ASSERT_NE(w_offset, nullptr) << test.id;
@@ -15520,12 +15515,12 @@ TEST(materialx_graph, lowers_homogeneous_fractal2d_contracts)
 
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{texcoord, fractal}}, &graph)) << test.id;
-    NoiseTextureNode *texture = nullptr;
+    MaterialXNoiseNode *texture = nullptr;
     ShaderNode *lowered = nullptr;
     MixNode *color_amplitude = nullptr;
     SeparateColorNode *vector_separate = nullptr;
     for (ShaderNode *node : graph.nodes) {
-      texture = texture ? texture : dynamic_cast<NoiseTextureNode *>(node);
+      texture = texture ? texture : dynamic_cast<MaterialXNoiseNode *>(node);
       lowered = node->name == "Fractal" ? node : lowered;
       color_amplitude = node->name == "Fractal.amplitude" ? dynamic_cast<MixNode *>(node) :
                                                              color_amplitude;
@@ -15541,7 +15536,6 @@ TEST(materialx_graph, lowers_homogeneous_fractal2d_contracts)
     EXPECT_FLOAT_EQ(texture->get_lacunarity(), 2.75f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_roughness(), 0.625f) << test.id;
     /* The scalar variant too: Fac is the exact MaterialX scalar fractal. */
-    EXPECT_TRUE(texture->get_use_materialx_vector_color()) << test.id;
     EXPECT_TRUE(texture->get_use_materialx_vector_fbm()) << test.id;
     EXPECT_EQ(texture->get_use_materialx_vector2_fbm(), test.type == materialx::Type::Vector2)
         << test.id;
@@ -16830,11 +16824,10 @@ TEST(materialx_graph, lowers_unifiednoise_literal_type_branches)
                                           make_float3(0.25f, 0.5f, 0.75f))
         << test.id << ":" << test.type;
     ASSERT_NE(sample, nullptr) << test.id << ":" << test.type;
-    if (auto *noise_node = dynamic_cast<NoiseTextureNode *>(sample)) {
+    if (auto *noise_node = dynamic_cast<MaterialXNoiseNode *>(sample)) {
       EXPECT_EQ(noise_node->get_dimensions(), test.noise_dimensions) << test.id << ":" << test.type;
       /* Both dimensions evaluate MaterialX's raw Perlin / fractal. */
       EXPECT_FALSE(noise_node->get_use_normalize()) << test.id << ":" << test.type;
-      EXPECT_TRUE(noise_node->get_use_materialx_vector_color()) << test.id << ":" << test.type;
       if (test.type == 0) {
         EXPECT_FLOAT_EQ(noise_node->get_detail(), 0.0f) << test.id << ":" << test.type;
       }
@@ -16893,10 +16886,10 @@ TEST(materialx_graph, lowers_unifiednoise_with_literal_coordinates)
     ASSERT_TRUE(materialx::lower({{noise}}, &graph)) << test.id;
 
     VectorMathNode *frequency = nullptr;
-    NoiseTextureNode *perlin = nullptr;
+    MaterialXNoiseNode *perlin = nullptr;
     for (ShaderNode *node : graph.nodes) {
       frequency = node->name == "Unified.frequency" ? dynamic_cast<VectorMathNode *>(node) : frequency;
-      perlin = node->name == "Unified.perlin" ? dynamic_cast<NoiseTextureNode *>(node) : perlin;
+      perlin = node->name == "Unified.perlin" ? dynamic_cast<MaterialXNoiseNode *>(node) : perlin;
     }
     ASSERT_NE(frequency, nullptr) << test.id;
     ASSERT_NE(perlin, nullptr) << test.id;
@@ -17236,10 +17229,10 @@ TEST(materialx_graph, lowers_homogeneous_fractal3d_contracts)
 
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{position, fractal}}, &graph)) << test.id;
-    NoiseTextureNode *texture = nullptr;
+    MaterialXNoiseNode *texture = nullptr;
     ShaderNode *lowered = nullptr;
     for (ShaderNode *node : graph.nodes) {
-      texture = texture ? texture : dynamic_cast<NoiseTextureNode *>(node);
+      texture = texture ? texture : dynamic_cast<MaterialXNoiseNode *>(node);
       lowered = node->name == "Fractal" ? node : lowered;
     }
     ASSERT_NE(texture, nullptr) << test.id;
@@ -17251,7 +17244,6 @@ TEST(materialx_graph, lowers_homogeneous_fractal3d_contracts)
     EXPECT_FLOAT_EQ(texture->get_lacunarity(), 2.75f) << test.id;
     EXPECT_FLOAT_EQ(texture->get_roughness(), 0.375f) << test.id;
     /* The scalar variant too: Fac is the exact MaterialX scalar fractal. */
-    EXPECT_TRUE(texture->get_use_materialx_vector_color()) << test.id;
     EXPECT_TRUE(texture->get_use_materialx_vector_fbm()) << test.id;
     EXPECT_EQ(texture->get_use_materialx_vector2_fbm(), test.type == materialx::Type::Vector2)
         << test.id;
@@ -17472,8 +17464,8 @@ TEST(materialx_graph, lowers_four_channel_noise_and_fractal_contracts)
     for (ShaderNode *node : graph.nodes) {
       nodes[node->name.string()] = node;
     }
-    auto *rgb_noise = dynamic_cast<NoiseTextureNode *>(nodes["Procedural.noise"]);
-    auto *w_noise = dynamic_cast<NoiseTextureNode *>(nodes["Procedural.W.noise"]);
+    auto *rgb_noise = dynamic_cast<MaterialXNoiseNode *>(nodes["Procedural.noise"]);
+    auto *w_noise = dynamic_cast<MaterialXNoiseNode *>(nodes["Procedural.W.noise"]);
     auto *offset = dynamic_cast<VectorMathNode *>(nodes["Procedural.W.offset"]);
     auto *w_amplitude = dynamic_cast<MathNode *>(nodes["Procedural.W.amplitude"]);
     ASSERT_NE(rgb_noise, nullptr) << test.id;
@@ -26309,26 +26301,22 @@ MtlxNoiseEval mtlx_eval_svm_noise(const float3 p,
   float stack[SVM_STACK_SIZE] = {};
   stack_store_float3(stack, 0, p);
   const auto literal = [](float value) { return SVMInputFloat{__float_as_uint(value)}; };
-  const SVMNodeTexNoise node{
+  const SVMNodeMaterialXNoise node{
       .dimensions = uint(dimensions),
       .noise_type = NODE_NOISE_FBM,
       .normalize = 0,
-      .materialx_vector_color = 1,
-      .materialx_vector_fbm = uint(fbm),
-      .materialx_vector2_fbm = uint(vector2_fbm),
-      .w = literal(0.0f),
+      .vector_fbm = uint(fbm),
+      .vector2_fbm = uint(vector2_fbm),
       .scale = literal(1.0f),
       .detail = literal(float(octaves - 1)),
       .roughness = literal(diminish),
       .lacunarity = literal(lacunarity),
-      .offset = literal(0.0f),
-      .gain = literal(1.0f),
       .distortion = literal(0.0f),
       .vector = 0,
       .value_offset = 3,
       .color_offset = 4,
   };
-  svm_node_tex_noise(stack, node);
+  svm_node_materialx_noise(stack, node);
   return {stack_load_float(stack, 3), stack_load_float3(stack, 4)};
 }
 
@@ -26523,11 +26511,10 @@ TEST(materialx_graph, lowers_every_noise3d_and_fractal3d_through_mtlx_perlin)
         EXPECT_EQ(lowered.find(name), lowered.end()) << id;
         continue;
       }
-      auto *texture = dynamic_cast<NoiseTextureNode *>(lowered[name]);
+      auto *texture = dynamic_cast<MaterialXNoiseNode *>(lowered[name]);
       ASSERT_NE(texture, nullptr) << id << " " << name;
       EXPECT_EQ(texture->get_dimensions(), 3) << id << " " << name;
       EXPECT_FALSE(texture->get_use_normalize()) << id << " " << name;
-      EXPECT_TRUE(texture->get_use_materialx_vector_color()) << id << " " << name;
       EXPECT_EQ(texture->get_use_materialx_vector_fbm(), fractal) << id << " " << name;
       EXPECT_EQ(texture->get_use_materialx_vector2_fbm(), vector2 && fractal && !w)
           << id << " " << name;
@@ -26636,13 +26623,12 @@ TEST(materialx_graph, unifiednoise_perlin_and_fractal_lowering_matches_cpu_refer
     auto *frequency = dynamic_cast<VectorMathNode *>(nodes["Unified.frequency"]);
     auto *offset = dynamic_cast<VectorMathNode *>(nodes["Unified.offset"]);
     auto *range = dynamic_cast<MapRangeNode *>(nodes["Unified"]);
-    auto *sample = dynamic_cast<NoiseTextureNode *>(
+    auto *sample = dynamic_cast<MaterialXNoiseNode *>(
         nodes[golden.type == 0 ? "Unified.perlin" : "Unified.fractal"]);
     ASSERT_NE(frequency, nullptr);
     ASSERT_NE(offset, nullptr);
     ASSERT_NE(range, nullptr);
     ASSERT_NE(sample, nullptr);
-    EXPECT_TRUE(sample->get_use_materialx_vector_color());
     EXPECT_EQ(sample->get_use_materialx_vector_fbm(), golden.type == 3);
     EXPECT_FALSE(sample->get_use_materialx_vector2_fbm());
     EXPECT_FALSE(sample->get_use_normalize());
@@ -26660,26 +26646,22 @@ TEST(materialx_graph, unifiednoise_perlin_and_fractal_lowering_matches_cpu_refer
 
     float stack[SVM_STACK_SIZE] = {};
     stack_store_float3(stack, 0, p);
-    const SVMNodeTexNoise tex{
+    const SVMNodeMaterialXNoise tex{
         .dimensions = uint(sample->get_dimensions()),
         .noise_type = sample->get_type(),
         .normalize = uint(sample->get_use_normalize()),
-        .materialx_vector_color = uint(sample->get_use_materialx_vector_color()),
-        .materialx_vector_fbm = uint(sample->get_use_materialx_vector_fbm()),
-        .materialx_vector2_fbm = uint(sample->get_use_materialx_vector2_fbm()),
-        .w = literal(sample->get_w()),
+        .vector_fbm = uint(sample->get_use_materialx_vector_fbm()),
+        .vector2_fbm = uint(sample->get_use_materialx_vector2_fbm()),
         .scale = literal(sample->get_scale()),
         .detail = literal(sample->get_detail()),
         .roughness = literal(sample->get_roughness()),
         .lacunarity = literal(sample->get_lacunarity()),
-        .offset = literal(sample->get_offset()),
-        .gain = literal(sample->get_gain()),
         .distortion = literal(sample->get_distortion()),
         .vector = 0,
         .value_offset = 3,
         .color_offset = 4,
     };
-    svm_node_tex_noise(stack, tex);
+    svm_node_materialx_noise(stack, tex);
     float value = stack_load_float(stack, 3);
     if (golden.type == 0) {
       auto *amplitude = dynamic_cast<MathNode *>(nodes["Unified.perlin.amplitude"]);

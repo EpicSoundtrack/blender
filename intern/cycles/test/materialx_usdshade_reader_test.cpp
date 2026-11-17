@@ -12646,7 +12646,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_unifiednoise_literal_type_branc
     if (auto *voronoi = dynamic_cast<MaterialXWorleyNode *>(node)) {
       saw_worley |= node->name == "Unified2D.worley" && voronoi->get_dimensions() == 2;
     }
-    if (auto *noise = dynamic_cast<NoiseTextureNode *>(node)) {
+    if (auto *noise = dynamic_cast<MaterialXNoiseNode *>(node)) {
       saw_fractal |= node->name == "Unified3D.fractal" && noise->get_dimensions() == 3 &&
                      noise->get_type() == NODE_NOISE_FBM;
     }
@@ -12674,7 +12674,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_noise3d_contract_forms)
                                        [](const materialx::Node &node) { return node.name == "Color"; });
   ASSERT_NE(color_node, source.nodes.end());
   EXPECT_EQ(color_node->vector3_inputs.at("amplitude"), make_float3(0.5f, 0.75f, 1.0f));
-  ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int noise_count=0; for(ShaderNode *node:lowered.nodes) if(const auto *noise=dynamic_cast<NoiseTextureNode *>(node)){ EXPECT_EQ(noise->get_dimensions(),3); noise_count++; } EXPECT_EQ(noise_count,3);
+  ShaderGraph lowered; ASSERT_TRUE(materialx::lower(source,&lowered)); int noise_count=0; for(ShaderNode *node:lowered.nodes) if(const auto *noise=dynamic_cast<MaterialXNoiseNode *>(node)){ EXPECT_EQ(noise->get_dimensions(),3); noise_count++; } EXPECT_EQ(noise_count,3);
 }
 
 TEST(materialx_usdshade_reader, noise3d_color3_amplitude_type_and_finite_contract)
@@ -13106,7 +13106,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_noise2d_color3)
   ASSERT_TRUE(materialx::lower(source, &lowered));
   int noise_count = 0;
   for (ShaderNode *node : lowered.nodes) {
-    if (const auto *noise_node = dynamic_cast<NoiseTextureNode *>(node)) {
+    if (const auto *noise_node = dynamic_cast<MaterialXNoiseNode *>(node)) {
       EXPECT_EQ(noise_node->get_dimensions(), 2);
       ++noise_count;
     }
@@ -22233,7 +22233,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_homogeneous_fractal2d_variants)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
   int fractal_count = 0;
   for (ShaderNode *node : lowered.nodes) {
-    if (const auto *noise = dynamic_cast<NoiseTextureNode *>(node)) {
+    if (const auto *noise = dynamic_cast<MaterialXNoiseNode *>(node)) {
       EXPECT_EQ(noise->get_dimensions(), 2);
       EXPECT_EQ(noise->get_type(), NODE_NOISE_FBM);
       EXPECT_FALSE(noise->get_use_normalize());
@@ -22602,7 +22602,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_homogeneous_fractal3d_variants)
   ASSERT_TRUE(materialx::lower(graph, &lowered));
   int fractal_count = 0;
   for (ShaderNode *node : lowered.nodes) {
-    if (const auto *noise = dynamic_cast<NoiseTextureNode *>(node)) {
+    if (const auto *noise = dynamic_cast<MaterialXNoiseNode *>(node)) {
       EXPECT_EQ(noise->get_dimensions(), 3);
       EXPECT_EQ(noise->get_type(), NODE_NOISE_FBM);
       EXPECT_FALSE(noise->get_use_normalize());
@@ -43961,7 +43961,7 @@ void expect_noise_contract_lowers(const string &nodedef, const NoiseContract con
     {
       continue;
     }
-    if (auto *texture = dynamic_cast<NoiseTextureNode *>(node)) {
+    if (auto *texture = dynamic_cast<MaterialXNoiseNode *>(node)) {
       ++noise_textures;
       EXPECT_EQ(texture->get_dimensions(), is_3d ? 3 : 2) << name;
       EXPECT_NE(texture->input("Vector")->link, nullptr) << name;

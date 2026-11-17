@@ -60,6 +60,7 @@
 #include "kernel/svm/materialx_blackbody.h"
 #include "kernel/svm/materialx_cellnoise.h"
 #include "kernel/svm/materialx_heighttonormal.h"
+#include "kernel/svm/materialx_noise.h"
 #include "kernel/svm/materialx_normal_map.h"
 #include "kernel/svm/materialx_vector_rotate.h"
 #include "kernel/svm/mapping.h"
@@ -307,12 +308,6 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
       SVM_CASE(NODE_TEX_NOISE)
       svm_node_tex_noise(stack, svm_node_get<SVMNodeTexNoise>(kg, &offset));
       break;
-      SVM_CASE(NODE_TEX_NOISE_DERIVATIVE)
-      IF_NOT_KERNEL_NODES_FEATURE(VOLUME)
-      {
-        svm_node_tex_noise_derivative(stack, svm_node_get<SVMNodeTexNoise>(kg, &offset));
-      }
-      break;
       SVM_CASE(NODE_SET_BUMP)
       svm_node_set_bump<node_feature_mask>(
           kg, sd, stack, svm_node_get<SVMNodeSetBump>(kg, &offset));
@@ -538,6 +533,16 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
       break;
       SVM_CASE(NODE_MATERIALX_WORLEY)
       svm_node_materialx_worley(stack, svm_node_get<SVMNodeMaterialXWorley>(kg, &offset));
+      break;
+      SVM_CASE(NODE_MATERIALX_NOISE)
+      svm_node_materialx_noise(stack, svm_node_get<SVMNodeMaterialXNoise>(kg, &offset));
+      break;
+      SVM_CASE(NODE_MATERIALX_NOISE_DERIVATIVE)
+      IF_NOT_KERNEL_NODES_FEATURE(VOLUME)
+      {
+        svm_node_materialx_noise_derivative(stack,
+                                            svm_node_get<SVMNodeMaterialXNoise>(kg, &offset));
+      }
       break;
       SVM_CASE(NODE_RADIAL_TILING)
       svm_node_radial_tiling<node_feature_mask>(stack,

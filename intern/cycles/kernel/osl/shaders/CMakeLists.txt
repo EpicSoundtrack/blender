@@ -68,6 +68,7 @@ set(SRC_OSL
   node_normal_map.osl
   node_materialx_cell_noise.osl
   node_materialx_heighttonormal.osl
+  node_materialx_noise.osl
   node_materialx_normal_map.osl
   node_materialx_worley.osl
   node_object_info.osl

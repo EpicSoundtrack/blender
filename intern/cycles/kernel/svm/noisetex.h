@@ -77,272 +77,6 @@ ccl_device float noise_select(T p,
   }
 }
 
-ccl_device_inline float mtlx_noise_grad2(const uint hash, const float x, const float y)
-{
-  const uint h = hash & 7u;
-  const float u = h < 4u ? x : y;
-  const float v = 2.0f * (h < 4u ? y : x);
-  return negate_if(u, int(h & 1u)) + negate_if(v, int(h & 2u));
-}
-
-ccl_device_inline float mtlx_noise_grad3(const uint hash,
-                                         const float x,
-                                         const float y,
-                                         const float z)
-{
-  const uint h = hash & 15u;
-  const float u = h < 8u ? x : y;
-  const float vt = (h == 12u || h == 14u) ? x : z;
-  const float v = h < 4u ? y : vt;
-  return negate_if(u, int(h & 1u)) + negate_if(v, int(h & 2u));
-}
-
-ccl_device_inline float3 mtlx_noise_grad3_from_hash2(const uint hash,
-                                                     const float x,
-                                                     const float y)
-{
-  return make_float3(mtlx_noise_grad2(hash & 0xFFu, x, y),
-                     mtlx_noise_grad2((hash >> 8u) & 0xFFu, x, y),
-                     mtlx_noise_grad2((hash >> 16u) & 0xFFu, x, y));
-}
-
-ccl_device_inline float3 mtlx_noise_grad3_from_hash3(const uint hash,
-                                                     const float x,
-                                                     const float y,
-                                                     const float z)
-{
-  return make_float3(mtlx_noise_grad3(hash & 0xFFu, x, y, z),
-                     mtlx_noise_grad3((hash >> 8u) & 0xFFu, x, y, z),
-                     mtlx_noise_grad3((hash >> 16u) & 0xFFu, x, y, z));
-}
-
-ccl_device_inline float3 mtlx_noise_bi_mix(const float3 v0,
-                                           const float3 v1,
-                                           const float3 v2,
-                                           const float3 v3,
-                                           const float x,
-                                           const float y)
-{
-  const float x1 = 1.0f - x;
-  return (1.0f - y) * (v0 * x1 + v1 * x) + y * (v2 * x1 + v3 * x);
-}
-
-ccl_device_inline float3 mtlx_noise_tri_mix(const float3 v0,
-                                            const float3 v1,
-                                            const float3 v2,
-                                            const float3 v3,
-                                            const float3 v4,
-                                            const float3 v5,
-                                            const float3 v6,
-                                            const float3 v7,
-                                            const float x,
-                                            const float y,
-                                            const float z)
-{
-  const float x1 = 1.0f - x;
-  const float y1 = 1.0f - y;
-  const float z1 = 1.0f - z;
-  return z1 * (y1 * (v0 * x1 + v1 * x) + y * (v2 * x1 + v3 * x)) +
-         z * (y1 * (v4 * x1 + v5 * x) + y * (v6 * x1 + v7 * x));
-}
-
-/* Scalar MaterialX Perlin noise, transcribed from mx_perlin_noise_float in
- * MaterialX 1.39 libraries/stdlib/genglsl/lib/mx_noise.glsl: Jenkins lookup3
- * lattice hash, quintic fade, bilinear/trilinear blend and the 0.6616 / 0.9820
- * gradient scale, with no lattice wrap. Blender's snoise_2d/3d share the
- * formula but take an fmod(100000) wrap and, on CPU, an SSE evaluation order;
- * the MaterialX lowering calls these instead so every target evaluates the
- * same scalar expression. */
-ccl_device_inline float mtlx_noise_bi_mix(const float v0,
-                                          const float v1,
-                                          const float v2,
-                                          const float v3,
-                                          const float s,
-                                          const float t)
-{
-  const float s1 = 1.0f - s;
-  return (1.0f - t) * (v0 * s1 + v1 * s) + t * (v2 * s1 + v3 * s);
-}
-
-ccl_device_inline float mtlx_noise_tri_mix(const float v0,
-                                           const float v1,
-                                           const float v2,
-                                           const float v3,
-                                           const float v4,
-                                           const float v5,
-                                           const float v6,
-                                           const float v7,
-                                           const float s,
-                                           const float t,
-                                           const float r)
-{
-  const float s1 = 1.0f - s;
-  const float t1 = 1.0f - t;
-  const float r1 = 1.0f - r;
-  return (r1 * (t1 * (v0 * s1 + v1 * s) + t * (v2 * s1 + v3 * s)) +
-          r * (t1 * (v4 * s1 + v5 * s) + t * (v6 * s1 + v7 * s)));
-}
-
-ccl_device float mtlx_perlin_noise_float(const float2 p)
-{
-  int X, Y;
-  const float fx = floorfrac(p.x, &X);
-  const float fy = floorfrac(p.y, &Y);
-  const float u = fade(fx);
-  const float v = fade(fy);
-  const float result = mtlx_noise_bi_mix(
-      mtlx_noise_grad2(hash_uint2(X, Y), fx, fy),
-      mtlx_noise_grad2(hash_uint2(X + 1, Y), fx - 1.0f, fy),
-      mtlx_noise_grad2(hash_uint2(X, Y + 1), fx, fy - 1.0f),
-      mtlx_noise_grad2(hash_uint2(X + 1, Y + 1), fx - 1.0f, fy - 1.0f),
-      u,
-      v);
-  return 0.6616f * result;
-}
-
-ccl_device float mtlx_perlin_noise_float(const float3 p)
-{
-  int X, Y, Z;
-  const float fx = floorfrac(p.x, &X);
-  const float fy = floorfrac(p.y, &Y);
-  const float fz = floorfrac(p.z, &Z);
-  const float u = fade(fx);
-  const float v = fade(fy);
-  const float w = fade(fz);
-  const float result = mtlx_noise_tri_mix(
-      mtlx_noise_grad3(hash_uint3(X, Y, Z), fx, fy, fz),
-      mtlx_noise_grad3(hash_uint3(X + 1, Y, Z), fx - 1.0f, fy, fz),
-      mtlx_noise_grad3(hash_uint3(X, Y + 1, Z), fx, fy - 1.0f, fz),
-      mtlx_noise_grad3(hash_uint3(X + 1, Y + 1, Z), fx - 1.0f, fy - 1.0f, fz),
-      mtlx_noise_grad3(hash_uint3(X, Y, Z + 1), fx, fy, fz - 1.0f),
-      mtlx_noise_grad3(hash_uint3(X + 1, Y, Z + 1), fx - 1.0f, fy, fz - 1.0f),
-      mtlx_noise_grad3(hash_uint3(X, Y + 1, Z + 1), fx, fy - 1.0f, fz - 1.0f),
-      mtlx_noise_grad3(hash_uint3(X + 1, Y + 1, Z + 1), fx - 1.0f, fy - 1.0f, fz - 1.0f),
-      u,
-      v,
-      w);
-  return 0.9820f * result;
-}
-
-/* mx_fractal2d/3d_noise_float: the coordinate itself is rescaled each octave
- * (p *= lacunarity), NOT evaluated at lacunarity^i * p as Blender's noise_fbm
- * does -- the two round differently once lacunarity is not a power of two
- * (measured 1.6e-5 at (24.433, 195.719), octaves 4, lacunarity 2.37) -- and
- * diminish is not clamped. `detail` is octaves - 1, the lowering's one
- * convention; detail -1 is zero octaves. */
-template<typename T>
-ccl_device float mtlx_fractal_noise_float(T p,
-                                          const float detail,
-                                          const float diminish,
-                                          const float lacunarity)
-{
-  float result = 0.0f;
-  float amplitude = 1.0f;
-  const int octaves = float_to_int(detail) + 1;
-  for (int i = 0; i < octaves; i++) {
-    result += amplitude * mtlx_perlin_noise_float(p);
-    amplitude *= diminish;
-    p *= lacunarity;
-  }
-  return result;
-}
-
-/* mx_perlin_noise_vec3: no lattice wrap, as in MaterialX. Channel x hashes
- * byte 0 of the same lattice hash, so it equals mtlx_perlin_noise_float. */
-ccl_device float3 mtlx_perlin_noise_float3(const float2 p)
-{
-  int X, Y;
-  const float fx = floorfrac(p.x, &X);
-  const float fy = floorfrac(p.y, &Y);
-  const float u = fade(fx);
-  const float v = fade(fy);
-  return 0.6616f * mtlx_noise_bi_mix(mtlx_noise_grad3_from_hash2(hash_uint2(X, Y), fx, fy),
-                                     mtlx_noise_grad3_from_hash2(hash_uint2(X + 1, Y),
-                                                                 fx - 1.0f,
-                                                                 fy),
-                                     mtlx_noise_grad3_from_hash2(hash_uint2(X, Y + 1),
-                                                                 fx,
-                                                                 fy - 1.0f),
-                                     mtlx_noise_grad3_from_hash2(hash_uint2(X + 1, Y + 1),
-                                                                 fx - 1.0f,
-                                                                 fy - 1.0f),
-                                     u,
-                                     v);
-}
-
-ccl_device float3 mtlx_perlin_noise_float3(const float3 p)
-{
-  int X, Y, Z;
-  const float fx = floorfrac(p.x, &X);
-  const float fy = floorfrac(p.y, &Y);
-  const float fz = floorfrac(p.z, &Z);
-  const float u = fade(fx);
-  const float v = fade(fy);
-  const float w = fade(fz);
-  return 0.9820f * mtlx_noise_tri_mix(
-      mtlx_noise_grad3_from_hash3(hash_uint3(X, Y, Z), fx, fy, fz),
-      mtlx_noise_grad3_from_hash3(hash_uint3(X + 1, Y, Z), fx - 1.0f, fy, fz),
-      mtlx_noise_grad3_from_hash3(hash_uint3(X, Y + 1, Z), fx, fy - 1.0f, fz),
-      mtlx_noise_grad3_from_hash3(hash_uint3(X + 1, Y + 1, Z), fx - 1.0f, fy - 1.0f, fz),
-      mtlx_noise_grad3_from_hash3(hash_uint3(X, Y, Z + 1), fx, fy, fz - 1.0f),
-      mtlx_noise_grad3_from_hash3(hash_uint3(X + 1, Y, Z + 1), fx - 1.0f, fy, fz - 1.0f),
-      mtlx_noise_grad3_from_hash3(hash_uint3(X, Y + 1, Z + 1), fx, fy - 1.0f, fz - 1.0f),
-      mtlx_noise_grad3_from_hash3(hash_uint3(X + 1, Y + 1, Z + 1),
-                                  fx - 1.0f,
-                                  fy - 1.0f,
-                                  fz - 1.0f),
-      u,
-      v,
-      w);
-}
-
-template<typename T>
-ccl_device float3 mtlx_fbm_float3(T p,
-                                  const float detail,
-                                  const float diminish,
-                                  const float lacunarity)
-{
-  float3 sum = zero_float3();
-  float amplitude = 1.0f;
-
-  /* INCLUSIVE, like Cycles' own fBM: detail 0 is one octave.  MaterialX's
-   * fractal runs `octaves` times, so the lowering seeds detail with
-   * octaves - 1 and that one convention holds for the scalar and the vector
-   * path alike -- `detail` must not mean two different things depending on a
-   * flag. */
-  for (int i = 0; i <= float_to_int(detail); i++) {
-    sum += amplitude * mtlx_perlin_noise_float3(p);
-    amplitude *= diminish;
-    p *= lacunarity;
-  }
-
-  return sum;
-}
-
-/* mx_fractal2d/3d_noise_vec2: two scalar fractals, the second at p + (19, 193)
- * or p + (19, 193, 17). */
-ccl_device float3 mtlx_fbm_vector2_float3(const float2 p,
-                                          const float detail,
-                                          const float diminish,
-                                          const float lacunarity)
-{
-  return make_float3(mtlx_fractal_noise_float(p, detail, diminish, lacunarity),
-                     mtlx_fractal_noise_float(
-                         p + make_float2(19.0f, 193.0f), detail, diminish, lacunarity),
-                     0.0f);
-}
-
-ccl_device float3 mtlx_fbm_vector2_float3(const float3 p,
-                                          const float detail,
-                                          const float diminish,
-                                          const float lacunarity)
-{
-  return make_float3(mtlx_fractal_noise_float(p, detail, diminish, lacunarity),
-                     mtlx_fractal_noise_float(
-                         p + make_float3(19.0f, 193.0f, 17.0f), detail, diminish, lacunarity),
-                     0.0f);
-}
-
 ccl_device void noise_texture_1d(const float co,
                                  const float detail,
                                  const float roughness,
@@ -392,9 +126,6 @@ ccl_device void noise_texture_2d(const float2 co,
                                  const float distortion,
                                  const int type,
                                  const bool normalize,
-                                 const bool materialx_vector_color,
-                                 const bool materialx_vector_fbm,
-                                 const bool materialx_vector2_fbm,
                                  const bool color_is_needed,
                                  ccl_private float *value,
                                  ccl_private float3 *color)
@@ -403,21 +134,6 @@ ccl_device void noise_texture_2d(const float2 co,
   if (distortion != 0.0f) {
     p += make_float2(snoise_2d(p + random_float2_offset(0.0f)) * distortion,
                      snoise_2d(p + random_float2_offset(1.0f)) * distortion);
-  }
-
-  if (materialx_vector_color) {
-    /* MaterialX lowering: Fac is mx_perlin_noise_float or
-     * mx_fractal*_noise_float (equal to channel x of the vector result), Color
-     * the vector form the flags select. */
-    const bool fractal = materialx_vector_fbm || materialx_vector2_fbm;
-    *value = fractal ? mtlx_fractal_noise_float(p, detail, roughness, lacunarity) :
-                       mtlx_perlin_noise_float(p);
-    if (color_is_needed) {
-      *color = materialx_vector2_fbm ? mtlx_fbm_vector2_float3(p, detail, roughness, lacunarity) :
-               materialx_vector_fbm  ? mtlx_fbm_float3(p, detail, roughness, lacunarity) :
-                                        mtlx_perlin_noise_float3(p);
-    }
-    return;
   }
 
   *value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, normalize);
@@ -451,9 +167,6 @@ ccl_device void noise_texture_3d(const float3 co,
                                  const float distortion,
                                  const int type,
                                  const bool normalize,
-                                 const bool materialx_vector_color,
-                                 const bool materialx_vector_fbm,
-                                 const bool materialx_vector2_fbm,
                                  const bool color_is_needed,
                                  ccl_private float *value,
                                  ccl_private float3 *color)
@@ -463,21 +176,6 @@ ccl_device void noise_texture_3d(const float3 co,
     p += make_float3(snoise_3d(p + random_float3_offset(0.0f)) * distortion,
                      snoise_3d(p + random_float3_offset(1.0f)) * distortion,
                      snoise_3d(p + random_float3_offset(2.0f)) * distortion);
-  }
-
-  if (materialx_vector_color) {
-    /* MaterialX lowering: Fac is mx_perlin_noise_float or
-     * mx_fractal*_noise_float (equal to channel x of the vector result), Color
-     * the vector form the flags select. */
-    const bool fractal = materialx_vector_fbm || materialx_vector2_fbm;
-    *value = fractal ? mtlx_fractal_noise_float(p, detail, roughness, lacunarity) :
-                       mtlx_perlin_noise_float(p);
-    if (color_is_needed) {
-      *color = materialx_vector2_fbm ? mtlx_fbm_vector2_float3(p, detail, roughness, lacunarity) :
-               materialx_vector_fbm  ? mtlx_fbm_float3(p, detail, roughness, lacunarity) :
-                                        mtlx_perlin_noise_float3(p);
-    }
-    return;
   }
 
   *value = noise_select(p, detail, roughness, lacunarity, offset, gain, type, normalize);
@@ -558,16 +256,8 @@ ccl_device_noinline void svm_node_tex_noise(ccl_private float *ccl_restrict stac
   const float gain = stack_load(stack, node.gain);
   const float distortion = stack_load(stack, node.distortion);
 
-  if (node.materialx_vector_color && (node.dimensions == 2 || node.dimensions == 3)) {
-    /* MaterialX octaves are detail + 1 with no upper limit of 16, zero octaves
-     * are legal (detail -1), and diminish is not clamped. The bound only stops
-     * a runaway loop; the coordinate overflows to infinity long before it. */
-    detail = clamp(detail, -1.0f, 255.0f);
-  }
-  else {
-    detail = clamp(detail, 0.0f, 15.0f);
-    roughness = fmaxf(roughness, 0.0f);
-  }
+  detail = clamp(detail, 0.0f, 15.0f);
+  roughness = fmaxf(roughness, 0.0f);
 
   vector *= scale;
   w *= scale;
@@ -599,9 +289,6 @@ ccl_device_noinline void svm_node_tex_noise(ccl_private float *ccl_restrict stac
                        distortion,
                        node.noise_type,
                        node.normalize,
-                       node.materialx_vector_color,
-                       node.materialx_vector_fbm,
-                       node.materialx_vector2_fbm,
                        stack_valid(node.color_offset),
                        &value,
                        &color);
@@ -616,9 +303,6 @@ ccl_device_noinline void svm_node_tex_noise(ccl_private float *ccl_restrict stac
                        distortion,
                        node.noise_type,
                        node.normalize,
-                       node.materialx_vector_color,
-                       node.materialx_vector_fbm,
-                       node.materialx_vector2_fbm,
                        stack_valid(node.color_offset),
                        &value,
                        &color);
@@ -647,73 +331,6 @@ ccl_device_noinline void svm_node_tex_noise(ccl_private float *ccl_restrict stac
   if (stack_valid(node.color_offset)) {
     stack_store_float3(stack, node.color_offset, color);
   }
-}
-
-/* The exact MaterialX scalar fBM branch requested by heighttonormal. Other
- * noise variants retain their existing zero-derivative behavior. */
-ccl_device_noinline void svm_node_tex_noise_derivative(
-    ccl_private float *ccl_restrict stack,
-    const ccl_global SVMNodeTexNoise &ccl_restrict node)
-{
-  const dual3 position = stack_load<dual3>(stack, node.vector);
-  svm_node_tex_noise(stack, node);
-  /* This opcode computes only the scalar Fac derivative. Preserve the
-   * previous zero-derivative behavior for Color if it is also consumed. */
-  if (stack_valid(node.color_offset)) {
-    stack_store_float3(stack, node.color_offset + 3, zero_float3());
-    stack_store_float3(stack, node.color_offset + 6, zero_float3());
-  }
-  if (!stack_valid(node.value_offset)) {
-    return;
-  }
-  float dx = 0.0f, dy = 0.0f;
-  if (node.dimensions == 3 && node.noise_type == NODE_NOISE_FBM &&
-      stack_load(stack, node.distortion) == 0.0f)
-  {
-    const float scale = stack_load(stack, node.scale);
-    const float detail = clamp(stack_load(stack, node.detail), 0.0f, 15.0f);
-    const float roughness = fmaxf(stack_load(stack, node.roughness), 0.0f);
-    const float lacunarity = stack_load(stack, node.lacunarity);
-    float3 p = position.val * scale;
-    float3 dpdx = position.dx * scale;
-    float3 dpdy = position.dy * scale;
-    float amplitude = 1.0f;
-    float max_amplitude = 0.0f;
-    for (int i = 0; i <= float_to_int(detail); ++i) {
-      const float3 gradient = snoise_3d_gradient(p);
-      dx += amplitude * dot(gradient, dpdx);
-      dy += amplitude * dot(gradient, dpdy);
-      max_amplitude += amplitude;
-      amplitude *= roughness;
-      p *= lacunarity;
-      dpdx *= lacunarity;
-      dpdy *= lacunarity;
-    }
-    const float remainder = detail - floorf(detail);
-    if (remainder != 0.0f) {
-      const float3 gradient = snoise_3d_gradient(p);
-      const float dx_extra = dx + amplitude * dot(gradient, dpdx);
-      const float dy_extra = dy + amplitude * dot(gradient, dpdy);
-      if (node.normalize) {
-        dx = mix(0.5f * dx / max_amplitude,
-                 0.5f * dx_extra / (max_amplitude + amplitude),
-                 remainder);
-        dy = mix(0.5f * dy / max_amplitude,
-                 0.5f * dy_extra / (max_amplitude + amplitude),
-                 remainder);
-      }
-      else {
-        dx = mix(dx, dx_extra, remainder);
-        dy = mix(dy, dy_extra, remainder);
-      }
-    }
-    else if (node.normalize) {
-      dx *= 0.5f / max_amplitude;
-      dy *= 0.5f / max_amplitude;
-    }
-  }
-  stack_store_float(stack, node.value_offset + 1, dx);
-  stack_store_float(stack, node.value_offset + 2, dy);
 }
 
 CCL_NAMESPACE_END

@@ -1191,11 +1191,6 @@ NODE_DEFINE(NoiseTextureNode)
   SOCKET_ENUM(type, "Type", type_enum, NODE_NOISE_FBM);
 
   SOCKET_BOOLEAN(use_normalize, "Normalize", true);
-  SOCKET_BOOLEAN(use_materialx_vector_color, "MaterialX Vector Color", false, SocketType::INTERNAL);
-  SOCKET_BOOLEAN(use_materialx_vector_fbm, "MaterialX Vector fBM", false, SocketType::INTERNAL);
-  SOCKET_BOOLEAN(use_materialx_vector2_fbm, "MaterialX Vector2 fBM", false, SocketType::INTERNAL);
-  SOCKET_BOOLEAN(
-      use_materialx_derivatives, "MaterialX Derivatives", false, SocketType::INTERNAL);
 
   SOCKET_IN_POINT(vector, "Vector", zero_float3(), SocketType::LINK_TEXTURE_GENERATED);
   SOCKET_IN_FLOAT(w, "W", 0.0f);
@@ -1227,9 +1222,6 @@ void NoiseTextureNode::compile(SVMCompiler &compiler)
                         .dimensions = uint(dimensions),
                         .noise_type = type,
                         .normalize = uint(use_normalize),
-                        .materialx_vector_color = uint(use_materialx_vector_color),
-                        .materialx_vector_fbm = uint(use_materialx_vector_fbm),
-                        .materialx_vector2_fbm = uint(use_materialx_vector2_fbm),
                         .w = compiler.input_float("W"),
                         .scale = compiler.input_float("Scale"),
                         .detail = compiler.input_float("Detail"),
@@ -1252,9 +1244,6 @@ void NoiseTextureNode::compile(OSLCompiler &compiler)
   compiler.parameter(this, "dimensions");
   compiler.parameter(this, "type");
   compiler.parameter(this, "use_normalize");
-  compiler.parameter(this, "use_materialx_vector_color");
-  compiler.parameter(this, "use_materialx_vector_fbm");
-  compiler.parameter(this, "use_materialx_vector2_fbm");
   compiler.add(this, "node_noise_texture");
 }
 
@@ -7967,6 +7956,82 @@ void MaterialXHeightToNormalNode::compile(SVMCompiler &compiler)
 void MaterialXHeightToNormalNode::compile(OSLCompiler &compiler)
 {
   compiler.add(this, "node_materialx_heighttonormal");
+}
+
+/* MaterialX Noise */
+
+NODE_DEFINE(MaterialXNoiseNode)
+{
+  NodeType *type = NodeType::add("materialx_noise", create, NodeType::SHADER);
+
+  TEXTURE_MAPPING_DEFINE(MaterialXNoiseNode);
+
+  static NodeEnum dimensions_enum;
+  dimensions_enum.insert("2D", 2);
+  dimensions_enum.insert("3D", 3);
+  SOCKET_ENUM(dimensions, "Dimensions", dimensions_enum, 3);
+
+  static NodeEnum type_enum;
+  type_enum.insert("multifractal", NODE_NOISE_MULTIFRACTAL);
+  type_enum.insert("fBM", NODE_NOISE_FBM);
+  type_enum.insert("hybrid_multifractal", NODE_NOISE_HYBRID_MULTIFRACTAL);
+  type_enum.insert("ridged_multifractal", NODE_NOISE_RIDGED_MULTIFRACTAL);
+  type_enum.insert("hetero_terrain", NODE_NOISE_HETERO_TERRAIN);
+  SOCKET_ENUM(type, "Type", type_enum, NODE_NOISE_FBM);
+
+  SOCKET_BOOLEAN(use_normalize, "Normalize", true);
+  SOCKET_BOOLEAN(use_materialx_vector_fbm, "Vector fBM", false);
+  SOCKET_BOOLEAN(use_materialx_vector2_fbm, "Vector2 fBM", false);
+
+  SOCKET_IN_POINT(vector, "Vector", zero_float3(), SocketType::LINK_TEXTURE_GENERATED);
+  SOCKET_IN_FLOAT(scale, "Scale", 1.0f);
+  SOCKET_IN_FLOAT(detail, "Detail", 2.0f);
+  SOCKET_IN_FLOAT(roughness, "Roughness", 0.5f);
+  SOCKET_IN_FLOAT(lacunarity, "Lacunarity", 2.0f);
+  SOCKET_IN_FLOAT(distortion, "Distortion", 0.0f);
+
+  SOCKET_OUT_FLOAT(fac, "Fac");
+  SOCKET_OUT_COLOR(color, "Color");
+
+  return type;
+}
+
+MaterialXNoiseNode::MaterialXNoiseNode() : TextureNode(get_node_type()) {}
+
+void MaterialXNoiseNode::compile(SVMCompiler &compiler)
+{
+  ShaderInput *vector_in = input("Vector");
+
+  const SVMStackOffset vector_stack_offset = tex_mapping.compile_begin(
+      compiler, vector_in, nullptr);
+  compiler.add_node(this,
+                    NODE_MATERIALX_NOISE,
+                    SVMNodeMaterialXNoise{
+                        .dimensions = uint(dimensions),
+                        .noise_type = type,
+                        .normalize = uint(use_normalize),
+                        .vector_fbm = uint(use_materialx_vector_fbm),
+                        .vector2_fbm = uint(use_materialx_vector2_fbm),
+                        .scale = compiler.input_float("Scale"),
+                        .detail = compiler.input_float("Detail"),
+                        .roughness = compiler.input_float("Roughness"),
+                        .lacunarity = compiler.input_float("Lacunarity"),
+                        .distortion = compiler.input_float("Distortion"),
+                        .vector = vector_stack_offset,
+                        .value_offset = compiler.output("Fac"),
+                        .color_offset = compiler.output("Color"),
+                    });
+
+  tex_mapping.compile_end(compiler, vector_in, vector_stack_offset);
+}
+
+void MaterialXNoiseNode::compile(OSLCompiler &compiler)
+{
+  tex_mapping.compile(compiler);
+  compiler.parameter(this, "dimensions");
+  compiler.parameter(this, "use_materialx_vector_fbm");
+  compiler.parameter(this, "use_materialx_vector2_fbm");
+  compiler.add(this, "node_materialx_noise");
 }
 
 /* MaterialX Worley */

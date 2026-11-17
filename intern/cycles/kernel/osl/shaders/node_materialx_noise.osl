@@ -1,0 +1,170 @@
+/* SPDX-FileCopyrightText: 2026 Blender Authors
+ *
+ * SPDX-License-Identifier: Apache-2.0 */
+
+#include "node_noise.h"
+#include "stdcycles.h"
+#include "vector2.h"
+
+#define vector3 point
+
+/* MaterialX noise2d/3d, fractal2d/3d and the unifiednoise Perlin/fractal
+ * branches (mx_noise.glsl Perlin through OSL snoise, fractals that rescale p
+ * every octave, unclamped diminish). */
+
+vector2 random_vector2_offset(float seed)
+{
+  return vector2(100.0 + noise("hash", seed, 0.0) * 100.0,
+                 100.0 + noise("hash", seed, 1.0) * 100.0);
+}
+
+vector3 random_vector3_offset(float seed)
+{
+  return vector3(100.0 + noise("hash", seed, 0.0) * 100.0,
+                 100.0 + noise("hash", seed, 1.0) * 100.0,
+                 100.0 + noise("hash", seed, 2.0) * 100.0);
+}
+
+color mtlx_vector_fbm(vector2 co, float detail, float diminish, float lacunarity)
+{
+  vector2 p = co;
+  color result = color(0.0);
+  float amplitude = 1.0;
+
+  for (int i = 0; i <= int(detail); i++) {
+    color octave = noise("snoise", p.x, p.y);
+    result += amplitude * octave;
+    amplitude *= diminish;
+    p *= lacunarity;
+  }
+
+  return result;
+}
+
+color mtlx_vector_fbm(vector3 co, float detail, float diminish, float lacunarity)
+{
+  vector3 p = co;
+  color result = color(0.0);
+  float amplitude = 1.0;
+
+  for (int i = 0; i <= int(detail); i++) {
+    color octave = noise("snoise", p);
+    result += amplitude * octave;
+    amplitude *= diminish;
+    p *= lacunarity;
+  }
+
+  return result;
+}
+
+/* MaterialX mx_fractal*_noise_float: the coordinate is rescaled each octave
+ * (p *= lacunarity) and diminish is not clamped; detail is octaves - 1. */
+float mtlx_fractal_noise_float(vector2 co, float detail, float diminish, float lacunarity)
+{
+  vector2 p = co;
+  float result = 0.0;
+  float amplitude = 1.0;
+  for (int i = 0; i < int(detail) + 1; i++) {
+    result += amplitude * noise("snoise", p.x, p.y);
+    amplitude *= diminish;
+    p *= lacunarity;
+  }
+  return result;
+}
+
+float mtlx_fractal_noise_float(vector3 co, float detail, float diminish, float lacunarity)
+{
+  vector3 p = co;
+  float result = 0.0;
+  float amplitude = 1.0;
+  for (int i = 0; i < int(detail) + 1; i++) {
+    result += amplitude * noise("snoise", p);
+    amplitude *= diminish;
+    p *= lacunarity;
+  }
+  return result;
+}
+
+color mtlx_vector2_fbm(vector2 co, float detail, float diminish, float lacunarity)
+{
+  return color(mtlx_fractal_noise_float(co, detail, diminish, lacunarity),
+               mtlx_fractal_noise_float(co + vector2(19.0, 193.0), detail, diminish, lacunarity),
+               0.0);
+}
+
+color mtlx_vector2_fbm(vector3 co, float detail, float diminish, float lacunarity)
+{
+  return color(
+      mtlx_fractal_noise_float(co, detail, diminish, lacunarity),
+      mtlx_fractal_noise_float(co + vector3(19.0, 193.0, 17.0), detail, diminish, lacunarity),
+      0.0);
+}
+
+shader node_materialx_noise(int use_mapping = 0,
+                            matrix mapping = matrix(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
+                            string dimensions = "3D",
+                            int use_materialx_vector_fbm = 0,
+                            int use_materialx_vector2_fbm = 0,
+                            vector3 Vector = vector3(0, 0, 0),
+                            float Scale = 1.0,
+                            float Detail = 2.0,
+                            float Roughness = 0.5,
+                            float Lacunarity = 2.0,
+                            float Distortion = 0.0,
+                            output float Fac = 0.0,
+                            output color Color = 0.0)
+{
+  vector3 p = Vector;
+  if (use_mapping)
+    p = transform(mapping, p);
+
+  /* MaterialX: zero or more than 16 octaves, unclamped diminish. */
+  float detail = clamp(Detail, -1.0, 255.0);
+  float roughness = Roughness;
+  int fractal = use_materialx_vector_fbm != 0 || use_materialx_vector2_fbm != 0;
+
+  p *= Scale;
+
+  if (dimensions == "2D") {
+    vector2 q = vector2(p[0], p[1]);
+    if (Distortion != 0.0) {
+      q += vector2(safe_snoise(q + random_vector2_offset(0.0)) * Distortion,
+                   safe_snoise(q + random_vector2_offset(1.0)) * Distortion);
+    }
+    Fac = fractal ? mtlx_fractal_noise_float(q, detail, roughness, Lacunarity) :
+                    noise("snoise", q.x, q.y);
+    if (isconnected(Color)) {
+      if (use_materialx_vector2_fbm != 0) {
+        Color = mtlx_vector2_fbm(q, detail, roughness, Lacunarity);
+      }
+      else if (use_materialx_vector_fbm != 0) {
+        Color = mtlx_vector_fbm(q, detail, roughness, Lacunarity);
+      }
+      else {
+        color v = noise("snoise", q.x, q.y);
+        Color = v;
+      }
+    }
+  }
+  else {
+    if (Distortion != 0.0) {
+      p += vector3(safe_snoise(p + random_vector3_offset(0.0)) * Distortion,
+                   safe_snoise(p + random_vector3_offset(1.0)) * Distortion,
+                   safe_snoise(p + random_vector3_offset(2.0)) * Distortion);
+    }
+    Fac = fractal ? mtlx_fractal_noise_float(p, detail, roughness, Lacunarity) :
+                    noise("snoise", p);
+    if (isconnected(Color)) {
+      if (use_materialx_vector2_fbm != 0) {
+        Color = mtlx_vector2_fbm(p, detail, roughness, Lacunarity);
+      }
+      else if (use_materialx_vector_fbm != 0) {
+        Color = mtlx_vector_fbm(p, detail, roughness, Lacunarity);
+      }
+      else {
+        color v = noise("snoise", p);
+        Color = v;
+      }
+    }
+  }
+}

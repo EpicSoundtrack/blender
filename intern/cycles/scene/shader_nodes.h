@@ -263,19 +263,10 @@ class GradientTextureNode : public TextureNode {
 class NoiseTextureNode : public TextureNode {
  public:
   SHADER_NODE_CLASS(NoiseTextureNode)
-  /* Derivative propagation is MaterialX-only; stock Noise keeps zero derivatives. */
-  ShaderNodeType shader_node_type() const override
-  {
-    return use_materialx_derivatives ? NODE_TEX_NOISE : NODE_NONE;
-  }
 
   NODE_SOCKET_API(int, dimensions)
   NODE_SOCKET_API(NodeNoiseType, type)
   NODE_SOCKET_API(bool, use_normalize)
-  NODE_SOCKET_API(bool, use_materialx_vector_color)
-  NODE_SOCKET_API(bool, use_materialx_vector_fbm)
-  NODE_SOCKET_API(bool, use_materialx_vector2_fbm)
-  NODE_SOCKET_API(bool, use_materialx_derivatives)
   NODE_SOCKET_API(float, w)
   NODE_SOCKET_API(float, scale)
   NODE_SOCKET_API(float, detail)
@@ -1792,6 +1783,30 @@ class NormalMapNode : public ShaderNode {
   NODE_SOCKET_API(float3, color)
   NODE_SOCKET_API(int, convention)
   NODE_SOCKET_API(int, base)
+};
+
+/* MaterialX noise2d/3d, fractal2d/3d and the unifiednoise Perlin/fractal
+ * branches: MaterialX's mx_noise.glsl Perlin and fractals. It carries screen
+ * derivatives of Fac for the heighttonormal chain. */
+class MaterialXNoiseNode : public TextureNode {
+ public:
+  SHADER_NODE_CLASS(MaterialXNoiseNode)
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_MATERIALX_NOISE;
+  }
+
+  NODE_SOCKET_API(int, dimensions)
+  NODE_SOCKET_API(NodeNoiseType, type)
+  NODE_SOCKET_API(bool, use_normalize)
+  NODE_SOCKET_API(bool, use_materialx_vector_fbm)
+  NODE_SOCKET_API(bool, use_materialx_vector2_fbm)
+  NODE_SOCKET_API(float, scale)
+  NODE_SOCKET_API(float, detail)
+  NODE_SOCKET_API(float, roughness)
+  NODE_SOCKET_API(float, lacunarity)
+  NODE_SOCKET_API(float, distortion)
+  NODE_SOCKET_API(float3, vector)
 };
 
 /* MaterialX worleynoise2d/3d and unifiednoise type 2: exact mx_worley_noise.

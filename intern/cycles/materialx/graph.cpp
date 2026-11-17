@@ -21157,7 +21157,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       const bool is_color3 = native_noise_or_fractal_is_color3(node.nodedef);
       const bool is_color4 = native_noise_or_fractal_is_color4(node.nodedef);
       const bool scalar_amplitude = native_noise_or_fractal_uses_scalar_amplitude(node.nodedef);
-      NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
+      MaterialXNoiseNode *noise = graph->create_node<MaterialXNoiseNode>();
       noise->name = node.name + ".noise";
       noise->set_dimensions(native_noise_or_fractal_is_3d(node.nodedef) ? 3 : 2);
       /* MaterialX's real genosl/genglsl implementations use raw snoise/Perlin
@@ -21193,7 +21193,6 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
        * fmod(100000), its fBM scales lacunarity^i * p instead of rescaling p
        * every octave, and the node clamps diminish to [0, 1] and octaves to 16.
        * Fac is the scalar MaterialX result in this mode. */
-      noise->set_use_materialx_vector_color(true);
       /* is_fractal is defined above as exactly the two-family test the incoming
        * branch spelled out; its base predated the local. */
       if (is_fractal) {
@@ -21282,14 +21281,13 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
                                     make_float3(19.0f, 193.0f, 17.0f) :
                                     make_float3(19.0f, 193.0f, 0.0f));
           }
-          NoiseTextureNode *fourth_noise = graph->create_node<NoiseTextureNode>();
+          MaterialXNoiseNode *fourth_noise = graph->create_node<MaterialXNoiseNode>();
           fourth_noise->name = node.name + ".W.noise";
           fourth_noise->set_dimensions(native_noise_or_fractal_is_3d(node.nodedef) ? 3 : 2);
           fourth_noise->set_use_normalize(false);
           fourth_noise->set_detail(noise->get_detail());
           /* W is the scalar mx_perlin_noise_float / mx_fractal*_noise_float at
            * the offset coordinate (Fac in MaterialX mode). */
-          fourth_noise->set_use_materialx_vector_color(true);
           if (is_fractal) {
             fourth_noise->set_use_materialx_vector_fbm(true);
             fourth_noise->set_type(NODE_NOISE_FBM);
@@ -21532,7 +21530,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       lowered_nodes.emplace(offset->name, offset);
 
       if (node.int_inputs.at("type") == 0) {
-        NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
+        MaterialXNoiseNode *noise = graph->create_node<MaterialXNoiseNode>();
         noise->name = node.name + ".perlin";
         noise->set_dimensions(is_3d ? 3 : 2);
         /* N_perlin_noise2d/3d: noise2d/noise3d float (amplitude 0.5, pivot
@@ -21540,7 +21538,6 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
          * MaterialX mode (Fac = mtlx_perlin_noise_float: no fmod lattice
          * wrap). The 3D branch used to fall through to Blender's normalized
          * 3-octave Noise Texture and was wrong at every contract. */
-        noise->set_use_materialx_vector_color(true);
         noise->set_use_normalize(false);
         noise->set_detail(0.0f);
         MathNode *amplitude = graph->create_node<MathNode>();
@@ -21579,7 +21576,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         lowered_nodes.emplace(noise->name, noise);
       }
       else {
-        NoiseTextureNode *noise = graph->create_node<NoiseTextureNode>();
+        MaterialXNoiseNode *noise = graph->create_node<MaterialXNoiseNode>();
         noise->name = node.name + ".fractal";
         noise->set_dimensions(3);
         noise->set_type(NODE_NOISE_FBM);
@@ -21589,7 +21586,6 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
          * detail is octaves - 1. The 3D branch used to set detail = octaves
          * on Blender's normalized fBM (one octave too many, normalized,
          * lacunarity^i * p, wrapped lattice). */
-        noise->set_use_materialx_vector_color(true);
         noise->set_use_materialx_vector_fbm(true);
         noise->set_use_normalize(false);
         noise->set_detail(float(node.int_inputs.at("octaves") - 1));
@@ -32816,9 +32812,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
 }
 
 
-/* Derivative propagation through Math and Noise nodes (needed by the MaterialX
+/* Derivative propagation through Math nodes (needed by the MaterialX
  * heighttonormal chain) is MaterialX-only: stock nodes keep zero derivatives. Flag
- * every node this lowering created. */
+ * every node this lowering created. MaterialXNoiseNode always carries them. */
 bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
 {
   const size_t first_new_node = graph ? graph->nodes.size() : 0;
@@ -32828,9 +32824,6 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
   for (size_t i = first_new_node; i < graph->nodes.size(); i++) {
     if (auto *math = dynamic_cast<MathNode *>(graph->nodes[i])) {
       math->set_use_materialx_derivatives(true);
-    }
-    else if (auto *noise = dynamic_cast<NoiseTextureNode *>(graph->nodes[i])) {
-      noise->set_use_materialx_derivatives(true);
     }
   }
   return true;

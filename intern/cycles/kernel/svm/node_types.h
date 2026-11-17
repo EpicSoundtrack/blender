@@ -111,6 +111,26 @@ struct SVMNodeMaterialXHeightToNormal {
 static_assert(alignof(SVMNodeMaterialXHeightToNormal) <= alignof(uint));
 static_assert(sizeof(SVMNodeMaterialXHeightToNormal) % sizeof(uint) == 0);
 
+/* NODE_MATERIALX_NOISE */
+struct SVMNodeMaterialXNoise {
+  uint dimensions;
+  NodeNoiseType noise_type;
+  uint normalize;
+  uint vector_fbm;
+  uint vector2_fbm;
+  SVMInputFloat scale;
+  SVMInputFloat detail;
+  SVMInputFloat roughness;
+  SVMInputFloat lacunarity;
+  SVMInputFloat distortion;
+  SVMStackOffset vector;
+  SVMStackOffset value_offset;
+  SVMStackOffset color_offset;
+  uint8_t _pad[1];
+};
+static_assert(alignof(SVMNodeMaterialXNoise) <= alignof(uint));
+static_assert(sizeof(SVMNodeMaterialXNoise) % sizeof(uint) == 0);
+
 /* NODE_MATERIALX_WORLEY */
 struct SVMNodeMaterialXWorley {
   uint dimensions;
@@ -614,9 +634,6 @@ struct SVMNodeTexNoise {
   uint dimensions;
   NodeNoiseType noise_type;
   uint normalize;
-  uint materialx_vector_color;
-  uint materialx_vector_fbm;
-  uint materialx_vector2_fbm;
   SVMInputFloat w;
   SVMInputFloat scale;
   SVMInputFloat detail;
@@ -628,6 +645,7 @@ struct SVMNodeTexNoise {
   SVMStackOffset vector;
   SVMStackOffset value_offset;
   SVMStackOffset color_offset;
+  uint8_t _pad[1];
 };
 static_assert(alignof(SVMNodeTexNoise) <= alignof(uint));
 static_assert(sizeof(SVMNodeTexNoise) % sizeof(uint) == 0);
