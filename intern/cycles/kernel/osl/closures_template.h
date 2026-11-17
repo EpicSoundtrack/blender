@@ -43,6 +43,28 @@ OSL_CLOSURE_STRUCT_BEGIN(MaterialXBurleyDiffuseBSDF, materialx_burley_diffuse_bs
   OSL_CLOSURE_STRUCT_MEMBER(MaterialXBurleyDiffuseBSDF, FLOAT, float, roughness, nullptr)
 OSL_CLOSURE_STRUCT_END(MaterialXBurleyDiffuseBSDF, materialx_burley_diffuse_bsdf)
 
+/* MaterialX dielectric_bsdf with physical Alpha X/Y overrides: generalized_schlick_bsdf
+ * with anisotropic transmission. Stock glass closures stay isotropic. */
+OSL_CLOSURE_STRUCT_BEGIN(MaterialXGeneralizedSchlickBSDF, materialx_generalized_schlick_bsdf)
+  OSL_CLOSURE_STRUCT_MEMBER(MaterialXGeneralizedSchlickBSDF, VECTOR, packed_float3, N, nullptr)
+  OSL_CLOSURE_STRUCT_MEMBER(MaterialXGeneralizedSchlickBSDF, VECTOR, packed_float3, T, nullptr)
+  OSL_CLOSURE_STRUCT_MEMBER(
+      MaterialXGeneralizedSchlickBSDF, VECTOR, packed_float3, reflection_tint, nullptr)
+  OSL_CLOSURE_STRUCT_MEMBER(
+      MaterialXGeneralizedSchlickBSDF, VECTOR, packed_float3, transmission_tint, nullptr)
+  OSL_CLOSURE_STRUCT_MEMBER(MaterialXGeneralizedSchlickBSDF, FLOAT, float, alpha_x, nullptr)
+  OSL_CLOSURE_STRUCT_MEMBER(MaterialXGeneralizedSchlickBSDF, FLOAT, float, alpha_y, nullptr)
+  OSL_CLOSURE_STRUCT_MEMBER(MaterialXGeneralizedSchlickBSDF, VECTOR, packed_float3, f0, nullptr)
+  OSL_CLOSURE_STRUCT_MEMBER(MaterialXGeneralizedSchlickBSDF, VECTOR, packed_float3, f90, nullptr)
+  OSL_CLOSURE_STRUCT_MEMBER(MaterialXGeneralizedSchlickBSDF, FLOAT, float, exponent, nullptr)
+  OSL_CLOSURE_STRUCT_MEMBER(
+      MaterialXGeneralizedSchlickBSDF, STRING, DeviceString, distribution, nullptr)
+  OSL_CLOSURE_STRUCT_MEMBER(
+      MaterialXGeneralizedSchlickBSDF, FLOAT, float, thinfilm_thickness, "thinfilm_thickness")
+  OSL_CLOSURE_STRUCT_MEMBER(
+      MaterialXGeneralizedSchlickBSDF, FLOAT, float, thinfilm_ior, "thinfilm_ior")
+OSL_CLOSURE_STRUCT_END(MaterialXGeneralizedSchlickBSDF, materialx_generalized_schlick_bsdf)
+
 OSL_CLOSURE_STRUCT_BEGIN(Translucent, translucent)
   OSL_CLOSURE_STRUCT_MEMBER(Translucent, VECTOR, packed_float3, N, nullptr)
 OSL_CLOSURE_STRUCT_END(Translucent, translucent)

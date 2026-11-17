@@ -38,18 +38,37 @@ shader node_glass_bsdf(color Color = 0.8,
   color F0 = F0_from_ior(eta);
   color F90 = color(1.0);
 
-  BSDF = generalized_schlick_bsdf(Normal,
-                                  T,
-                                  base_color,
-                                  base_color,
-                                  alpha_x,
-                                  alpha_y,
-                                  F0,
-                                  F90,
-                                  -eta,
-                                  distribution,
-                                  "thinfilm_thickness",
-                                  ThinFilmThickness,
-                                  "thinfilm_ior",
-                                  thinfilm_ior);
+  if (AlphaX >= 0.0 && AlphaY >= 0.0) {
+    /* MaterialX dielectric_bsdf: keep anisotropic transmission. */
+    BSDF = materialx_generalized_schlick_bsdf(Normal,
+                                              T,
+                                              base_color,
+                                              base_color,
+                                              alpha_x,
+                                              alpha_y,
+                                              F0,
+                                              F90,
+                                              -eta,
+                                              distribution,
+                                              "thinfilm_thickness",
+                                              ThinFilmThickness,
+                                              "thinfilm_ior",
+                                              thinfilm_ior);
+  }
+  else {
+    BSDF = generalized_schlick_bsdf(Normal,
+                                    T,
+                                    base_color,
+                                    base_color,
+                                    alpha_x,
+                                    alpha_y,
+                                    F0,
+                                    F90,
+                                    -eta,
+                                    distribution,
+                                    "thinfilm_thickness",
+                                    ThinFilmThickness,
+                                    "thinfilm_ior",
+                                    thinfilm_ior);
+  }
 }

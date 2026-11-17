@@ -439,7 +439,8 @@ ccl_device void osl_closure_generalized_schlick_bsdf_setup(
     const uint32_t /*path_flag*/,
     const float3 weight,
     const ccl_private GeneralizedSchlickBSDFClosure *closure,
-    float3 *layer_albedo)
+    float3 *layer_albedo,
+    const bool materialx_anisotropic = false)
 {
   osl_zero_albedo(layer_albedo);
 
@@ -488,7 +489,7 @@ ccl_device void osl_closure_generalized_schlick_bsdf_setup(
   /* Beckmann */
   if (closure->distribution == make_string("beckmann", 14712237670914973463ull)) {
     if (has_reflection && has_transmission) {
-      sd->flag |= bsdf_microfacet_beckmann_glass_setup(bsdf);
+      sd->flag |= bsdf_microfacet_beckmann_glass_setup(bsdf, materialx_anisotropic);
     }
     else if (has_transmission) {
       sd->flag |= bsdf_microfacet_beckmann_refraction_setup(bsdf);
@@ -500,7 +501,7 @@ ccl_device void osl_closure_generalized_schlick_bsdf_setup(
   /* GGX (either single- or multi-scattering) */
   else {
     if (has_reflection && has_transmission) {
-      sd->flag |= bsdf_microfacet_ggx_glass_setup(bsdf);
+      sd->flag |= bsdf_microfacet_ggx_glass_setup(bsdf, materialx_anisotropic);
     }
     else if (has_transmission) {
       sd->flag |= bsdf_microfacet_ggx_refraction_setup(bsdf);
@@ -536,6 +537,29 @@ ccl_device void osl_closure_generalized_schlick_bsdf_setup(
       *layer_albedo = one_float3();
     }
   }
+}
+
+/* MaterialX-only: the generalized Schlick closure with anisotropic transmission. */
+ccl_device void osl_closure_materialx_generalized_schlick_bsdf_setup(
+    KernelGlobals kg,
+    ccl_private ShaderData *sd,
+    const PathRayVisibility path_visibility,
+    const uint32_t path_flag,
+    const float3 weight,
+    const ccl_private MaterialXGeneralizedSchlickBSDFClosure *closure,
+    float3 *layer_albedo)
+{
+  static_assert(sizeof(MaterialXGeneralizedSchlickBSDFClosure) ==
+                sizeof(GeneralizedSchlickBSDFClosure));
+  osl_closure_generalized_schlick_bsdf_setup(
+      kg,
+      sd,
+      path_visibility,
+      path_flag,
+      weight,
+      reinterpret_cast<const ccl_private GeneralizedSchlickBSDFClosure *>(closure),
+      layer_albedo,
+      true);
 }
 
 ccl_device void osl_closure_thin_glass_setup(KernelGlobals kg,
