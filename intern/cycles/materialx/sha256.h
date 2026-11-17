@@ -8,7 +8,8 @@
 
 CCL_NAMESPACE_BEGIN
 
-/** Return the lowercase hexadecimal SHA-256 digest of the exact string bytes. */
-string util_sha256_string(const string &str);
+/** Lowercase hexadecimal SHA-256 digest of the exact string bytes. Used only by the
+ * MaterialX authority digest (materialx/authority*.cpp). */
+string materialx_sha256_string(const string &str);
 
 CCL_NAMESPACE_END

@@ -12,11 +12,13 @@ set(INC_SYS
 set(SRC
   authority.cpp
   graph.cpp
+  sha256.cpp
 )
 
 set(SRC_HEADERS
   authority.h
   graph.h
+  sha256.h
 )
 
 set(LIB

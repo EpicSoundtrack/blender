@@ -43,7 +43,7 @@
 #include "util/colorspace.h"
 #include "util/profiling.h"
 #include "util/stats.h"
-#include "util/sha256.h"
+#include "materialx/sha256.h"
 #include "materialx_vector3_canonical_fixtures.h"
 #include "materialx_standard_surface_scalar_fixtures.h"
 #include "materialx_separate4_color4_canonical_fixtures.h"
@@ -26437,7 +26437,7 @@ string sha256_of_file(const string &path)
 {
   std::ifstream file(path, std::ios::binary);
   const std::string bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-  return "sha256:" + util_sha256_string(bytes);
+  return "sha256:" + materialx_sha256_string(bytes);
 }
 
 }  // namespace
@@ -36233,7 +36233,7 @@ void expect_exact_vector3_fixture_lowers(const size_t index)
 {
   auto &fixture = materialx_vector3_fixtures::fixtures[index];
   SCOPED_TRACE(fixture.name);
-  ASSERT_EQ(util_sha256_string(fixture.usda), fixture.sha256);
+  ASSERT_EQ(materialx_sha256_string(fixture.usda), fixture.sha256);
   auto stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(fixture.usda));
   auto material = pxr::UsdShadeMaterial(
@@ -36871,7 +36871,7 @@ namespace {
 void expect_exact_vector3_family_lowers(const size_t index)
 {
   const auto &fixture = materialx_vector3_fixtures::remaining_fixtures[index];
-  ASSERT_EQ(util_sha256_string(fixture.usda), fixture.sha256);
+  ASSERT_EQ(materialx_sha256_string(fixture.usda), fixture.sha256);
   auto stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(fixture.usda));
   materialx::Graph graph;
@@ -37062,7 +37062,7 @@ void expect_viewport_vector3_fixture_lowers(const size_t index)
 {
   const auto &fixture = viewport_vector3_fixtures::fixtures[index];
   SCOPED_TRACE(fixture.name);
-  ASSERT_EQ(util_sha256_string(fixture.usda), fixture.sha256);
+  ASSERT_EQ(materialx_sha256_string(fixture.usda), fixture.sha256);
   auto stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(fixture.usda));
   string before;
@@ -37384,7 +37384,7 @@ pxr::UsdShadeOutput ss_scalar_source(StandardSurfaceGeometryFixture &fixture, co
 void ss_scalar_exact_fixture(const size_t index)
 {
   const auto &fixture = materialx_standard_surface_scalar_fixtures::fixtures[index];
-  ASSERT_EQ(util_sha256_string(fixture.usda), fixture.sha256);
+  ASSERT_EQ(materialx_sha256_string(fixture.usda), fixture.sha256);
   const auto stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(fixture.usda));
   const auto material = pxr::UsdShadeMaterial(

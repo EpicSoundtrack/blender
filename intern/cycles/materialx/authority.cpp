@@ -4,7 +4,7 @@
 
 #include "materialx/authority.h"
 
-#include "util/sha256.h"
+#include "materialx/sha256.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -55,7 +55,7 @@ bool is_digest(const string &value)
 
 string usda_sha256_digest(const string &usda)
 {
-  return "sha256:" + util_sha256_string(usda);
+  return "sha256:" + materialx_sha256_string(usda);
 }
 
 bool is_valid(const Authority &authority)

@@ -6,7 +6,7 @@
 #include "materialx/graph.h"
 #include "materialx/usdshade_reader.h"
 #include "scene/shader_graph.h"
-#include "util/sha256.h"
+#include "materialx/sha256.h"
 #include <limits>
 #include <pxr/base/gf/vec2f.h>
 #include <pxr/base/gf/vec3f.h>
@@ -530,7 +530,7 @@ def "World"
 }  // namespace
 TEST(materialx_nodegraph_interface, actual_public_import_fixture_lowers_without_source_mutation)
 {
-  EXPECT_EQ(util_sha256_string(retained_usda),
+  EXPECT_EQ(materialx_sha256_string(retained_usda),
             "7783e3e38eb74e4df70b5db520e415b050038a0dd420ea8edd4b52fa135e121c");
   auto layer = pxr::SdfLayer::CreateAnonymous();
   ASSERT_TRUE(layer->ImportFromString(retained_usda));
@@ -1539,7 +1539,7 @@ def "World"
 }
 
 )OUTPUT_FIXTURE";
-  EXPECT_EQ(util_sha256_string(text),
+  EXPECT_EQ(materialx_sha256_string(text),
             "e673bc4c09e6939fce172e7d7aed56e6cfe19946b7615620cda110d5434f3792");
   auto layer = pxr::SdfLayer::CreateAnonymous();
   ASSERT_TRUE(layer->ImportFromString(text));
@@ -1981,7 +1981,7 @@ def "World"
 }
 
 )OUTPUT_FIXTURE";
-  EXPECT_EQ(util_sha256_string(text),
+  EXPECT_EQ(materialx_sha256_string(text),
             "35456b0dc6a28874ea0f73170623fab98759bfe057711d1ee85e0e8efe3c1f1b");
   auto layer = pxr::SdfLayer::CreateAnonymous();
   ASSERT_TRUE(layer->ImportFromString(text));

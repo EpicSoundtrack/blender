@@ -12,7 +12,7 @@
 #include "materialx/graph.h"
 #include "materialx/usdshade_reader.h"
 #include "util/path.h"
-#include "util/sha256.h"
+#include "materialx/sha256.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -163,7 +163,7 @@ bool authenticate_resolved_fixture_bytes(const Graph &graph,
     }
     const string actual_digest =
         "sha256:" +
-        util_sha256_string(string(reinterpret_cast<const char *>(bytes.data()), bytes.size()));
+        materialx_sha256_string(string(reinterpret_cast<const char *>(bytes.data()), bytes.size()));
     if (actual_digest != digest->second) {
       set_error(error_message,
                "Fixture digest mismatch for asset path: " + file->second + " (expected " +

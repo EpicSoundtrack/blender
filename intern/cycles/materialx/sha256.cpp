@@ -2,7 +2,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0 */
 
-#include "util/sha256.h"
+#include "materialx/sha256.h"
 
 #include <array>
 #include <cstring>
@@ -83,7 +83,7 @@ void process_block(const uint8_t *block, std::array<uint32_t, 8> &state)
 
 }  // namespace
 
-string util_sha256_string(const string &str)
+string materialx_sha256_string(const string &str)
 {
   std::array<uint32_t, 8> state = {0x6a09e667u,
                                    0xbb67ae85u,

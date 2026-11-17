@@ -47,7 +47,7 @@ set(SRC
   util_rgbe_test.cpp
   util_md5_test.cpp
   util_path_test.cpp
-  util_sha256_test.cpp
+  materialx_sha256_test.cpp
   util_simd_test.cpp
   util_string_test.cpp
   util_task_test.cpp

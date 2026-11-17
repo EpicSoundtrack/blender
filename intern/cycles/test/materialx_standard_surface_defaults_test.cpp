@@ -16,7 +16,7 @@
 #include "materialx/usdshade_reader.h"
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
-#include "util/sha256.h"
+#include "materialx/sha256.h"
 
 CCL_NAMESPACE_BEGIN
 #include "materialx_standard_surface_defaults_fixtures.h"
@@ -156,7 +156,7 @@ TEST(materialx_usdshade_reader, standard_surface_exact_broad_canonical_omissions
 {
   for (const auto &fixture : ss_completion_data::fixtures) {
     SCOPED_TRACE(fixture.name);
-    ASSERT_EQ(util_sha256_string(fixture.usda), fixture.sha);
+    ASSERT_EQ(materialx_sha256_string(fixture.usda), fixture.sha);
     const auto stage = pxr::UsdStage::CreateInMemory();
     ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(fixture.usda));
     const string before = layer_bytes(stage->GetRootLayer());
