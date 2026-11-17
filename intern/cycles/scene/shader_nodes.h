@@ -1431,9 +1431,11 @@ class AttributeNode : public ShaderNode {
   static void add_named_attribute_request(AttributeRequestSet *attributes, ustring attribute);
 
   NODE_SOCKET_API(ustring, attribute)
+  /* MaterialX lowering only (missing-primvar default and exact scalar store). */
   NODE_SOCKET_API(bool, use_fallback)
   NODE_SOCKET_API(float3, fallback_color)
   NODE_SOCKET_API(float, fallback_alpha)
+  NODE_SOCKET_API(bool, use_materialx_exact)
 
   bool stochastic_sample = true;
 };

@@ -9984,6 +9984,40 @@ TEST(materialx_graph, lowers_model_space_normal_and_position_as_object_space)
 }
 
 
+/* Track B8: the exact scalar store and fallback are MaterialX-only attribute modes. A
+ * stock AttributeNode keeps both off; every AttributeNode the lowering creates for a
+ * geomprop/primvar reader turns on the exact store. */
+TEST(materialx_graph, attribute_readers_use_materialx_only_exact_mode)
+{
+  ShaderGraph stock_graph;
+  const AttributeNode *stock = stock_graph.create_node<AttributeNode>();
+  EXPECT_FALSE(stock->get_use_fallback());
+  EXPECT_FALSE(stock->get_use_materialx_exact());
+
+  materialx::Node scalar;
+  scalar.name = "ExactFloat";
+  scalar.nodedef = "ND_geompropvalue_float";
+  scalar.string_inputs["geomprop"] = "exact_float";
+  scalar.fallback_inputs["out"] = 0.5f;
+  scalar.outputs["out"] = materialx::Type::Float;
+  materialx::Node primvar;
+  primvar.name = "ExactPrimvar";
+  primvar.nodedef = "ND_UsdPrimvarReader_vector3";
+  primvar.string_inputs["varname"] = "exact_vector";
+  primvar.fallback_vector3_inputs["out"] = make_float3(0.1f, 0.2f, 0.3f);
+  primvar.outputs["out"] = materialx::Type::Vector3;
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{scalar, primvar}}, &graph));
+  int attributes = 0;
+  for (ShaderNode *node : graph.nodes) {
+    if (const AttributeNode *attribute = dynamic_cast<AttributeNode *>(node)) {
+      attributes++;
+      EXPECT_TRUE(attribute->get_use_materialx_exact()) << attribute->name;
+    }
+  }
+  EXPECT_GE(attributes, 2);
+}
+
 TEST(materialx_graph, lowers_geomprop_and_primvar_readers_to_authored_fallbacks)
 {
   materialx::Node scalar;

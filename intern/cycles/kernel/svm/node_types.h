@@ -197,6 +197,14 @@ static_assert(alignof(SVMNodeLightPath) <= alignof(uint));
 static_assert(sizeof(SVMNodeLightPath) % sizeof(uint) == 0);
 
 /* NODE_ATTR / NODE_ATTR_DERIVATIVE */
+/* MaterialX lowering only; 0 keeps the stock attribute behavior. */
+enum NodeAttributeMaterialXFlags : uint8_t {
+  /* A missing attribute reads the authored MaterialX default (fallback). */
+  NODE_ATTR_MATERIALX_FALLBACK = 1,
+  /* Store scalar/alpha outputs without re-averaging a replicated value. */
+  NODE_ATTR_MATERIALX_EXACT = 2,
+};
+
 struct SVMNodeAttr {
   int attr;
   SVMStackOffset out_offset;
@@ -204,7 +212,7 @@ struct SVMNodeAttr {
   NodeBumpOffset bump_offset;
   uint8_t store_derivatives;
   float bump_filter_width;
-  uint8_t use_fallback;
+  uint8_t materialx_flags;
   packed_float4 fallback;
 };
 static_assert(alignof(SVMNodeAttr) <= alignof(uint));

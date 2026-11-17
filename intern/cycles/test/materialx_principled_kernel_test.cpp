@@ -27,6 +27,7 @@
 #include "util/stats.h"
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 #include <iterator>
 #include <vector>
@@ -1592,15 +1593,15 @@ TEST(materialx_attribute_store, preserves_scalar_float_bits_and_modulo_nextafter
   for (const uint32_t pattern : patterns) {
     float v; memcpy(&v, &pattern, sizeof(v));
     float stack[SVM_STACK_SIZE] = {};
-    svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, make_float3(v));
+    svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, make_float3(v), true);
     EXPECT_EQ(bits(stack[0]), pattern);
   }
   const float next = 2.0000002384185791015625f;
   float stack[SVM_STACK_SIZE] = {};
-  svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, make_float3(next));
+  svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, make_float3(next), true);
   EXPECT_EQ(bits(safe_floored_modulo(stack[0], 2.0f)), 0x34800000u);
   const dual3 derivative(make_float3(next), make_float3(-0.0f), make_float3(next));
-  svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, derivative);
+  svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, derivative, true);
   EXPECT_EQ(bits(stack[0]), 0x40000001u);
   EXPECT_EQ(bits(stack[1]), 0x80000000u);
   EXPECT_EQ(bits(stack[2]), 0x40000001u);
@@ -1612,16 +1613,16 @@ TEST(materialx_attribute_store, preserves_preconverted_color_mean_fallback_alpha
   float stack[SVM_STACK_SIZE] = {};
   const float3 rgb = make_float3(1.0f, 2.0f, 4.0f);
   const float mean = average(rgb);  // Surface conversion already averages Color3 once.
-  svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, make_float3(mean));
+  svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, make_float3(mean), true);
   EXPECT_EQ(bits(stack[0]), bits(mean));
   const float4 fallback = make_float4(1.0f, 2.0f, 4.0f, 0.375f);
   const float3 scalar = svm_node_attr_fallback_value<float3>(NODE_ATTR_OUTPUT_FLOAT, fallback);
-  svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, scalar);
+  svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, scalar, true);
   EXPECT_EQ(bits(stack[0]), bits(scalar.x));
   svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT_ALPHA, stack, 0,
-      svm_node_attr_fallback_value<float3>(NODE_ATTR_OUTPUT_FLOAT_ALPHA, fallback));
+      svm_node_attr_fallback_value<float3>(NODE_ATTR_OUTPUT_FLOAT_ALPHA, fallback), true);
   EXPECT_EQ(bits(stack[0]), bits(fallback.w));
-  svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT3, stack, 0, rgb);
+  svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT3, stack, 0, rgb, true);
   EXPECT_EQ(bits(stack[0]), bits(rgb.x));
   EXPECT_EQ(bits(stack[1]), bits(rgb.y));
   EXPECT_EQ(bits(stack[2]), bits(rgb.z));
@@ -1649,21 +1650,38 @@ TEST_F(materialx_principled_kernel, scalar_attribute_special_branches_preserve_f
     const dual1 historical_dual = average(raw_dual);
     for (const auto output : {NODE_ATTR_OUTPUT_FLOAT, NODE_ATTR_OUTPUT_FLOAT_ALPHA}) {
       float stack[SVM_STACK_SIZE] = {};
-      const float3 converted = svm_node_attr_surface_eval<float3>(&kg, &sd, node, output, missing);
-      svm_node_attr_store(output, stack, 0, converted);
+      const float3 converted = svm_node_attr_surface_eval<float3>(&kg, &sd, node, output, missing, true);
+      svm_node_attr_store(output, stack, 0, converted, true);
       EXPECT_EQ(bits(stack[0]), bits(historical_scalar));
-      const dual3 converted_dual = svm_node_attr_surface_eval<dual3>(&kg, &sd, node, output, missing);
-      svm_node_attr_store(output, stack, 0, converted_dual);
+      /* Stock (non-MaterialX) path: unaveraged evaluation, averaging store. */
+      svm_node_attr_store(output, stack, 0, svm_node_attr_surface_eval<float3>(&kg, &sd, node, output, missing));
+      EXPECT_EQ(bits(stack[0]), bits(historical_scalar));
+      const dual3 converted_dual = svm_node_attr_surface_eval<dual3>(&kg, &sd, node, output, missing, true);
+      svm_node_attr_store(output, stack, 0, converted_dual, true);
       EXPECT_EQ(bits(stack[0]), bits(historical_dual.val));
       EXPECT_EQ(bits(stack[1]), bits(historical_dual.dx));
       EXPECT_EQ(bits(stack[2]), bits(historical_dual.dy));
     }
     float stack[SVM_STACK_SIZE] = {};
-    svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT3, stack, 0, raw);
+    svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT3, stack, 0, raw, true);
     EXPECT_EQ(bits(stack[0]), bits(raw.x));
     EXPECT_EQ(bits(stack[1]), bits(raw.y));
     EXPECT_EQ(bits(stack[2]), bits(raw.z));
   }
+}
+
+/* Track B8: the exact scalar store is opt-in (MaterialX lowering only). Without the
+ * flag the stock re-averaging store is used unchanged. */
+TEST(materialx_attribute_kernel, exact_scalar_store_is_materialx_only)
+{
+  float stack[4] = {};
+  const float large = 3.0e38f;
+  const float3 replicated = make_float3(large);
+  svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, replicated, true);
+  EXPECT_EQ(std::bit_cast<uint>(stack[0]), std::bit_cast<uint>(large));
+  const float stock = average(replicated);
+  svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, replicated);
+  EXPECT_EQ(std::bit_cast<uint>(stack[0]), std::bit_cast<uint>(stock));
 }
 
 CCL_NAMESPACE_END

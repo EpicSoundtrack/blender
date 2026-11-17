@@ -15764,6 +15764,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       AttributeNode *readers[2];
       for (int i = 0; i < 2; i++) {
         AttributeNode *attribute = graph->create_node<AttributeNode>();
+        attribute->set_use_materialx_exact(true);
         attribute->name = i == 0 ? node.name : node.name + ".fallback_one";
         attribute->set_attribute(ustring(node.string_inputs.at(name_input)));
         attribute->set_use_fallback(true);
@@ -15794,6 +15795,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     if (is_fallback_attribute_reader(node)) {
       const Type type = primary_output_type(node);
       AttributeNode *attribute = graph->create_node<AttributeNode>();
+      attribute->set_use_materialx_exact(true);
       const bool geomprop = node.nodedef == geompropvalue_float_id ||
                             node.nodedef == geompropvalue_color3_id ||
                             node.nodedef == geompropvalue_color4_id ||
@@ -15967,6 +15969,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
             alias != node.string_inputs.end())
         {
           AttributeNode *attribute = graph->create_node<AttributeNode>();
+          attribute->set_use_materialx_exact(true);
           attribute->name = node.name + ".i32." + operand + ".attribute";
           attribute->set_attribute(ustring(alias->second));
           lowered_nodes.emplace(attribute->name, attribute);
@@ -22587,6 +22590,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
              node.nodedef == geompropvalue_vector4_id || node.nodedef == usd_primvar_reader_boolean_id ||
              node.nodedef == usd_primvar_reader_integer_id || node.nodedef == usd_primvar_reader_vector4_id) {
       AttributeNode *attribute = graph->create_node<AttributeNode>();
+      attribute->set_use_materialx_exact(true);
       const char *input_name = (node.nodedef == geompropvalue_boolean_id ||
                                 node.nodedef == geompropvalue_integer_id ||
                                 node.nodedef == geompropvalue_vector4_id) ? "geomprop" : "varname";
@@ -22909,6 +22913,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
        * lowered_color4_alpha_output(), no separate literal/CombineColorNode
        * needed. */
       AttributeNode *attribute = graph->create_node<AttributeNode>();
+      attribute->set_use_materialx_exact(true);
       attribute->set_attribute(ustring(node.string_inputs.at("geomprop")));
       lowered = attribute;
     }
@@ -22986,6 +22991,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
       }
       else {
       AttributeNode *attribute = graph->create_node<AttributeNode>();
+      attribute->set_use_materialx_exact(true);
       attribute->name = node.name + ".attribute";
       /* Index 0 is the default UV set: its tangent is the standard
        * ATTR_STD_UV_TANGENT ("tangent"), as TangentNode with no attribute. */
@@ -23015,6 +23021,7 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
        * ND_geompropvalue_float/_color3/_color4 above, just addressed by the
        * nodedef's own literal 'varname' rather than 'geomprop'. */
       AttributeNode *attribute = graph->create_node<AttributeNode>();
+      attribute->set_use_materialx_exact(true);
       attribute->set_attribute(ustring(node.string_inputs.at("varname")));
       lowered = attribute;
     }

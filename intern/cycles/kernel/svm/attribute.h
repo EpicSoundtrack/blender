@@ -66,14 +66,15 @@ template<typename Float3Type>
 ccl_device_inline void svm_node_attr_store(const NodeAttributeOutputType type,
                                            ccl_private float *stack,
                                            const uint out_offset,
-                                           const ccl_private Float3Type &f)
+                                           const ccl_private Float3Type &f,
+                                           const bool materialx_exact = false)
 {
   using FloatType = dual_scalar_t<Float3Type>;
   if (type == NODE_ATTR_OUTPUT_FLOAT3) {
     stack_store(stack, out_offset, f);
   }
-  else {
-    /* Scalar and alpha evaluation already replicate the converted value.
+  else if (materialx_exact) {
+    /* MaterialX: scalar and alpha evaluation already replicate the converted value.
      * Re-averaging can round its bits or overflow an otherwise finite float. */
     if constexpr (is_dual_v<Float3Type>) {
       stack_store(stack, out_offset, FloatType(f.x()));
@@ -81,6 +82,9 @@ ccl_device_inline void svm_node_attr_store(const NodeAttributeOutputType type,
     else {
       stack_store(stack, out_offset, FloatType(f.x));
     }
+  }
+  else {
+    stack_store(stack, out_offset, FloatType(average(f)));
   }
 }
 
@@ -94,7 +98,8 @@ svm_node_attr_surface_eval(KernelGlobals kg,
                            ccl_private ShaderData *sd,
                            const ccl_global SVMNodeAttr &ccl_restrict node,
                            const NodeAttributeOutputType type,
-                           const AttributeDescriptor desc)
+                           const AttributeDescriptor desc,
+                           const bool materialx_exact = false)
 {
   using FloatType = dual_scalar_t<Float3Type>;
 
@@ -104,7 +109,7 @@ svm_node_attr_surface_eval(KernelGlobals kg,
       uv.dx = make_float3(-sd->du.dx - sd->dv.dx, sd->du.dx, 0.0f);
       uv.dy = make_float3(-sd->du.dy - sd->dv.dy, sd->du.dy, 0.0f);
     }
-    if (type != NODE_ATTR_OUTPUT_FLOAT3) {
+    if (materialx_exact && type != NODE_ATTR_OUTPUT_FLOAT3) {
       return make_float3(average(uv));
     }
     return uv;
@@ -113,7 +118,7 @@ svm_node_attr_surface_eval(KernelGlobals kg,
   if (node.attr == ATTR_STD_GENERATED && !is_attribute_found(desc)) {
     Float3Type f = shading_position<Float3Type>(sd);
     object_inverse_position_transform_if_object(kg, sd, &f);
-    if (type != NODE_ATTR_OUTPUT_FLOAT3) {
+    if (materialx_exact && type != NODE_ATTR_OUTPUT_FLOAT3) {
       return make_float3(average(f));
     }
     return f;
@@ -193,14 +198,18 @@ ccl_device_noinline void svm_node_attr_surface(KernelGlobals kg,
   NodeAttributeOutputType type = NODE_ATTR_OUTPUT_FLOAT;
   const AttributeDescriptor desc = svm_node_attr_init(kg, sd, node, &type);
 
-  if (!is_attribute_found(desc) && node.use_fallback) {
-    svm_node_attr_store(
-        type, stack, node.out_offset, svm_node_attr_fallback_value<float3>(type, node.fallback));
+  const bool materialx_exact = node.materialx_flags & NODE_ATTR_MATERIALX_EXACT;
+  if (!is_attribute_found(desc) && (node.materialx_flags & NODE_ATTR_MATERIALX_FALLBACK)) {
+    svm_node_attr_store(type,
+                        stack,
+                        node.out_offset,
+                        svm_node_attr_fallback_value<float3>(type, node.fallback),
+                        materialx_exact);
     return;
   }
 
-  float3 data = svm_node_attr_surface_eval<float3>(kg, sd, node, type, desc);
-  svm_node_attr_store(type, stack, node.out_offset, data);
+  float3 data = svm_node_attr_surface_eval<float3>(kg, sd, node, type, desc, materialx_exact);
+  svm_node_attr_store(type, stack, node.out_offset, data, materialx_exact);
 }
 
 /* Evaluate surface attributes with derivatives and optional bump offset.
@@ -214,13 +223,17 @@ ccl_device_noinline void svm_node_attr_derivative(KernelGlobals kg,
   NodeAttributeOutputType type = NODE_ATTR_OUTPUT_FLOAT;
   const AttributeDescriptor desc = svm_node_attr_init(kg, sd, node, &type);
 
-  if (!is_attribute_found(desc) && node.use_fallback) {
-    svm_node_attr_store(
-        type, stack, node.out_offset, svm_node_attr_fallback_value<dual3>(type, node.fallback));
+  const bool materialx_exact = node.materialx_flags & NODE_ATTR_MATERIALX_EXACT;
+  if (!is_attribute_found(desc) && (node.materialx_flags & NODE_ATTR_MATERIALX_FALLBACK)) {
+    svm_node_attr_store(type,
+                        stack,
+                        node.out_offset,
+                        svm_node_attr_fallback_value<dual3>(type, node.fallback),
+                        materialx_exact);
     return;
   }
 
-  dual3 data = svm_node_attr_surface_eval<dual3>(kg, sd, node, type, desc);
+  dual3 data = svm_node_attr_surface_eval<dual3>(kg, sd, node, type, desc, materialx_exact);
   if (node.bump_offset == NODE_BUMP_OFFSET_DX) {
     data.val += data.dx * node.bump_filter_width;
   }
@@ -229,10 +242,10 @@ ccl_device_noinline void svm_node_attr_derivative(KernelGlobals kg,
   }
 
   if (node.store_derivatives) {
-    svm_node_attr_store(type, stack, node.out_offset, data);
+    svm_node_attr_store(type, stack, node.out_offset, data, materialx_exact);
   }
   else {
-    svm_node_attr_store(type, stack, node.out_offset, float3(data.val));
+    svm_node_attr_store(type, stack, node.out_offset, float3(data.val), materialx_exact);
   }
 }
 
@@ -248,7 +261,7 @@ ccl_device_noinline void svm_node_attr_volume(KernelGlobals kg,
   NodeAttributeOutputType type = NODE_ATTR_OUTPUT_FLOAT;
   const AttributeDescriptor desc = svm_node_attr_init(kg, sd, node, &type);
 
-  if (!is_attribute_found(desc) && node.use_fallback) {
+  if (!is_attribute_found(desc) && (node.materialx_flags & NODE_ATTR_MATERIALX_FALLBACK)) {
     const float3 data = svm_node_attr_fallback_value<float3>(type, node.fallback);
     if (type == NODE_ATTR_OUTPUT_FLOAT3) {
       stack_store_float3(stack, node.out_offset, data);

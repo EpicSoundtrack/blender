@@ -6240,9 +6240,11 @@ NODE_DEFINE(AttributeNode)
   NodeType *type = NodeType::add("attribute", create, NodeType::SHADER);
 
   SOCKET_STRING(attribute, "Attribute", ustring());
-  SOCKET_BOOLEAN(use_fallback, "Use Fallback", false);
-  SOCKET_COLOR(fallback_color, "Fallback Color", zero_float3());
-  SOCKET_FLOAT(fallback_alpha, "Fallback Alpha", 0.0f);
+  /* MaterialX lowering only; the defaults keep the stock behavior. */
+  SOCKET_BOOLEAN(use_fallback, "Use Fallback", false, SocketType::INTERNAL);
+  SOCKET_COLOR(fallback_color, "Fallback Color", zero_float3(), SocketType::INTERNAL);
+  SOCKET_FLOAT(fallback_alpha, "Fallback Alpha", 0.0f, SocketType::INTERNAL);
+  SOCKET_BOOLEAN(use_materialx_exact, "MaterialX Exact", false, SocketType::INTERNAL);
 
   SOCKET_OUT_COLOR(color, "Color");
   SOCKET_OUT_VECTOR(vector, "Vector");
@@ -6321,7 +6323,8 @@ void AttributeNode::compile(SVMCompiler &compiler)
         .bump_offset = bump_offset,
         .store_derivatives = store_derivatives,
         .bump_filter_width = bump_filter_or_stochastic,
-        .use_fallback = uint8_t(use_fallback),
+        .materialx_flags = uint8_t((use_fallback ? NODE_ATTR_MATERIALX_FALLBACK : 0) |
+                                   (use_materialx_exact ? NODE_ATTR_MATERIALX_EXACT : 0)),
         .fallback = packed_float4(make_float4(fallback_color, fallback_alpha)),
     };
   };
