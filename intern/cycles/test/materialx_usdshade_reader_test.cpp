@@ -4282,7 +4282,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_normalmap_vector2_equal_scale_s
   ASSERT_NE(native_normalmap, nullptr);
   /* Batch 16: scale pre-applied to the sample; UV-tangent path, unit strength. */
   EXPECT_FLOAT_EQ(native_normalmap->get_strength(), 1.0f);
-  EXPECT_FALSE(native_normalmap->get_use_materialx_frame());
+  EXPECT_EQ(native_normalmap->get_space(), NODE_NORMAL_MAP_TANGENT);
   EXPECT_EQ(native_normalmap->get_color(), make_float3(0.625f, 0.375f, 0.75f));
 }
 
@@ -33475,9 +33475,7 @@ TEST(materialx_usdshade_reader, standard_surface_bump_uses_materialx_default_bas
   bool found_normalmap = false;
   for (ShaderNode *node : lowered.nodes) {
     found_height |= dynamic_cast<MaterialXHeightToNormalNode *>(node) != nullptr;
-    if (auto *normalmap = dynamic_cast<NormalMapNode *>(node)) {
-      found_normalmap |= normalmap->get_use_materialx_frame();
-    }
+    found_normalmap |= dynamic_cast<MaterialXNormalMapNode *>(node) != nullptr;
   }
   EXPECT_TRUE(found_height);
   EXPECT_TRUE(found_normalmap);

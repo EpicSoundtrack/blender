@@ -1798,7 +1798,25 @@ class NormalMapNode : public ShaderNode {
   NODE_SOCKET_API(float3, color)
   NODE_SOCKET_API(int, convention)
   NODE_SOCKET_API(int, base)
-  NODE_SOCKET_API(bool, use_materialx_frame)
+};
+
+/* MaterialX normalmap_float fed by heighttonormal: the mx_normalmap_float
+ * frame from dPdu/dPdv instead of the UV tangent attribute. */
+class MaterialXNormalMapNode : public ShaderNode {
+ public:
+  SHADER_NODE_CLASS(MaterialXNormalMapNode)
+  bool has_spatial_varying() override
+  {
+    return true;
+  }
+
+  NODE_SOCKET_API(float, strength)
+  NODE_SOCKET_API(float3, color)
+
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_MATERIALX_NORMAL_MAP;
+  }
 };
 
 /* MaterialX blackbody: mx_blackbody (MaterialX pbrlib) instead of Blender's model. */

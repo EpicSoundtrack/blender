@@ -7818,8 +7818,6 @@ NODE_DEFINE(NormalMapNode)
   base_enum.insert("displaced", NODE_NORMAL_MAP_BASE_DISPLACED);
   SOCKET_ENUM(base, "Base", base_enum, NODE_NORMAL_MAP_BASE_ORIGINAL);
 
-  SOCKET_BOOLEAN(use_materialx_frame, "MaterialX Frame", false, SocketType::INTERNAL);
-
   SOCKET_STRING(attribute, "Attribute", ustring());
 
   SOCKET_IN_FLOAT(strength, "Strength", 1.0f);
@@ -7903,7 +7901,6 @@ void NormalMapNode::compile(SVMCompiler &compiler)
                         .space = space,
                         .invert_green = (convention == NODE_NORMAL_MAP_CONVENTION_DIRECTX) ? 1 : 0,
                         .use_original_base = (base == NODE_NORMAL_MAP_BASE_ORIGINAL) ? 1 : 0,
-                        .use_materialx_frame = use_materialx_frame ? 1 : 0,
                         .attr = attr_id,
                         .attr_sign = attr_sign_id,
                         .color = compiler.input_float3("Color"),
@@ -7945,7 +7942,6 @@ void NormalMapNode::compile(OSLCompiler &compiler)
   compiler.parameter(this, "space");
   compiler.parameter(this, "convention");
   compiler.parameter(this, "base");
-  compiler.parameter(this, "use_materialx_frame");
   compiler.add(this, "node_normal_map");
 }
 
@@ -7978,6 +7974,42 @@ void MaterialXHeightToNormalNode::compile(SVMCompiler &compiler)
 void MaterialXHeightToNormalNode::compile(OSLCompiler &compiler)
 {
   compiler.add(this, "node_materialx_heighttonormal");
+}
+
+/* MaterialX Normal Map */
+
+NODE_DEFINE(MaterialXNormalMapNode)
+{
+  NodeType *type = NodeType::add("materialx_normal_map", create, NodeType::SHADER);
+
+  SOCKET_IN_FLOAT(strength, "Strength", 1.0f);
+  SOCKET_IN_COLOR(color, "Color", make_float3(0.5f, 0.5f, 1.0f));
+  SOCKET_OUT_NORMAL(normal, "Normal");
+
+  return type;
+}
+
+MaterialXNormalMapNode::MaterialXNormalMapNode() : ShaderNode(get_node_type()) {}
+
+void MaterialXNormalMapNode::compile(SVMCompiler &compiler)
+{
+  compiler.add_node(this,
+                    NODE_MATERIALX_NORMAL_MAP,
+                    SVMNodeNormalMap{
+                        .space = NODE_NORMAL_MAP_TANGENT,
+                        .invert_green = 0,
+                        .use_original_base = 0,
+                        .attr = 0,
+                        .attr_sign = 0,
+                        .color = compiler.input_float3("Color"),
+                        .strength = compiler.input_float("Strength"),
+                        .normal_offset = compiler.output("Normal"),
+                    });
+}
+
+void MaterialXNormalMapNode::compile(OSLCompiler &compiler)
+{
+  compiler.add(this, "node_materialx_normal_map");
 }
 
 /* MaterialX Blackbody */

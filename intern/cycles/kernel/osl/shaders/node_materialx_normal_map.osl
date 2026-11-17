@@ -1,0 +1,20 @@
+/* SPDX-FileCopyrightText: 2026 Blender Authors
+ *
+ * SPDX-License-Identifier: Apache-2.0 */
+
+#include "stdcycles.h"
+
+/* MaterialX normalmap_float fed by heighttonormal (mx_normalmap_float frame). */
+shader node_materialx_normal_map(float Strength = 1.0,
+                                 color Color = color(0.5, 0.5, 1.0),
+                                 output normal Normal = N)
+{
+  if (Color == color(0.0)) {
+    Normal = N;
+    return;
+  }
+  color mcolor = 2.0 * color(Color[0] - 0.5, Color[1] - 0.5, Color[2] - 0.5);
+  vector Tn = normalize(dPdu - dot(dPdu, N) * N);
+  vector Bn = normalize(dPdv - dot(dPdv, N) * N - dot(dPdv, Tn) * Tn);
+  Normal = normalize(Tn * mcolor[0] * Strength + Bn * mcolor[1] * Strength + N * mcolor[2]);
+}

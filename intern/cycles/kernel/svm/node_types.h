@@ -90,7 +90,6 @@ struct SVMNodeNormalMap {
   NodeNormalMapSpace space;
   int invert_green;
   int use_original_base;
-  int use_materialx_frame;
   int attr;
   int attr_sign;
   SVMInputFloat3 color;

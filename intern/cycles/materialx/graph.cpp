@@ -23412,10 +23412,22 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       lowered = image;
     }
     else if (node.nodedef == normalmap_float_id || node.nodedef == normalmap_vector2_id) {
-      NormalMapNode *normalmap = graph->create_node<NormalMapNode>();
-      normalmap->set_space(NODE_NORMAL_MAP_TANGENT);
-      normalmap->set_convention(NODE_NORMAL_MAP_CONVENTION_OPENGL);
-      normalmap->set_base(NODE_NORMAL_MAP_BASE_DISPLACED);
+      /* normalmap_float fed by heighttonormal uses the MaterialX-only
+       * mx_normalmap_float frame (dPdu/dPdv); everything else the stock node. */
+      const bool materialx_frame =
+          node.nodedef == normalmap_float_id && node.links.contains("in") &&
+          nodes_by_name.at(node.links.at("in").source_node)->nodedef == heighttonormal_vector3_id;
+      ShaderNode *normalmap = nullptr;
+      if (materialx_frame) {
+        normalmap = graph->create_node<MaterialXNormalMapNode>();
+      }
+      else {
+        NormalMapNode *stock_normalmap = graph->create_node<NormalMapNode>();
+        stock_normalmap->set_space(NODE_NORMAL_MAP_TANGENT);
+        stock_normalmap->set_convention(NODE_NORMAL_MAP_CONVENTION_OPENGL);
+        stock_normalmap->set_base(NODE_NORMAL_MAP_BASE_DISPLACED);
+        normalmap = stock_normalmap;
+      }
       /* Batch 16: ND_normalmap_vector2 no longer uses the MaterialX-frame
        * kernel path. That path builds T/B from sd->dPdu/dPdv, which for
        * Cycles meshes are the per-triangle barycentric derivatives, not the
@@ -23426,10 +23438,6 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
        * pre-applied to the encoded sample and the standard UV-tangent path
        * runs at unit strength, where it is exactly
        * normalize(x*T + y*B + z*N). */
-      if (node.nodedef == normalmap_float_id && node.links.contains("in")) {
-        const Node *input = nodes_by_name.at(node.links.at("in").source_node);
-        normalmap->set_use_materialx_frame(input->nodedef == heighttonormal_vector3_id);
-      }
       /* Batch 16: an unequal vector2 scale is applied by pre-scaling the
        * encoded sample per axis (decoded' = (sx*dx, sy*dy, dz)) with unit
        * strength; equal components keep the uniform strength path. */
@@ -23437,7 +23445,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       const float2 vector2_scale = node.vector2_inputs.contains("scale") ?
                                        node.vector2_inputs.at("scale") :
                                        make_float2(1.0f, 1.0f);
-      normalmap->set_strength(1.0f);
+      if (NormalMapNode *stock_normalmap = dynamic_cast<NormalMapNode *>(normalmap)) {
+        stock_normalmap->set_strength(1.0f);
+      }
       if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
         float3 color = input->second;
         if (node.nodedef == normalmap_float_id) {
@@ -23462,7 +23472,12 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
                               vector2_scale.y * color.y + 0.5f * (1.0f - vector2_scale.y),
                               color.z);
         }
-        normalmap->set_color(color);
+        if (NormalMapNode *stock_normalmap = dynamic_cast<NormalMapNode *>(normalmap)) {
+          stock_normalmap->set_color(color);
+        }
+        else {
+          static_cast<MaterialXNormalMapNode *>(normalmap)->set_color(color);
+        }
       }
       else if (node.nodedef == normalmap_float_id || prescale_vector2) {
         const float s = node.inputs.contains("scale") ? node.inputs.at("scale") : 1.0f;

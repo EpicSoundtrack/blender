@@ -812,14 +812,13 @@ TEST(materialx_graph, connected_fractal_heighttonormal_keeps_height_and_uv_deriv
   EXPECT_EQ(uv_conversion->name, "convert_point_to_vector");
   ASSERT_NE(uv_conversion->inputs[0]->link, nullptr);
   EXPECT_EQ(uv_conversion->inputs[0]->link->parent->name, "UV0");
-  NormalMapNode *native_normalmap = nullptr;
+  MaterialXNormalMapNode *native_normalmap = nullptr;
   for (ShaderNode *node : graph.nodes) {
     if (node->name == "NormalMap") {
-      native_normalmap = dynamic_cast<NormalMapNode *>(node);
+      native_normalmap = dynamic_cast<MaterialXNormalMapNode *>(node);
     }
   }
   ASSERT_NE(native_normalmap, nullptr);
-  EXPECT_TRUE(native_normalmap->get_use_materialx_frame());
   ASSERT_NE(native_normalmap->input("Color")->link, nullptr);
   ShaderNode *color_conversion = native_normalmap->input("Color")->link->parent;
   EXPECT_EQ(color_conversion->name, "convert_vector_to_color");
@@ -967,17 +966,16 @@ TEST(materialx_graph, amber_two_unified_noises_lower_as_connected_heighttonormal
   string error;
   ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
   MaterialXHeightToNormalNode *native_height = nullptr;
-  NormalMapNode *native_normal = nullptr;
+  MaterialXNormalMapNode *native_normal = nullptr;
   for (ShaderNode *node : lowered.nodes) {
     native_height = node->name == "HeightToNormal" ?
                         dynamic_cast<MaterialXHeightToNormalNode *>(node) :
                         native_height;
-    native_normal = node->name == "NormalMap" ? dynamic_cast<NormalMapNode *>(node) :
+    native_normal = node->name == "NormalMap" ? dynamic_cast<MaterialXNormalMapNode *>(node) :
                                                   native_normal;
   }
   ASSERT_NE(native_height, nullptr);
   ASSERT_NE(native_normal, nullptr);
-  EXPECT_TRUE(native_normal->get_use_materialx_frame());
   ASSERT_NE(native_height->input("Height")->link, nullptr);
   EXPECT_EQ(native_height->input("Height")->link->parent->name, "HeightSum");
 }
@@ -9360,7 +9358,7 @@ TEST(materialx_graph, lowers_normalmap_vector2_equal_scale_subset)
    * path runs at unit strength (the MaterialX-frame path used per-triangle
    * barycentric dPdu/dPdv). (0.75, 0.25) -> 0.5 * (x - 0.5) + 0.5. */
   EXPECT_FLOAT_EQ(native_normalmap->get_strength(), 1.0f);
-  EXPECT_FALSE(native_normalmap->get_use_materialx_frame());
+  EXPECT_EQ(native_normalmap->get_space(), NODE_NORMAL_MAP_TANGENT);
   EXPECT_EQ(native_normalmap->get_color(), make_float3(0.625f, 0.375f, 0.75f));
   EXPECT_EQ(principled->input("Normal")->link, native_normalmap->output("Normal"));
 }
@@ -9420,7 +9418,7 @@ TEST(materialx_graph, lowers_normalmap_vector2_unequal_scale)
       }
     }
     ASSERT_NE(native, nullptr);
-    EXPECT_FALSE(native->get_use_materialx_frame());
+    EXPECT_EQ(native->get_space(), NODE_NORMAL_MAP_TANGENT);
     EXPECT_FLOAT_EQ(native->get_strength(), 1.0f);
     if (variant == 0) {
       /* (0.5*0.25 + 0.25, 2*0.8 - 0.5, 0.75): decoded (-0.25, 1.2, 0.5) = (0.5*-0.5, 2*0.6, 0.5). */
