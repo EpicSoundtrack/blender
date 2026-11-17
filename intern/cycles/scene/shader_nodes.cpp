@@ -6939,6 +6939,8 @@ NODE_DEFINE(MathNode)
   type_enum.insert("materialx_divide", NODE_MATH_MATERIALX_DIVIDE);
   type_enum.insert("materialx_multiply", NODE_MATH_MATERIALX_MULTIPLY);
   type_enum.insert("materialx_sqrt", NODE_MATH_MATERIALX_SQRT);
+  type_enum.insert("materialx_sine", NODE_MATH_MATERIALX_SINE);
+  type_enum.insert("materialx_cosine", NODE_MATH_MATERIALX_COSINE);
   type_enum.insert("multiply_add", NODE_MATH_MULTIPLY_ADD);
   type_enum.insert("sine", NODE_MATH_SINE);
   type_enum.insert("cosine", NODE_MATH_COSINE);
@@ -7079,6 +7081,8 @@ NODE_DEFINE(VectorMathNode)
   type_enum.insert("divide", NODE_VECTOR_MATH_DIVIDE);
   type_enum.insert("materialx_divide", NODE_VECTOR_MATH_MATERIALX_DIVIDE);
   type_enum.insert("materialx_multiply", NODE_VECTOR_MATH_MATERIALX_MULTIPLY);
+  type_enum.insert("materialx_sine", NODE_VECTOR_MATH_MATERIALX_SINE);
+  type_enum.insert("materialx_cosine", NODE_VECTOR_MATH_MATERIALX_COSINE);
 
   type_enum.insert("cross_product", NODE_VECTOR_MATH_CROSS_PRODUCT);
   type_enum.insert("project", NODE_VECTOR_MATH_PROJECT);

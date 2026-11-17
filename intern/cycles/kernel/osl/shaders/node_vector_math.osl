@@ -120,6 +120,12 @@ shader node_vector_math(string math_type = "add",
   else if (math_type == "cosine") {
     Vector = cos(Vector1);
   }
+  else if (math_type == "materialx_sine") {
+    Vector = sin(Vector1);
+  }
+  else if (math_type == "materialx_cosine") {
+    Vector = cos(Vector1);
+  }
   else if (math_type == "tangent") {
     Vector = tan(Vector1);
   }

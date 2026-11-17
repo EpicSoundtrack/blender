@@ -4763,8 +4763,8 @@ TEST(materialx_graph, lowers_exact_trigonometric_vector3_nodes)
   for (ShaderNode *node : graph.nodes) {
     const VectorMathNode *math = dynamic_cast<VectorMathNode *>(node);
     if (!math) continue;
-    found_sine |= math->get_math_type() == NODE_VECTOR_MATH_SINE;
-    found_cosine |= math->get_math_type() == NODE_VECTOR_MATH_COSINE;
+    found_sine |= math->get_math_type() == NODE_VECTOR_MATH_MATERIALX_SINE;
+    found_cosine |= math->get_math_type() == NODE_VECTOR_MATH_MATERIALX_COSINE;
     found_tangent |= math->get_math_type() == NODE_VECTOR_MATH_TANGENT;
   }
   EXPECT_TRUE(found_sine);
@@ -5108,7 +5108,7 @@ TEST(materialx_graph, lowers_exact_trigonometric_and_sign_vector2_nodes)
   materialx::Node cosine; cosine.name="Cosine"; cosine.nodedef="ND_cos_vector2"; cosine.links["in"]={"Sine","out",materialx::Type::Vector2}; cosine.outputs["out"]=materialx::Type::Vector2;
   materialx::Node tangent; tangent.name="Tangent"; tangent.nodedef="ND_tan_vector2"; tangent.links["in"]={"Cosine","out",materialx::Type::Vector2}; tangent.outputs["out"]=materialx::Type::Vector2;
   materialx::Node sign; sign.name="Sign"; sign.nodedef="ND_sign_vector2"; sign.vector2_inputs["in"]=make_float2(0.0f,-0.0f); sign.outputs["out"]=materialx::Type::Vector2;
-  ShaderGraph graph; ASSERT_TRUE(materialx::lower({{input,sine,cosine,tangent,sign}},&graph)); bool s=false,c=false,t=false,g=false; for(ShaderNode *n:graph.nodes){const VectorMathNode *m=dynamic_cast<VectorMathNode *>(n);if(m){s|=m->get_math_type()==NODE_VECTOR_MATH_SINE;c|=m->get_math_type()==NODE_VECTOR_MATH_COSINE;t|=m->get_math_type()==NODE_VECTOR_MATH_TANGENT;g|=m->get_math_type()==NODE_VECTOR_MATH_SIGN;}} EXPECT_TRUE(s);EXPECT_TRUE(c);EXPECT_TRUE(t);EXPECT_TRUE(g);
+  ShaderGraph graph; ASSERT_TRUE(materialx::lower({{input,sine,cosine,tangent,sign}},&graph)); bool s=false,c=false,t=false,g=false; for(ShaderNode *n:graph.nodes){const VectorMathNode *m=dynamic_cast<VectorMathNode *>(n);if(m){s|=m->get_math_type()==NODE_VECTOR_MATH_MATERIALX_SINE;c|=m->get_math_type()==NODE_VECTOR_MATH_MATERIALX_COSINE;t|=m->get_math_type()==NODE_VECTOR_MATH_TANGENT;g|=m->get_math_type()==NODE_VECTOR_MATH_SIGN;}} EXPECT_TRUE(s);EXPECT_TRUE(c);EXPECT_TRUE(t);EXPECT_TRUE(g);
 }
 
 TEST(materialx_graph, lowers_exact_domain_math_vector2_nodes_componentwise)
@@ -8441,8 +8441,8 @@ TEST(materialx_graph, lowers_exact_trigonometric_and_exponential_float_nodes)
     const char *nodedef;
     NodeMathType math_type;
   };
-  const MathCase cases[] = {{"ND_sin_float", NODE_MATH_SINE},
-                            {"ND_cos_float", NODE_MATH_COSINE},
+  const MathCase cases[] = {{"ND_sin_float", NODE_MATH_MATERIALX_SINE},
+                            {"ND_cos_float", NODE_MATH_MATERIALX_COSINE},
                             {"ND_tan_float", NODE_MATH_TANGENT},
                             {"ND_exp_float", NODE_MATH_EXPONENT}};
 
@@ -11604,8 +11604,8 @@ TEST(materialx_graph, lowers_vector4_unary_math_with_w_sidecar)
                              {"Ceil", "ND_ceil_vector4", NODE_MATH_CEIL, 4.25f},
                              {"Round", "ND_round_vector4", NODE_MATH_ROUND, 5.5f},
                              {"Sign", "ND_sign_vector4", NODE_MATH_SIGN, -6.0f},
-                             {"Sin", "ND_sin_vector4", NODE_MATH_SINE, 0.25f},
-                             {"Cos", "ND_cos_vector4", NODE_MATH_COSINE, 0.5f},
+                             {"Sin", "ND_sin_vector4", NODE_MATH_MATERIALX_SINE, 0.25f},
+                             {"Cos", "ND_cos_vector4", NODE_MATH_MATERIALX_COSINE, 0.5f},
                              {"Tan", "ND_tan_vector4", NODE_MATH_TANGENT, 0.75f},
                              {"Asin", "ND_asin_vector4", NODE_MATH_ARCSINE, 0.125f},
                              {"Acos", "ND_acos_vector4", NODE_MATH_ARCCOSINE, 0.25f},
@@ -27903,6 +27903,10 @@ float hextile_evaluate(ShaderOutput *output, ShaderNode *texcoord, const float u
       return sinf(a);
     case NODE_MATH_COSINE:
       return cosf(a);
+    case NODE_MATH_MATERIALX_SINE:
+      return sinf(a);
+    case NODE_MATH_MATERIALX_COSINE:
+      return cosf(a);
     case NODE_MATH_MULTIPLY_ADD:
       return a * b + c;
     default:
@@ -28416,6 +28420,10 @@ float hextile_linked_evaluate(ShaderOutput *output,
     case NODE_MATH_SINE:
       return sinf(a);
     case NODE_MATH_COSINE:
+      return cosf(a);
+    case NODE_MATH_MATERIALX_SINE:
+      return sinf(a);
+    case NODE_MATH_MATERIALX_COSINE:
       return cosf(a);
     case NODE_MATH_MULTIPLY_ADD:
       return a * b + c;

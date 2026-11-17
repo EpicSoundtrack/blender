@@ -6941,7 +6941,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_vector4_unary_math)
     }
     found_fraction |= math->get_math_type() == NODE_MATH_FRACTION;
     found_absolute |= math->get_math_type() == NODE_MATH_ABSOLUTE;
-    found_sine |= math->get_math_type() == NODE_MATH_SINE;
+    found_sine |= math->get_math_type() == NODE_MATH_MATERIALX_SINE;
     found_exp |= math->get_math_type() == NODE_MATH_EXPONENT;
     if (node->name == "exp_vector4.W") {
       w_exp = const_cast<MathNode *>(math);
@@ -12103,8 +12103,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_nested_exact_trigonometric_and_
   bool found_sine = false, found_cosine = false, found_tangent = false, found_exponent = false;
   for (ShaderNode *node : lowered.nodes) {
     if (const auto *math = dynamic_cast<MathNode *>(node)) {
-      found_sine |= math->get_math_type() == NODE_MATH_SINE;
-      found_cosine |= math->get_math_type() == NODE_MATH_COSINE;
+      found_sine |= math->get_math_type() == NODE_MATH_MATERIALX_SINE;
+      found_cosine |= math->get_math_type() == NODE_MATH_MATERIALX_COSINE;
       found_tangent |= math->get_math_type() == NODE_MATH_TANGENT;
       found_exponent |= math->get_math_type() == NODE_MATH_EXPONENT;
     }
@@ -17300,8 +17300,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_exact_trigonometric_vector3_nod
   for (ShaderNode *node : lowered.nodes) {
     const VectorMathNode *math = dynamic_cast<VectorMathNode *>(node);
     if (!math) continue;
-    found_sine |= math->get_math_type() == NODE_VECTOR_MATH_SINE;
-    found_cosine |= math->get_math_type() == NODE_VECTOR_MATH_COSINE;
+    found_sine |= math->get_math_type() == NODE_VECTOR_MATH_MATERIALX_SINE;
+    found_cosine |= math->get_math_type() == NODE_VECTOR_MATH_MATERIALX_COSINE;
     found_tangent |= math->get_math_type() == NODE_VECTOR_MATH_TANGENT;
   }
   EXPECT_TRUE(found_sine);
@@ -17627,7 +17627,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_exact_trigonometric_and_sign_ve
   const auto shader=[&](const char*n,const char*i,const pxr::SdfValueTypeName&t){pxr::UsdShadeShader r=pxr::UsdShadeShader::Define(stage,pxr::SdfPath("/Looks/TrigSignVector2").AppendChild(pxr::TfToken(n)));r.CreateIdAttr(pxr::VtValue(pxr::TfToken(i)));r.CreateOutput(pxr::TfToken("out"),t);return r;};
   auto surface=shader("OpenPBR","ND_open_pbr_surface_surfaceshader",pxr::SdfValueTypeNames->Token);auto input=shader("Input","ND_constant_vector2",pxr::SdfValueTypeNames->Float2);auto sine=shader("Sine","ND_sin_vector2",pxr::SdfValueTypeNames->Float2);auto cosine=shader("Cosine","ND_cos_vector2",pxr::SdfValueTypeNames->Float2);auto tangent=shader("Tangent","ND_tan_vector2",pxr::SdfValueTypeNames->Float2);auto sign=shader("Sign","ND_sign_vector2",pxr::SdfValueTypeNames->Float2);auto extract=shader("Extract","ND_extract_vector2",pxr::SdfValueTypeNames->Float);
   input.CreateInput(pxr::TfToken("value"),pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.25f,-0.5f)); ASSERT_TRUE(sine.CreateInput(pxr::TfToken("in"),pxr::SdfValueTypeNames->Float2).ConnectToSource(input.ConnectableAPI(),pxr::TfToken("out")));ASSERT_TRUE(cosine.CreateInput(pxr::TfToken("in"),pxr::SdfValueTypeNames->Float2).ConnectToSource(sine.ConnectableAPI(),pxr::TfToken("out")));ASSERT_TRUE(tangent.CreateInput(pxr::TfToken("in"),pxr::SdfValueTypeNames->Float2).ConnectToSource(cosine.ConnectableAPI(),pxr::TfToken("out")));ASSERT_TRUE(sign.CreateInput(pxr::TfToken("in"),pxr::SdfValueTypeNames->Float2).ConnectToSource(tangent.ConnectableAPI(),pxr::TfToken("out")));extract.CreateInput(pxr::TfToken("index"),pxr::SdfValueTypeNames->Int).Set(0);ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"),pxr::SdfValueTypeNames->Float2).ConnectToSource(sign.ConnectableAPI(),pxr::TfToken("out")));ASSERT_TRUE(surface.CreateInput(pxr::TfToken("specular_roughness"),pxr::SdfValueTypeNames->Float).ConnectToSource(extract.ConnectableAPI(),pxr::TfToken("out")));const pxr::TfToken context("mtlx",pxr::TfToken::Immortal);ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),pxr::TfToken("out")));
-  materialx::Graph source;string error;ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error;ShaderGraph lowered;ASSERT_TRUE(materialx::lower(source,&lowered));bool s=false,c=false,t=false,g=false;for(ShaderNode*n:lowered.nodes){const VectorMathNode*m=dynamic_cast<VectorMathNode*>(n);if(m){s|=m->get_math_type()==NODE_VECTOR_MATH_SINE;c|=m->get_math_type()==NODE_VECTOR_MATH_COSINE;t|=m->get_math_type()==NODE_VECTOR_MATH_TANGENT;g|=m->get_math_type()==NODE_VECTOR_MATH_SIGN;}}EXPECT_TRUE(s);EXPECT_TRUE(c);EXPECT_TRUE(t);EXPECT_TRUE(g);
+  materialx::Graph source;string error;ASSERT_TRUE(materialx::read_usdshade_graph(material,&source,&error))<<error;ShaderGraph lowered;ASSERT_TRUE(materialx::lower(source,&lowered));bool s=false,c=false,t=false,g=false;for(ShaderNode*n:lowered.nodes){const VectorMathNode*m=dynamic_cast<VectorMathNode*>(n);if(m){s|=m->get_math_type()==NODE_VECTOR_MATH_MATERIALX_SINE;c|=m->get_math_type()==NODE_VECTOR_MATH_MATERIALX_COSINE;t|=m->get_math_type()==NODE_VECTOR_MATH_TANGENT;g|=m->get_math_type()==NODE_VECTOR_MATH_SIGN;}}EXPECT_TRUE(s);EXPECT_TRUE(c);EXPECT_TRUE(t);EXPECT_TRUE(g);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_exact_domain_math_vector2_nodes)
@@ -46312,7 +46312,7 @@ TEST(materialx_usdshade_reader, hextiledimage_reads_controls_and_lowers_three_ta
           ASSERT_NE(image->input("Vector")->link, nullptr);
         }
         if (auto *math = dynamic_cast<MathNode *>(node)) {
-          sines += math->get_math_type() == NODE_MATH_SINE;
+          sines += math->get_math_type() == NODE_MATH_MATERIALX_SINE;
           powers += math->get_math_type() == NODE_MATH_POWER;
           less_than += math->get_math_type() == NODE_MATH_LESS_THAN;
         }

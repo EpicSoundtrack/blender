@@ -1837,10 +1837,10 @@ bool scalar_math_type(const string &nodedef, NodeMathType *math_type)
     *math_type = NODE_MATH_MAXIMUM;
   }
   else if (nodedef == sin_float_id) {
-    *math_type = NODE_MATH_SINE;
+    *math_type = NODE_MATH_MATERIALX_SINE;
   }
   else if (nodedef == cos_float_id) {
-    *math_type = NODE_MATH_COSINE;
+    *math_type = NODE_MATH_MATERIALX_COSINE;
   }
   else if (nodedef == tan_float_id) {
     *math_type = NODE_MATH_TANGENT;
@@ -1903,8 +1903,8 @@ bool vector_math_type(const string &nodedef, NodeVectorMathType *math_type)
   else if (nodedef == "ND_floor_vector3") result = NODE_VECTOR_MATH_FLOOR;
   else if (nodedef == "ND_ceil_vector3") result = NODE_VECTOR_MATH_CEIL;
   else if (nodedef == "ND_fract_vector3") result = NODE_VECTOR_MATH_FRACTION;
-  else if (nodedef == "ND_sin_vector3") result = NODE_VECTOR_MATH_SINE;
-  else if (nodedef == "ND_cos_vector3") result = NODE_VECTOR_MATH_COSINE;
+  else if (nodedef == "ND_sin_vector3") result = NODE_VECTOR_MATH_MATERIALX_SINE;
+  else if (nodedef == "ND_cos_vector3") result = NODE_VECTOR_MATH_MATERIALX_COSINE;
   else if (nodedef == "ND_tan_vector3") result = NODE_VECTOR_MATH_TANGENT;
   else if (nodedef == "ND_min_vector3") result = NODE_VECTOR_MATH_MINIMUM;
   else if (nodedef == "ND_max_vector3") result = NODE_VECTOR_MATH_MAXIMUM;
@@ -1930,8 +1930,8 @@ bool vector2_math_type(const string &nodedef, NodeVectorMathType *math_type)
   else if (nodedef == "ND_floor_vector2") *math_type = NODE_VECTOR_MATH_FLOOR;
   else if (nodedef == "ND_ceil_vector2") *math_type = NODE_VECTOR_MATH_CEIL;
   else if (nodedef == "ND_fract_vector2") *math_type = NODE_VECTOR_MATH_FRACTION;
-  else if (nodedef == "ND_sin_vector2") *math_type = NODE_VECTOR_MATH_SINE;
-  else if (nodedef == "ND_cos_vector2") *math_type = NODE_VECTOR_MATH_COSINE;
+  else if (nodedef == "ND_sin_vector2") *math_type = NODE_VECTOR_MATH_MATERIALX_SINE;
+  else if (nodedef == "ND_cos_vector2") *math_type = NODE_VECTOR_MATH_MATERIALX_COSINE;
   else if (nodedef == "ND_tan_vector2") *math_type = NODE_VECTOR_MATH_TANGENT;
   else if (nodedef == "ND_sign_vector2") *math_type = NODE_VECTOR_MATH_SIGN;
   else return false;
@@ -2497,10 +2497,10 @@ bool vector4_unary_math_type(const string &nodedef, NodeMathType *math_type)
     result = NODE_MATH_SIGN;
   }
   else if (nodedef == sin_vector4_id) {
-    result = NODE_MATH_SINE;
+    result = NODE_MATH_MATERIALX_SINE;
   }
   else if (nodedef == cos_vector4_id) {
-    result = NODE_MATH_COSINE;
+    result = NODE_MATH_MATERIALX_COSINE;
   }
   else if (nodedef == tan_vector4_id) {
     result = NODE_MATH_TANGENT;
@@ -4774,8 +4774,8 @@ ShaderNode *add_hextiledimage_lowering_nodes(const Node &node,
     ShaderOutput *rand_y = fract(mul(add(q[0], q[2]), q[1]));
 
     ShaderOutput *rotation_value = mix_oo(rr_x, rr_y, mulo(rand_x, rotation));
-    ShaderOutput *sin_r = math(NODE_MATH_SINE, rotation_value, 0.0f);
-    ShaderOutput *cos_r = math(NODE_MATH_COSINE, rotation_value, 0.0f);
+    ShaderOutput *sin_r = math(NODE_MATH_MATERIALX_SINE, rotation_value, 0.0f);
+    ShaderOutput *cos_r = math(NODE_MATH_MATERIALX_COSINE, rotation_value, 0.0f);
     ShaderOutput *inner_scale = mix_oo(sr_x, sr_y, rand_y);
     /* mix(1, inner, scale) = 1 * (1 - scale) + inner * scale */
     ShaderOutput *tile_scale = mix_one(inner_scale, scale);

@@ -41,6 +41,10 @@ shader node_math(string math_type = "add",
     Value = safe_log(Value1, Value2);
   else if (math_type == "sqrt")
     Value = safe_sqrt(Value1);
+  else if (math_type == "materialx_sine")
+    Value = sin(Value1);
+  else if (math_type == "materialx_cosine")
+    Value = cos(Value1);
   else if (math_type == "materialx_sqrt")
     Value = isnan(Value1) ? materialx_sqrt_nan : safe_sqrt(Value1);
   else if (math_type == "inversesqrt")

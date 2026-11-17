@@ -77,6 +77,53 @@ ccl_device_inline float materialx_sqrt(const float a)
   return safe_sqrtf(a);
 }
 
+/* MaterialX Sin/Cos accept any finite radian input. The CUDA fast-math
+ * trigonometric intrinsics are only accurate in [-pi, pi], so MaterialX nodes
+ * use double-precision range reduction outside it on CUDA. Ordinary Blender
+ * Sine/Cosine keep the stock kernels. */
+ccl_device_inline float materialx_sinf(const float x)
+{
+#ifdef __KERNEL_CUDA__
+  return fabsf(x) > M_PI_F ? (float)::sin((double)x) : __sinf(x);
+#else
+  return sinf(x);
+#endif
+}
+
+ccl_device_inline float materialx_cosf(const float x)
+{
+#ifdef __KERNEL_CUDA__
+  return fabsf(x) > M_PI_F ? (float)::cos((double)x) : __cosf(x);
+#else
+  return cosf(x);
+#endif
+}
+
+ccl_device_inline float3 materialx_sin(const float3 a)
+{
+  return make_float3(materialx_sinf(a.x), materialx_sinf(a.y), materialx_sinf(a.z));
+}
+
+ccl_device_inline float3 materialx_cos(const float3 a)
+{
+  return make_float3(materialx_cosf(a.x), materialx_cosf(a.y), materialx_cosf(a.z));
+}
+
+ccl_device_inline dual3 materialx_sin(const dual3 a)
+{
+  /* Stock derivatives; the value uses the MaterialX range-reduced path. */
+  dual3 result = sin(a);
+  result.val = materialx_sin(a.val);
+  return result;
+}
+
+ccl_device_inline dual3 materialx_cos(const dual3 a)
+{
+  dual3 result = cos(a);
+  result.val = materialx_cos(a.val);
+  return result;
+}
+
 template<class Float3Type, class FloatType>
 ccl_device void svm_vector_math(ccl_private FloatType *value,
                                 ccl_private Float3Type *vector,
@@ -177,6 +224,12 @@ ccl_device void svm_vector_math(ccl_private FloatType *value,
     case NODE_VECTOR_MATH_SINE:
       *vector = sin(a);
       break;
+    case NODE_VECTOR_MATH_MATERIALX_SINE:
+      *vector = materialx_sin(a);
+      break;
+    case NODE_VECTOR_MATH_MATERIALX_COSINE:
+      *vector = materialx_cos(a);
+      break;
     case NODE_VECTOR_MATH_COSINE:
       *vector = cos(a);
       break;
@@ -250,6 +303,10 @@ ccl_device float svm_math(NodeMathType type, const float a, float b, const float
       return pingpongf(a, b);
     case NODE_MATH_SINE:
       return sinf(a);
+    case NODE_MATH_MATERIALX_SINE:
+      return materialx_sinf(a);
+    case NODE_MATH_MATERIALX_COSINE:
+      return materialx_cosf(a);
     case NODE_MATH_COSINE:
       return cosf(a);
     case NODE_MATH_TANGENT:
