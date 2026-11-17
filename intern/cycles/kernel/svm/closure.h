@@ -851,7 +851,9 @@ ccl_device
         bsdf->ior = (sd->flag & SD_BACKFACING) ? 1.0f / ior : ior;
         const float physical_alpha_x = stack_load(stack, bsdf_data.alpha_x);
         const float physical_alpha_y = stack_load(stack, bsdf_data.alpha_y);
-        if (physical_alpha_x >= 0.0f && physical_alpha_y >= 0.0f) {
+        /* MaterialX lowering only: physical (possibly anisotropic) alpha overrides. */
+        const bool materialx_alpha = physical_alpha_x >= 0.0f && physical_alpha_y >= 0.0f;
+        if (materialx_alpha) {
           bsdf->alpha_x = physical_alpha_x;
           bsdf->alpha_y = physical_alpha_y;
         }
@@ -877,10 +879,10 @@ ccl_device
         fresnel->thin_film.ior = (sd->flag & SD_BACKFACING) ? thinfilm_ior / ior : thinfilm_ior;
         /* setup bsdf */
         if (type == CLOSURE_BSDF_MICROFACET_BECKMANN_GLASS_ID) {
-          sd->flag |= bsdf_microfacet_beckmann_glass_setup(bsdf);
+          sd->flag |= bsdf_microfacet_beckmann_glass_setup(bsdf, materialx_alpha);
         }
         else {
-          sd->flag |= bsdf_microfacet_ggx_glass_setup(bsdf);
+          sd->flag |= bsdf_microfacet_ggx_glass_setup(bsdf, materialx_alpha);
         }
         const bool is_multiggx = (type == CLOSURE_BSDF_MICROFACET_MULTI_GGX_GLASS_ID);
         bsdf_microfacet_setup_fresnel_generalized_schlick(kg, bsdf, sd->wi, fresnel, is_multiggx);

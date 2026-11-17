@@ -1090,10 +1090,12 @@ ccl_device int bsdf_microfacet_ggx_refraction_setup(ccl_private MicrofacetBsdf *
   return SD_BSDF | SD_BSDF_HAS_TRANSMISSION | bsdf_microfacet_eval_flag(bsdf);
 }
 
-ccl_device int bsdf_microfacet_ggx_glass_setup(ccl_private MicrofacetBsdf *bsdf)
+/* `materialx_anisotropic`: MaterialX lowering only. Stock glass closures are isotropic. */
+ccl_device int bsdf_microfacet_ggx_glass_setup(ccl_private MicrofacetBsdf *bsdf,
+                                               const bool materialx_anisotropic = false)
 {
   bsdf->alpha_x = saturatef(bsdf->alpha_x);
-  bsdf->alpha_y = saturatef(bsdf->alpha_y);
+  bsdf->alpha_y = materialx_anisotropic ? saturatef(bsdf->alpha_y) : bsdf->alpha_x;
 
   bsdf->fresnel_type = MicrofacetFresnel::DIELECTRIC;
   bsdf->energy_scale = 1.0f;
@@ -1164,10 +1166,11 @@ ccl_device int bsdf_microfacet_beckmann_refraction_setup(ccl_private MicrofacetB
   return SD_BSDF | SD_BSDF_HAS_TRANSMISSION | bsdf_microfacet_eval_flag(bsdf);
 }
 
-ccl_device int bsdf_microfacet_beckmann_glass_setup(ccl_private MicrofacetBsdf *bsdf)
+ccl_device int bsdf_microfacet_beckmann_glass_setup(ccl_private MicrofacetBsdf *bsdf,
+                                                    const bool materialx_anisotropic = false)
 {
   bsdf->alpha_x = saturatef(bsdf->alpha_x);
-  bsdf->alpha_y = saturatef(bsdf->alpha_y);
+  bsdf->alpha_y = materialx_anisotropic ? saturatef(bsdf->alpha_y) : bsdf->alpha_x;
 
   bsdf->fresnel_type = MicrofacetFresnel::DIELECTRIC;
   bsdf->type = CLOSURE_BSDF_MICROFACET_BECKMANN_GLASS_ID;

@@ -995,7 +995,7 @@ TEST_F(materialx_principled_kernel, glass_anisotropic_rt_angular_and_sample_eval
   bsdf.alpha_y = .28f;
   bsdf.ior = 1.46f;
   bsdf.weight = one_spectrum();
-  bsdf_microfacet_ggx_glass_setup(&bsdf);
+  bsdf_microfacet_ggx_glass_setup(&bsdf, true);
   ASSERT_FLOAT_EQ(bsdf.alpha_x, .18f);
   ASSERT_FLOAT_EQ(bsdf.alpha_y, .28f);
   ThreadKernelGlobalsCPU kg(globals, nullptr, profiler, 0);
@@ -1052,8 +1052,8 @@ TEST_F(materialx_principled_kernel, glass_anisotropic_oblique_rotated_tir_sample
           bsdf.alpha_y = axes.y;
           bsdf.ior = ior;
           bsdf.weight = one_spectrum();
-          if (beckmann) { bsdf_microfacet_beckmann_glass_setup(&bsdf); }
-          else { bsdf_microfacet_ggx_glass_setup(&bsdf); }
+          if (beckmann) { bsdf_microfacet_beckmann_glass_setup(&bsdf, true); }
+          else { bsdf_microfacet_ggx_glass_setup(&bsdf, true); }
           ASSERT_FLOAT_EQ(bsdf.alpha_x, axes.x);
           ASSERT_FLOAT_EQ(bsdf.alpha_y, axes.y);
           SCOPED_TRACE(testing::Message() << "beckmann=" << beckmann << " ior=" << ior
@@ -1131,8 +1131,8 @@ TEST_F(materialx_principled_kernel, glass_anisotropic_critical_angle_tir_and_ng_
       bsdf.alpha_y = .0002f;
       bsdf.ior = .66f;
       bsdf.weight = one_spectrum();
-      if (beckmann) { bsdf_microfacet_beckmann_glass_setup(&bsdf); }
-      else { bsdf_microfacet_ggx_glass_setup(&bsdf); }
+      if (beckmann) { bsdf_microfacet_beckmann_glass_setup(&bsdf, true); }
+      else { bsdf_microfacet_ggx_glass_setup(&bsdf, true); }
       /* Critical cosine sqrt(1-eta^2): straddle it by .01, comfortably
        * above the 1e-4 normal spread. Random z requests transmission;
        * physical total internal reflection must override that request. */
@@ -1682,6 +1682,27 @@ TEST(materialx_attribute_kernel, exact_scalar_store_is_materialx_only)
   const float stock = average(replicated);
   svm_node_attr_store(NODE_ATTR_OUTPUT_FLOAT, stack, 0, replicated);
   EXPECT_EQ(std::bit_cast<uint>(stack[0]), std::bit_cast<uint>(stock));
+}
+
+/* Track B3: anisotropic transmission is MaterialX-only. The stock glass setups keep
+ * Cycles' isotropic transmission (alpha_y = alpha_x). */
+TEST(materialx_glass_kernel, stock_glass_setup_stays_isotropic)
+{
+  for (const bool beckmann : {false, true}) {
+    for (const bool materialx : {false, true}) {
+      MicrofacetBsdf bsdf{};
+      bsdf.alpha_x = 0.18f;
+      bsdf.alpha_y = 0.28f;
+      if (beckmann) {
+        bsdf_microfacet_beckmann_glass_setup(&bsdf, materialx);
+      }
+      else {
+        bsdf_microfacet_ggx_glass_setup(&bsdf, materialx);
+      }
+      EXPECT_EQ(bsdf.alpha_x, 0.18f);
+      EXPECT_EQ(bsdf.alpha_y, materialx ? 0.28f : 0.18f);
+    }
+  }
 }
 
 CCL_NAMESPACE_END
