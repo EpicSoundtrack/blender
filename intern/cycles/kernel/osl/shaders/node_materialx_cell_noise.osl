@@ -1,0 +1,23 @@
+/* SPDX-FileCopyrightText: 2026 Blender Authors
+ *
+ * SPDX-License-Identifier: Apache-2.0 */
+
+#include "stdcycles.h"
+
+/* MaterialX cellnoise2d/3d. MaterialX genosl evaluates mx_cell_noise_float/_vec3
+ * with OSL's own cellnoise(), which mx_noise.glsl ports (lookup3 of floor(p)). */
+shader node_materialx_cell_noise(string dimensions = "3D",
+                                 point Vector = point(0.0, 0.0, 0.0),
+                                 float W = 0.0,
+                                 output float Value = 0.0,
+                                 output color Color = 0.0)
+{
+  if (dimensions == "2D") {
+    Value = cellnoise(Vector[0], Vector[1]);
+    Color = cellnoise(Vector[0], Vector[1]);
+  }
+  else {
+    Value = cellnoise(Vector);
+    Color = cellnoise(Vector);
+  }
+}

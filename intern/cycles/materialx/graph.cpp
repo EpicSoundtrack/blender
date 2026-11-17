@@ -17023,10 +17023,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         VectorMathNode *floor = graph->create_node<VectorMathNode>();
         floor->name = node.name + "." + lane + ".floor";
         floor->set_math_type(NODE_VECTOR_MATH_FLOOR);
-        WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
+        MaterialXCellNoiseNode *noise = graph->create_node<MaterialXCellNoiseNode>();
         noise->name = node.name + "." + lane + ".noise";
         noise->set_dimensions(2);
-        noise->set_use_materialx_cellnoise(true);
         MapRangeNode *range = graph->create_node<MapRangeNode>();
         range->name = node.name + "." + lane;
         range->set_range_type(NODE_MAP_RANGE_LINEAR);
@@ -17564,11 +17563,10 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       VectorMathNode *floor = graph->create_node<VectorMathNode>();
       floor->name = node.name + ".floor";
       floor->set_math_type(NODE_VECTOR_MATH_FLOOR);
-      WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
+      MaterialXCellNoiseNode *noise = graph->create_node<MaterialXCellNoiseNode>();
       noise->name = node.name + ".cellnoise";
       noise->set_dimensions(2);
       /* NG_randomfloat_*: cellnoise2d = exact mx_cell_noise_float. */
-      noise->set_use_materialx_cellnoise(true);
       MapRangeNode *range = graph->create_node<MapRangeNode>();
       range->name = node.name;
       range->set_range_type(NODE_MAP_RANGE_LINEAR);
@@ -21393,10 +21391,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
                                make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
                                node.vector3_inputs.at(spec->input_name));
       }
-      WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
+      MaterialXCellNoiseNode *noise = graph->create_node<MaterialXCellNoiseNode>();
       noise->set_dimensions(spec->dimensions);
       /* Exact mx_cell_noise_float (MaterialX's lookup3 of the integer cell). */
-      noise->set_use_materialx_cellnoise(true);
       lowered_nodes.emplace(floor->name, floor);
       lowered = noise;
     }
@@ -21565,10 +21562,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         VectorMathNode *floor = graph->create_node<VectorMathNode>();
         floor->name = node.name + ".cell.floor";
         floor->set_math_type(NODE_VECTOR_MATH_FLOOR);
-        WhiteNoiseTextureNode *noise = graph->create_node<WhiteNoiseTextureNode>();
+        MaterialXCellNoiseNode *noise = graph->create_node<MaterialXCellNoiseNode>();
         noise->name = node.name + ".cell";
         noise->set_dimensions(is_3d ? 3 : 2);
-        noise->set_use_materialx_cellnoise(true);
         lowered_nodes.emplace(floor->name, floor);
         lowered_nodes.emplace(noise->name, noise);
       }

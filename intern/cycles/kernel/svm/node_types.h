@@ -736,9 +736,7 @@ struct SVMNodeTexWhiteNoise {
   SVMInputFloat w;
   SVMStackOffset value_offset;
   SVMStackOffset color_offset;
-  /* MaterialX lowering only: exact mx_cell_noise (kernel/svm/white_noise.h). */
-  uint8_t materialx_cellnoise;
-  uint8_t _pad[1];
+  uint8_t _pad[2];
 };
 static_assert(alignof(SVMNodeTexWhiteNoise) <= alignof(uint));
 static_assert(sizeof(SVMNodeTexWhiteNoise) % sizeof(uint) == 0);

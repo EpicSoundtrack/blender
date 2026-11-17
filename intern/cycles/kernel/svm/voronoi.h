@@ -6,7 +6,7 @@
 
 #include "kernel/svm/node_types.h"
 #include "kernel/svm/util.h"
-#include "kernel/svm/white_noise.h"
+#include "kernel/svm/materialx_cellnoise.h"
 #include "util/hash.h"
 
 CCL_NAMESPACE_BEGIN

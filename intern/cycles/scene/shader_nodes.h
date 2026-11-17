@@ -421,8 +421,6 @@ class WhiteNoiseTextureNode : public ShaderNode {
   NODE_SOCKET_API(int, dimensions)
   NODE_SOCKET_API(float3, vector)
   NODE_SOCKET_API(float, w)
-  /* MaterialX lowering only: exact mx_cell_noise_float / _vec3. */
-  NODE_SOCKET_API(bool, use_materialx_cellnoise)
 };
 
 class MappingNode : public ShaderNode {
@@ -1798,6 +1796,22 @@ class NormalMapNode : public ShaderNode {
   NODE_SOCKET_API(float3, color)
   NODE_SOCKET_API(int, convention)
   NODE_SOCKET_API(int, base)
+};
+
+/* MaterialX cellnoise2d/3d: exact mx_cell_noise_float / _vec3 (lookup3 of the
+ * integer cell), unlike Blender's White Noise, which hashes the float bits. */
+class MaterialXCellNoiseNode : public ShaderNode {
+ public:
+  SHADER_NODE_CLASS(MaterialXCellNoiseNode)
+
+  NODE_SOCKET_API(int, dimensions)
+  NODE_SOCKET_API(float3, vector)
+  NODE_SOCKET_API(float, w)
+
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_MATERIALX_CELL_NOISE;
+  }
 };
 
 /* MaterialX normalmap_float fed by heighttonormal: the mx_normalmap_float

@@ -13647,7 +13647,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_cellnoise_family)
   ASSERT_TRUE(materialx::lower(source, &lowered));
   int white_noise_count = 0;
   for (ShaderNode *node : lowered.nodes) {
-    if (const auto *white_noise = dynamic_cast<WhiteNoiseTextureNode *>(node)) {
+    if (const auto *white_noise = dynamic_cast<MaterialXCellNoiseNode *>(node)) {
       ++white_noise_count;
       if (node->name == "CellNoise2D") {
         EXPECT_EQ(white_noise->get_dimensions(), 2);

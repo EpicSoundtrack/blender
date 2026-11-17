@@ -1518,7 +1518,6 @@ NODE_DEFINE(WhiteNoiseTextureNode)
 
   SOCKET_IN_POINT(vector, "Vector", zero_float3());
   SOCKET_IN_FLOAT(w, "W", 0.0f);
-  SOCKET_BOOLEAN(use_materialx_cellnoise, "MaterialX Cell Noise", false, SocketType::INTERNAL);
 
   SOCKET_OUT_FLOAT(value, "Value");
   SOCKET_OUT_COLOR(color, "Color");
@@ -1538,14 +1537,12 @@ void WhiteNoiseTextureNode::compile(SVMCompiler &compiler)
                         .w = compiler.input_float("W"),
                         .value_offset = compiler.output("Value"),
                         .color_offset = compiler.output("Color"),
-                        .materialx_cellnoise = uint8_t(use_materialx_cellnoise),
                     });
 }
 
 void WhiteNoiseTextureNode::compile(OSLCompiler &compiler)
 {
   compiler.parameter(this, "dimensions");
-  compiler.parameter(this, "use_materialx_cellnoise");
   compiler.add(this, "node_white_noise_texture");
 }
 
@@ -7974,6 +7971,47 @@ void MaterialXHeightToNormalNode::compile(SVMCompiler &compiler)
 void MaterialXHeightToNormalNode::compile(OSLCompiler &compiler)
 {
   compiler.add(this, "node_materialx_heighttonormal");
+}
+
+/* MaterialX Cell Noise */
+
+NODE_DEFINE(MaterialXCellNoiseNode)
+{
+  NodeType *type = NodeType::add("materialx_cell_noise", create, NodeType::SHADER);
+
+  static NodeEnum dimensions_enum;
+  dimensions_enum.insert("2D", 2);
+  dimensions_enum.insert("3D", 3);
+  SOCKET_ENUM(dimensions, "Dimensions", dimensions_enum, 3);
+
+  SOCKET_IN_POINT(vector, "Vector", zero_float3());
+  SOCKET_IN_FLOAT(w, "W", 0.0f);
+
+  SOCKET_OUT_FLOAT(value, "Value");
+  SOCKET_OUT_COLOR(color, "Color");
+
+  return type;
+}
+
+MaterialXCellNoiseNode::MaterialXCellNoiseNode() : ShaderNode(get_node_type()) {}
+
+void MaterialXCellNoiseNode::compile(SVMCompiler &compiler)
+{
+  compiler.add_node(this,
+                    NODE_MATERIALX_CELL_NOISE,
+                    SVMNodeTexWhiteNoise{
+                        .dimensions = uint(dimensions),
+                        .vector = compiler.input_float3("Vector"),
+                        .w = compiler.input_float("W"),
+                        .value_offset = compiler.output("Value"),
+                        .color_offset = compiler.output("Color"),
+                    });
+}
+
+void MaterialXCellNoiseNode::compile(OSLCompiler &compiler)
+{
+  compiler.parameter(this, "dimensions");
+  compiler.add(this, "node_materialx_cell_noise");
 }
 
 /* MaterialX Normal Map */

@@ -58,6 +58,7 @@
 #include "kernel/svm/magic.h"
 #include "kernel/svm/map_range.h"
 #include "kernel/svm/materialx_blackbody.h"
+#include "kernel/svm/materialx_cellnoise.h"
 #include "kernel/svm/materialx_heighttonormal.h"
 #include "kernel/svm/materialx_normal_map.h"
 #include "kernel/svm/materialx_vector_rotate.h"
@@ -531,6 +532,9 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
       break;
       SVM_CASE(NODE_MATERIALX_NORMAL_MAP)
       svm_node_materialx_normal_map(sd, stack, svm_node_get<SVMNodeNormalMap>(kg, &offset));
+      break;
+      SVM_CASE(NODE_MATERIALX_CELL_NOISE)
+      svm_node_materialx_cell_noise(stack, svm_node_get<SVMNodeTexWhiteNoise>(kg, &offset));
       break;
       SVM_CASE(NODE_RADIAL_TILING)
       svm_node_radial_tiling<node_feature_mask>(stack,

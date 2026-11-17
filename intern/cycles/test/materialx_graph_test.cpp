@@ -21,6 +21,7 @@
 #include "kernel/svm/voronoi.h"
 #include "kernel/svm/white_noise.h"
 #include "kernel/svm/materialx_blackbody.h"
+#include "kernel/svm/materialx_cellnoise.h"
 #include "kernel/svm/materialx_heighttonormal.h"
 #include "kernel/svm/map_range.h"
 #include "kernel/svm/math.h"
@@ -16453,9 +16454,9 @@ TEST(materialx_graph, lowers_cellnoise_family_to_native_white_noise)
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{texcoord, position, cellnoise}}, &graph)) << test.id;
 
-    WhiteNoiseTextureNode *white_noise = nullptr;
+    MaterialXCellNoiseNode *white_noise = nullptr;
     for (ShaderNode *node : graph.nodes) {
-      white_noise = node->name == "CellNoise" ? dynamic_cast<WhiteNoiseTextureNode *>(node) :
+      white_noise = node->name == "CellNoise" ? dynamic_cast<MaterialXCellNoiseNode *>(node) :
                                                 white_noise;
     }
     ASSERT_NE(white_noise, nullptr) << test.id;
@@ -16496,10 +16497,10 @@ TEST(materialx_graph, lowers_cellnoise_family_with_literal_coordinates)
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{cellnoise}}, &graph)) << test.id;
 
-    WhiteNoiseTextureNode *white_noise = nullptr;
+    MaterialXCellNoiseNode *white_noise = nullptr;
     VectorMathNode *floor = nullptr;
     for (ShaderNode *node : graph.nodes) {
-      white_noise = node->name == "CellNoise" ? dynamic_cast<WhiteNoiseTextureNode *>(node) :
+      white_noise = node->name == "CellNoise" ? dynamic_cast<MaterialXCellNoiseNode *>(node) :
                                                 white_noise;
       floor = node->name == "CellNoise.floor" ? dynamic_cast<VectorMathNode *>(node) : floor;
     }
@@ -16849,7 +16850,7 @@ TEST(materialx_graph, lowers_unifiednoise_literal_type_branches)
         EXPECT_FLOAT_EQ(noise_node->get_roughness(), 0.375f) << test.id << ":" << test.type;
       }
     }
-    else if (auto *white_noise = dynamic_cast<WhiteNoiseTextureNode *>(sample)) {
+    else if (auto *white_noise = dynamic_cast<MaterialXCellNoiseNode *>(sample)) {
       EXPECT_EQ(white_noise->get_dimensions(), test.noise_dimensions) << test.id << ":" << test.type;
     }
     else {
@@ -17032,7 +17033,7 @@ TEST(materialx_graph, lowers_procedural_randomfloat_from_stdlib_ng_contract)
   }
 
   auto *float_range = dynamic_cast<MapRangeNode *>(lowered["RandomFloat"]);
-  auto *float_noise = dynamic_cast<WhiteNoiseTextureNode *>(lowered["RandomFloat.cellnoise"]);
+  auto *float_noise = dynamic_cast<MaterialXCellNoiseNode *>(lowered["RandomFloat.cellnoise"]);
   auto *float_floor = dynamic_cast<VectorMathNode *>(lowered["RandomFloat.floor"]);
   auto *float_coordinate = dynamic_cast<CombineXYZNode *>(lowered["RandomFloat.coordinate"]);
   auto *float_scale = dynamic_cast<MathNode *>(lowered["RandomFloat.scale_input"]);
@@ -17056,7 +17057,7 @@ TEST(materialx_graph, lowers_procedural_randomfloat_from_stdlib_ng_contract)
   EXPECT_EQ(float_range->input("Value")->link, float_noise->output("Value"));
 
   auto *integer_range = dynamic_cast<MapRangeNode *>(lowered["RandomInteger"]);
-  auto *integer_noise = dynamic_cast<WhiteNoiseTextureNode *>(lowered["RandomInteger.cellnoise"]);
+  auto *integer_noise = dynamic_cast<MaterialXCellNoiseNode *>(lowered["RandomInteger.cellnoise"]);
   auto *integer_coordinate = dynamic_cast<CombineXYZNode *>(lowered["RandomInteger.coordinate"]);
   ASSERT_NE(integer_range, nullptr);
   ASSERT_NE(integer_noise, nullptr);
@@ -17298,14 +17299,14 @@ TEST(materialx_graph, lowers_procedural3d_randomcolor_variants)
 
     MathNode *scale_input = nullptr;
     MathNode *hue_seed = nullptr;
-    WhiteNoiseTextureNode *hue_noise = nullptr;
+    MaterialXCellNoiseNode *hue_noise = nullptr;
     MapRangeNode *hue_range = nullptr;
     CombineColorNode *rgb = nullptr;
     for (ShaderNode *node : graph.nodes) {
       scale_input = node->name == "RandomColor.input.scale" ? dynamic_cast<MathNode *>(node) :
                                                               scale_input;
       hue_seed = node->name == "RandomColor.hue.seed" ? dynamic_cast<MathNode *>(node) : hue_seed;
-      hue_noise = node->name == "RandomColor.hue.noise" ? dynamic_cast<WhiteNoiseTextureNode *>(node) :
+      hue_noise = node->name == "RandomColor.hue.noise" ? dynamic_cast<MaterialXCellNoiseNode *>(node) :
                                                           hue_noise;
       hue_range = node->name == "RandomColor.hue" ? dynamic_cast<MapRangeNode *>(node) : hue_range;
       rgb = node->name == "RandomColor" ? dynamic_cast<CombineColorNode *>(node) : rgb;
@@ -26747,9 +26748,8 @@ float mtlx_svm_white_noise(const float3 p, const int dimensions, float3 *color)
       .w = SVMInputFloat{__float_as_uint(0.0f)},
       .value_offset = 3,
       .color_offset = 4,
-      .materialx_cellnoise = 1,
   };
-  svm_node_tex_white_noise(stack, node);
+  svm_node_materialx_cell_noise(stack, node);
   *color = stack_load_float3(stack, 4);
   return stack_load_float(stack, 3);
 }
@@ -26921,10 +26921,9 @@ std::unordered_map<string, ShaderNode *> materialx_nodes_by_name(ShaderGraph &gr
 /* Evaluates a lowered floor -> White Noise (cell) -> Map Range chain for a cell
  * coordinate, using the lowered nodes' own sockets. */
 float materialx_eval_cell_range(const float2 coordinate,
-                                WhiteNoiseTextureNode *noise,
+                                MaterialXCellNoiseNode *noise,
                                 MapRangeNode *range)
 {
-  EXPECT_TRUE(noise->get_use_materialx_cellnoise());
   EXPECT_EQ(noise->get_dimensions(), 2);
   float3 color;
   const float cell = mtlx_svm_white_noise(
@@ -26971,7 +26970,7 @@ TEST(materialx_graph, randomfloat_lowering_matches_cpu_reference)
     ASSERT_TRUE(materialx::lower({{random}}, &graph, &error)) << error;
     auto nodes = materialx_nodes_by_name(graph);
     auto *coordinate = dynamic_cast<CombineXYZNode *>(nodes["Random.coordinate"]);
-    auto *noise = dynamic_cast<WhiteNoiseTextureNode *>(nodes["Random.cellnoise"]);
+    auto *noise = dynamic_cast<MaterialXCellNoiseNode *>(nodes["Random.cellnoise"]);
     auto *range = dynamic_cast<MapRangeNode *>(nodes["Random"]);
     ASSERT_NE(coordinate, nullptr);
     ASSERT_NE(noise, nullptr);
@@ -27023,7 +27022,7 @@ TEST(materialx_graph, randomcolor_lowering_matches_cpu_reference)
     int lane_index = 0;
     for (const char *lane : {"hue", "saturation", "brightness"}) {
       auto *seed = dynamic_cast<MathNode *>(nodes[string("Random.") + lane + ".seed"]);
-      auto *noise = dynamic_cast<WhiteNoiseTextureNode *>(nodes[string("Random.") + lane + ".noise"]);
+      auto *noise = dynamic_cast<MaterialXCellNoiseNode *>(nodes[string("Random.") + lane + ".noise"]);
       auto *range = dynamic_cast<MapRangeNode *>(nodes[string("Random.") + lane]);
       ASSERT_NE(seed, nullptr);
       ASSERT_NE(noise, nullptr);
@@ -27088,9 +27087,8 @@ TEST(materialx_graph, unifiednoise_cell_and_worley_lowering_matches_cpu_referenc
     float value;
     float3 color;
     if (golden.type == 1) {
-      auto *cell = dynamic_cast<WhiteNoiseTextureNode *>(nodes["Unified.cell"]);
+      auto *cell = dynamic_cast<MaterialXCellNoiseNode *>(nodes["Unified.cell"]);
       ASSERT_NE(cell, nullptr);
-      EXPECT_TRUE(cell->get_use_materialx_cellnoise());
       EXPECT_EQ(cell->get_dimensions(), dim);
       value = mtlx_svm_white_noise(
           make_float3(floorf(p.x), floorf(p.y), golden.is_3d ? floorf(p.z) : floorf(p.z)), dim, &color);
