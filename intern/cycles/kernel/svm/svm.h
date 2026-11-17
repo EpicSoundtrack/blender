@@ -536,6 +536,9 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
       SVM_CASE(NODE_MATERIALX_CELL_NOISE)
       svm_node_materialx_cell_noise(stack, svm_node_get<SVMNodeTexWhiteNoise>(kg, &offset));
       break;
+      SVM_CASE(NODE_MATERIALX_WORLEY)
+      svm_node_materialx_worley(stack, svm_node_get<SVMNodeMaterialXWorley>(kg, &offset));
+      break;
       SVM_CASE(NODE_RADIAL_TILING)
       svm_node_radial_tiling<node_feature_mask>(stack,
                                                 svm_node_get<SVMNodeRadialTiling>(kg, &offset));

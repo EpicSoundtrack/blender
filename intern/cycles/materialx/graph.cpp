@@ -21428,13 +21428,12 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         carrier->set_z(literal.z);
         lowered_nodes.emplace(carrier->name, carrier);
       }
-      VoronoiTextureNode *f1 = graph->create_node<VoronoiTextureNode>();
+      MaterialXWorleyNode *f1 = graph->create_node<MaterialXWorleyNode>();
       f1->set_dimensions(spec->dimensions);
-      f1->set_metric(NODE_VORONOI_EUCLIDEAN);
-      f1->set_feature(NODE_VORONOI_F1);
+      f1->set_component(0);
       f1->set_randomness(jitter);
       f1->set_scale(1.0f);
-      f1->set_materialx_worley(worley_mode);
+      f1->set_mode(worley_mode);
       if (coordinate_literal) {
         f1->set_vector(spec->input_type == Type::Vector2 ?
                            make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
@@ -21442,14 +21441,13 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       }
       if (spec->output_type == Type::Vector2 || spec->output_type == Type::Vector3) {
         f1->name = node.name + ".f1";
-        VoronoiTextureNode *f2 = graph->create_node<VoronoiTextureNode>();
+        MaterialXWorleyNode *f2 = graph->create_node<MaterialXWorleyNode>();
         f2->name = node.name + ".f2";
         f2->set_dimensions(spec->dimensions);
-        f2->set_metric(NODE_VORONOI_EUCLIDEAN);
-        f2->set_feature(NODE_VORONOI_F2);
+        f2->set_component(1);
         f2->set_randomness(jitter);
         f2->set_scale(1.0f);
-        f2->set_materialx_worley(worley_mode);
+        f2->set_mode(worley_mode);
         if (coordinate_literal) {
           f2->set_vector(spec->input_type == Type::Vector2 ?
                              make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
@@ -21459,14 +21457,13 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         lowered_nodes.emplace(f1->name, f1);
         lowered_nodes.emplace(f2->name, f2);
         if (spec->output_type == Type::Vector3) {
-          VoronoiTextureNode *f3 = graph->create_node<VoronoiTextureNode>();
+          MaterialXWorleyNode *f3 = graph->create_node<MaterialXWorleyNode>();
           f3->name = node.name + ".f3";
           f3->set_dimensions(spec->dimensions);
-          f3->set_metric(NODE_VORONOI_EUCLIDEAN);
-          f3->set_feature(NODE_VORONOI_F3);
+          f3->set_component(2);
           f3->set_randomness(jitter);
           f3->set_scale(1.0f);
-          f3->set_materialx_worley(worley_mode);
+          f3->set_mode(worley_mode);
           if (coordinate_literal) {
             f3->set_vector(spec->input_type == Type::Vector2 ?
                                make_float3(node.vector2_inputs.at(spec->input_name), 0.0f) :
@@ -21569,13 +21566,12 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         lowered_nodes.emplace(noise->name, noise);
       }
       else if (node.int_inputs.at("type") == 2) {
-        VoronoiTextureNode *noise = graph->create_node<VoronoiTextureNode>();
+        MaterialXWorleyNode *noise = graph->create_node<MaterialXWorleyNode>();
         noise->name = node.name + ".worley";
         noise->set_dimensions(is_3d ? 3 : 2);
-        noise->set_metric(NODE_VORONOI_EUCLIDEAN);
-        noise->set_feature(NODE_VORONOI_F1);
+        noise->set_component(0);
         /* N_worleynoise2d/3d float: exact mx_worley_noise_float, style 0/1. */
-        noise->set_materialx_worley(1 | (node.int_inputs.at("style") == 1 ? 2 : 0));
+        noise->set_mode(1 | (node.int_inputs.at("style") == 1 ? 2 : 0));
         if (const auto value = node.inputs.find("jitter"); value != node.inputs.end()) {
           noise->set_randomness(value->second);
         }

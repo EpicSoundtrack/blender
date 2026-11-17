@@ -852,8 +852,8 @@ TEST(materialx_graph, stock_bsdf_hidden_materialx_sockets_default_to_stock)
 
 /* Track B9: derivative propagation through Math/Noise is MaterialX-only. Stock nodes
  * report NODE_NONE (zero derivatives, as upstream); nodes created by lower() opt in.
- * The Voronoi F3 feature is appended so Blender's integer feature sync keeps
- * F1/F2/Smooth F1/Distance to Edge/N-Sphere Radius = 0..4. */
+ * The stock Voronoi feature values stay F1/F2/Smooth F1/Distance to Edge/N-Sphere
+ * Radius = 0..4 (Blender syncs the feature as an integer). */
 TEST(materialx_graph, math_and_noise_derivatives_are_materialx_only)
 {
   ShaderGraph stock_graph;
@@ -16556,10 +16556,10 @@ TEST(materialx_graph, lowers_worleynoise_distance_subset_to_native_voronoi)
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{texcoord, position, worley}}, &graph)) << test.id;
 
-    std::vector<VoronoiTextureNode *> voronoi_nodes;
+    std::vector<MaterialXWorleyNode *> voronoi_nodes;
     ShaderNode *lowered = nullptr;
     for (ShaderNode *node : graph.nodes) {
-      if (auto *voronoi = dynamic_cast<VoronoiTextureNode *>(node)) {
+      if (auto *voronoi = dynamic_cast<MaterialXWorleyNode *>(node)) {
         voronoi_nodes.push_back(voronoi);
       }
       lowered = node->name == "Worley" ? node : lowered;
@@ -16568,9 +16568,8 @@ TEST(materialx_graph, lowers_worleynoise_distance_subset_to_native_voronoi)
     ASSERT_EQ(voronoi_nodes.size(), test.output_type == materialx::Type::Float ? 1 :
                                      test.output_type == materialx::Type::Vector2 ? 2 : 3)
         << test.id;
-    for (VoronoiTextureNode *voronoi : voronoi_nodes) {
+    for (MaterialXWorleyNode *voronoi : voronoi_nodes) {
       EXPECT_EQ(voronoi->get_dimensions(), test.dimensions) << test.id;
-      EXPECT_EQ(voronoi->get_metric(), NODE_VORONOI_EUCLIDEAN) << test.id;
       EXPECT_FLOAT_EQ(voronoi->get_randomness(), 0.625f) << test.id;
       EXPECT_FLOAT_EQ(voronoi->get_scale(), 1.0f) << test.id;
       ASSERT_NE(voronoi->input("Vector")->link, nullptr) << test.id;
@@ -16620,18 +16619,17 @@ TEST(materialx_graph, lowers_worleynoise_distance_subset_with_literal_coordinate
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{worley}}, &graph)) << test.id;
 
-    std::vector<VoronoiTextureNode *> voronoi_nodes;
+    std::vector<MaterialXWorleyNode *> voronoi_nodes;
     for (ShaderNode *node : graph.nodes) {
-      if (auto *voronoi = dynamic_cast<VoronoiTextureNode *>(node)) {
+      if (auto *voronoi = dynamic_cast<MaterialXWorleyNode *>(node)) {
         voronoi_nodes.push_back(voronoi);
       }
     }
     ASSERT_EQ(voronoi_nodes.size(), test.output_type == materialx::Type::Float ? 1 :
                                      test.output_type == materialx::Type::Vector2 ? 2 : 3)
         << test.id;
-    for (VoronoiTextureNode *voronoi : voronoi_nodes) {
+    for (MaterialXWorleyNode *voronoi : voronoi_nodes) {
       EXPECT_EQ(voronoi->get_dimensions(), test.dimensions) << test.id;
-      EXPECT_EQ(voronoi->get_metric(), NODE_VORONOI_EUCLIDEAN) << test.id;
       EXPECT_FLOAT_EQ(voronoi->get_randomness(), 0.625f) << test.id;
       /* b7x L0/L1: an unlinked Vector is LINK_TEXTURE_GENERATED, so
        * ShaderGraph::default_inputs() would replace a set_vector() literal by
@@ -16854,7 +16852,7 @@ TEST(materialx_graph, lowers_unifiednoise_literal_type_branches)
       EXPECT_EQ(white_noise->get_dimensions(), test.noise_dimensions) << test.id << ":" << test.type;
     }
     else {
-      auto *voronoi = dynamic_cast<VoronoiTextureNode *>(sample);
+      auto *voronoi = dynamic_cast<MaterialXWorleyNode *>(sample);
       ASSERT_NE(voronoi, nullptr) << test.id << ":" << test.type;
       EXPECT_EQ(voronoi->get_dimensions(), test.noise_dimensions) << test.id << ":" << test.type;
       EXPECT_FLOAT_EQ(voronoi->get_randomness(), 0.625f) << test.id << ":" << test.type;
@@ -26758,34 +26756,23 @@ float mtlx_svm_worley(const float3 p,
                       const int dimensions,
                       const float jitter,
                       const int mode,
-                      const NodeVoronoiFeature feature,
+                      const int component,
                       float3 *color)
 {
   float stack[SVM_STACK_SIZE] = {};
   stack_store_float3(stack, 0, p);
   const auto literal = [](float value) { return SVMInputFloat{__float_as_uint(value)}; };
-  const SVMNodeTexVoronoi node{
+  const SVMNodeMaterialXWorley node{
       .dimensions = uint(dimensions),
-      .feature = feature,
-      .metric = NODE_VORONOI_EUCLIDEAN,
-      .w = literal(0.0f),
+      .component = uint(component),
+      .mode = uint(mode),
       .scale = literal(1.0f),
-      .detail = literal(0.0f),
-      .roughness = literal(0.5f),
-      .lacunarity = literal(2.0f),
-      .smoothness = literal(1.0f),
-      .exponent = literal(1.0f),
-      .randomness = literal(jitter),
-      .normalize = 0,
-      .coord = 0,
+      .jitter = literal(jitter),
+      .coord = SVMInputFloat3{SVM_INPUT_STACK_OFFSET_MASK | 0u},
       .distance_offset = 3,
       .color_offset = 4,
-      .position_offset = SVM_STACK_INVALID,
-      .w_out_offset = SVM_STACK_INVALID,
-      .radius_offset = SVM_STACK_INVALID,
-      .materialx_worley = uint8_t(mode),
   };
-  svm_node_tex_voronoi<KERNEL_FEATURE_NODE_MASK_SURFACE>(stack, node);
+  svm_node_materialx_worley(stack, node);
   *color = stack_load_float3(stack, 4);
   return stack_load_float(stack, 3);
 }
@@ -26885,11 +26872,10 @@ TEST(materialx_graph, mtlx_worley_kernel_matches_cpu_reference)
       if (golden.metric == 0) {
         const int solid = golden.style == 1 ? 2 : 0;
         float3 color;
-        EXPECT_EQ(mtlx_svm_worley(golden.p, dim, golden.jitter, 1 | solid, NODE_VORONOI_F1, &color),
+        EXPECT_EQ(mtlx_svm_worley(golden.p, dim, golden.jitter, 1 | solid, 0, &color),
                   scalar.x);
-        const NodeVoronoiFeature features[] = {NODE_VORONOI_F1, NODE_VORONOI_F2, NODE_VORONOI_F3};
         for (int k = 0; k < 3; k++) {
-          EXPECT_EQ(mtlx_svm_worley(golden.p, dim, golden.jitter, 1 | solid | 4, features[k], &color),
+          EXPECT_EQ(mtlx_svm_worley(golden.p, dim, golden.jitter, 1 | solid | 4, k, &color),
                     k == 0 ? vector.x : (k == 1 ? vector.y : vector.z));
         }
       }
@@ -27094,16 +27080,16 @@ TEST(materialx_graph, unifiednoise_cell_and_worley_lowering_matches_cpu_referenc
           make_float3(floorf(p.x), floorf(p.y), golden.is_3d ? floorf(p.z) : floorf(p.z)), dim, &color);
     }
     else {
-      auto *worley = dynamic_cast<VoronoiTextureNode *>(nodes["Unified.worley"]);
+      auto *worley = dynamic_cast<MaterialXWorleyNode *>(nodes["Unified.worley"]);
       ASSERT_NE(worley, nullptr);
-      EXPECT_EQ(worley->get_materialx_worley(), 1 | (golden.style == 1 ? 2 : 0));
+      EXPECT_EQ(worley->get_mode(), 1 | (golden.style == 1 ? 2 : 0));
       EXPECT_EQ(worley->get_dimensions(), dim);
       EXPECT_FLOAT_EQ(worley->get_scale(), 1.0f);
       value = mtlx_svm_worley(p,
                               dim,
                               worley->get_randomness(),
-                              worley->get_materialx_worley(),
-                              NodeVoronoiFeature(worley->get_feature()),
+                              worley->get_mode(),
+                              worley->get_component(),
                               &color);
     }
     float stack[SVM_STACK_SIZE] = {};
@@ -27161,9 +27147,9 @@ TEST(materialx_graph, worleynoise_lowers_both_styles_to_exact_materialx_worley)
                                 (test.output_type == materialx::Type::Float ? 0 : 4);
       int voronoi_count = 0;
       for (ShaderNode *node : graph.nodes) {
-        if (auto *voronoi = dynamic_cast<VoronoiTextureNode *>(node)) {
+        if (auto *voronoi = dynamic_cast<MaterialXWorleyNode *>(node)) {
           ++voronoi_count;
-          EXPECT_EQ(voronoi->get_materialx_worley(), expected_mode);
+          EXPECT_EQ(voronoi->get_mode(), expected_mode);
           EXPECT_FLOAT_EQ(voronoi->get_randomness(), 0.75f);
         }
       }

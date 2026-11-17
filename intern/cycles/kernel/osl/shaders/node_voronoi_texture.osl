@@ -9,84 +9,6 @@
 
 #define vector3 point
 
-/* MaterialX mx_worley_noise (mx_noise.glsl, which ports MaterialX genosl's
- * cellnoise-based Worley): returns F1..F3, or the solid cell value. */
-color mtlx_worley_noise(vector3 p, int dims, float jitter, int style, int metric, int vector_output)
-{
-  vector3 cell = floor(p);
-  vector3 localpos = p - cell;
-  if (dims == 2) {
-    localpos[2] = 0.0;
-  }
-  color sqdist = color(1e6, 1e6, 1e6);
-  vector3 minpos = vector3(0.0, 0.0, 0.0);
-  int zmin = dims == 2 ? 0 : -1;
-  int zmax = dims == 2 ? 0 : 1;
-  for (int x = -1; x <= 1; x++) {
-    for (int y = -1; y <= 1; y++) {
-      for (int z = zmin; z <= zmax; z++) {
-        vector3 off;
-        if (dims == 2) {
-          off = cellnoise(cell[0] + x, cell[1] + y);
-          off[2] = 0.5;
-        }
-        else {
-          off = cellnoise(vector3(cell[0] + x, cell[1] + y, cell[2] + z));
-        }
-        off = (off - 0.5) * jitter + 0.5;
-        vector3 diff = vector3(x, y, z) + off - localpos;
-        if (dims == 2) {
-          diff[2] = 0.0;
-        }
-        float dist;
-        if (metric == 2) {
-          dist = abs(diff[0]) + abs(diff[1]) + abs(diff[2]);
-        }
-        else if (metric == 3) {
-          dist = max(max(abs(diff[0]), abs(diff[1])), abs(diff[2]));
-        }
-        else {
-          dist = dot(diff, diff);
-        }
-        if (dist < sqdist[0]) {
-          sqdist[2] = sqdist[1];
-          sqdist[1] = sqdist[0];
-          sqdist[0] = dist;
-          minpos = diff;
-        }
-        else if (dist < sqdist[1]) {
-          sqdist[2] = sqdist[1];
-          sqdist[1] = dist;
-        }
-        else if (dist < sqdist[2]) {
-          sqdist[2] = dist;
-        }
-      }
-    }
-  }
-  if (style == 1) {
-    vector3 q = minpos + p;
-    if (dims == 2) {
-      if (vector_output) {
-        color c2 = cellnoise(q[0], q[1]);
-        return c2;
-      }
-      float f2 = cellnoise(q[0], q[1]);
-      return color(f2, 0.0, 0.0);
-    }
-    if (vector_output) {
-      color c3 = cellnoise(q);
-      return c3;
-    }
-    float f3 = cellnoise(q);
-    return color(f3, 0.0, 0.0);
-  }
-  if (metric == 0) {
-    sqdist = color(sqrt(sqdist[0]), sqrt(sqdist[1]), sqrt(sqdist[2]));
-  }
-  return sqdist;
-}
-
 shader node_voronoi_texture(
     int use_mapping = 0,
     matrix mapping = matrix(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0),
@@ -94,7 +16,6 @@ shader node_voronoi_texture(
     string feature = "f1",
     string metric = "euclidean",
     int use_normalize = 0,
-    int materialx_worley = 0,
     vector3 Vector = P,
     float WIn = 0.0,
     float Scale = 5.0,
@@ -131,21 +52,6 @@ shader node_voronoi_texture(
 
   float w = WIn * Scale;
   coord *= Scale;
-
-  if (materialx_worley != 0 && (dimensions == "2D" || dimensions == "3D")) {
-    vector3 p = coord;
-    if (dimensions == "2D") {
-      p[2] = 0.0;
-    }
-    Color = mtlx_worley_noise(p,
-                              dimensions == "2D" ? 2 : 3,
-                              Randomness,
-                              (materialx_worley & 2) ? 1 : 0,
-                              (materialx_worley >> 3) & 3,
-                              (materialx_worley & 4) ? 1 : 0);
-    Distance = feature == "f2" ? Color[1] : (feature == "f3" ? Color[2] : Color[0]);
-    return;
-  }
 
   if (feature == "distance_to_edge") {
     params.max_distance = 0.5 + 0.5 * params.randomness;
@@ -186,7 +92,7 @@ shader node_voronoi_texture(
     VoronoiOutput Output;
     if (dimensions == "1D") {
       params.max_distance = (0.5 + 0.5 * params.randomness) *
-                            ((params.feature == "f2" || params.feature == "f3") ? 2.0 : 1.0);
+                            ((params.feature == "f2") ? 2.0 : 1.0);
       Output = fractal_voronoi_x_fx(params, w);
       Distance = Output.Distance;
       Color = Output.Color;
@@ -197,7 +103,7 @@ shader node_voronoi_texture(
                                              vector2(0.5 + 0.5 * params.randomness,
                                                      0.5 + 0.5 * params.randomness),
                                              params) *
-                            ((params.feature == "f2" || params.feature == "f3") ? 2.0 : 1.0);
+                            ((params.feature == "f2") ? 2.0 : 1.0);
       Output = fractal_voronoi_x_fx(params, vector2(coord.x, coord.y));
       Distance = Output.Distance;
       Color = Output.Color;
@@ -209,7 +115,7 @@ shader node_voronoi_texture(
                                                      0.5 + 0.5 * params.randomness,
                                                      0.5 + 0.5 * params.randomness),
                                              params) *
-                            ((params.feature == "f2" || params.feature == "f3") ? 2.0 : 1.0);
+                            ((params.feature == "f2") ? 2.0 : 1.0);
       Output = fractal_voronoi_x_fx(params, coord);
       Distance = Output.Distance;
       Color = Output.Color;
@@ -222,7 +128,7 @@ shader node_voronoi_texture(
                                                      0.5 + 0.5 * params.randomness,
                                                      0.5 + 0.5 * params.randomness),
                                              params) *
-                            ((params.feature == "f2" || params.feature == "f3") ? 2.0 : 1.0);
+                            ((params.feature == "f2") ? 2.0 : 1.0);
       Output = fractal_voronoi_x_fx(params, vector4(coord.x, coord.y, coord.z, w));
       Distance = Output.Distance;
       Color = Output.Color;

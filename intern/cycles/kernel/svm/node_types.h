@@ -111,6 +111,21 @@ struct SVMNodeMaterialXHeightToNormal {
 static_assert(alignof(SVMNodeMaterialXHeightToNormal) <= alignof(uint));
 static_assert(sizeof(SVMNodeMaterialXHeightToNormal) % sizeof(uint) == 0);
 
+/* NODE_MATERIALX_WORLEY */
+struct SVMNodeMaterialXWorley {
+  uint dimensions;
+  uint component;
+  uint mode;
+  SVMInputFloat scale;
+  SVMInputFloat jitter;
+  SVMInputFloat3 coord;
+  SVMStackOffset distance_offset;
+  SVMStackOffset color_offset;
+  uint8_t _pad[2];
+};
+static_assert(alignof(SVMNodeMaterialXWorley) <= alignof(uint));
+static_assert(sizeof(SVMNodeMaterialXWorley) % sizeof(uint) == 0);
+
 /* NODE_VALUE_F / NODE_VALUE_F_DERIVATIVE */
 struct SVMNodeValueF {
   float value;
@@ -637,10 +652,7 @@ struct SVMNodeTexVoronoi {
   SVMStackOffset position_offset;
   SVMStackOffset w_out_offset;
   SVMStackOffset radius_offset;
-  /* MaterialX lowering only (0 = off): bit 0 enable exact mx_worley_noise,
-   * bit 1 style 1 (solid), bit 2 vector output (solid hashes mx_cell_noise_vec3),
-   * bits 3-4 metric. Distance is component F1/F2/F3 of the result. */
-  uint8_t materialx_worley;
+  uint8_t _pad[1];
 };
 static_assert(alignof(SVMNodeTexVoronoi) <= alignof(uint));
 static_assert(sizeof(SVMNodeTexVoronoi) % sizeof(uint) == 0);

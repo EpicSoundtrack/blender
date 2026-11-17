@@ -1,0 +1,110 @@
+/* SPDX-FileCopyrightText: 2026 Blender Authors
+ *
+ * SPDX-License-Identifier: Apache-2.0 */
+
+#include "stdcycles.h"
+
+#define vector3 point
+
+/* MaterialX mx_worley_noise (mx_noise.glsl, which ports MaterialX genosl's
+ * cellnoise-based Worley): returns F1..F3, or the solid cell value. */
+color mtlx_worley_noise(vector3 p, int dims, float jitter, int style, int metric, int vector_output)
+{
+  vector3 cell = floor(p);
+  vector3 localpos = p - cell;
+  if (dims == 2) {
+    localpos[2] = 0.0;
+  }
+  color sqdist = color(1e6, 1e6, 1e6);
+  vector3 minpos = vector3(0.0, 0.0, 0.0);
+  int zmin = dims == 2 ? 0 : -1;
+  int zmax = dims == 2 ? 0 : 1;
+  for (int x = -1; x <= 1; x++) {
+    for (int y = -1; y <= 1; y++) {
+      for (int z = zmin; z <= zmax; z++) {
+        vector3 off;
+        if (dims == 2) {
+          off = cellnoise(cell[0] + x, cell[1] + y);
+          off[2] = 0.5;
+        }
+        else {
+          off = cellnoise(vector3(cell[0] + x, cell[1] + y, cell[2] + z));
+        }
+        off = (off - 0.5) * jitter + 0.5;
+        vector3 diff = vector3(x, y, z) + off - localpos;
+        if (dims == 2) {
+          diff[2] = 0.0;
+        }
+        float dist;
+        if (metric == 2) {
+          dist = abs(diff[0]) + abs(diff[1]) + abs(diff[2]);
+        }
+        else if (metric == 3) {
+          dist = max(max(abs(diff[0]), abs(diff[1])), abs(diff[2]));
+        }
+        else {
+          dist = dot(diff, diff);
+        }
+        if (dist < sqdist[0]) {
+          sqdist[2] = sqdist[1];
+          sqdist[1] = sqdist[0];
+          sqdist[0] = dist;
+          minpos = diff;
+        }
+        else if (dist < sqdist[1]) {
+          sqdist[2] = sqdist[1];
+          sqdist[1] = dist;
+        }
+        else if (dist < sqdist[2]) {
+          sqdist[2] = dist;
+        }
+      }
+    }
+  }
+  if (style == 1) {
+    vector3 q = minpos + p;
+    if (dims == 2) {
+      if (vector_output) {
+        color c2 = cellnoise(q[0], q[1]);
+        return c2;
+      }
+      float f2 = cellnoise(q[0], q[1]);
+      return color(f2, 0.0, 0.0);
+    }
+    if (vector_output) {
+      color c3 = cellnoise(q);
+      return c3;
+    }
+    float f3 = cellnoise(q);
+    return color(f3, 0.0, 0.0);
+  }
+  if (metric == 0) {
+    sqdist = color(sqrt(sqdist[0]), sqrt(sqdist[1]), sqrt(sqdist[2]));
+  }
+  return sqdist;
+}
+
+/* MaterialX worleynoise2d/3d and unifiednoise type 2 (exact mx_worley_noise).
+ * mode bit 1: style 1 (solid); bit 2: vector output; bits 3-4: metric.
+ * Distance is component F1/F2/F3 of the result, Color the whole result. */
+shader node_materialx_worley(string dimensions = "3D",
+                             int component = 0,
+                             int mode = 0,
+                             vector3 Vector = P,
+                             float Scale = 1.0,
+                             float Randomness = 1.0,
+                             output float Distance = 0.0,
+                             output color Color = 0.0)
+{
+  vector3 p = Vector * Scale;
+  if (dimensions == "2D") {
+    p[2] = 0.0;
+  }
+  Color = mtlx_worley_noise(p,
+                            dimensions == "2D" ? 2 : 3,
+                            Randomness,
+                            (mode & 2) ? 1 : 0,
+                            (mode >> 3) & 3,
+                            (mode & 4) ? 1 : 0);
+  Distance = component == 1 ? Color[1] : (component == 2 ? Color[2] : Color[0]);
+}

@@ -1343,14 +1343,12 @@ NODE_DEFINE(VoronoiTextureNode)
   static NodeEnum feature_enum;
   feature_enum.insert("f1", NODE_VORONOI_F1);
   feature_enum.insert("f2", NODE_VORONOI_F2);
-  feature_enum.insert("f3", NODE_VORONOI_F3);
   feature_enum.insert("smooth_f1", NODE_VORONOI_SMOOTH_F1);
   feature_enum.insert("distance_to_edge", NODE_VORONOI_DISTANCE_TO_EDGE);
   feature_enum.insert("n_sphere_radius", NODE_VORONOI_N_SPHERE_RADIUS);
   SOCKET_ENUM(feature, "Feature", feature_enum, NODE_VORONOI_F1);
 
   SOCKET_BOOLEAN(use_normalize, "Normalize", false);
-  SOCKET_INT(materialx_worley, "MaterialX Worley", 0, SocketType::INTERNAL);
 
   SOCKET_IN_POINT(vector, "Vector", zero_float3(), SocketType::LINK_TEXTURE_GENERATED);
   SOCKET_IN_FLOAT(w, "W", 0.0f);
@@ -1400,7 +1398,6 @@ void VoronoiTextureNode::compile(SVMCompiler &compiler)
                         .position_offset = compiler.output("Position"),
                         .w_out_offset = compiler.output("W"),
                         .radius_offset = compiler.output("Radius"),
-                        .materialx_worley = uint8_t(materialx_worley),
                     });
   tex_mapping.compile_end(compiler, vector_in, vector_stack_offset);
 }
@@ -1413,7 +1410,6 @@ void VoronoiTextureNode::compile(OSLCompiler &compiler)
   compiler.parameter(this, "feature");
   compiler.parameter(this, "metric");
   compiler.parameter(this, "use_normalize");
-  compiler.parameter(this, "materialx_worley");
   compiler.add(this, "node_voronoi_texture");
 }
 
@@ -7971,6 +7967,55 @@ void MaterialXHeightToNormalNode::compile(SVMCompiler &compiler)
 void MaterialXHeightToNormalNode::compile(OSLCompiler &compiler)
 {
   compiler.add(this, "node_materialx_heighttonormal");
+}
+
+/* MaterialX Worley */
+
+NODE_DEFINE(MaterialXWorleyNode)
+{
+  NodeType *type = NodeType::add("materialx_worley", create, NodeType::SHADER);
+
+  static NodeEnum dimensions_enum;
+  dimensions_enum.insert("2D", 2);
+  dimensions_enum.insert("3D", 3);
+  SOCKET_ENUM(dimensions, "Dimensions", dimensions_enum, 3);
+  SOCKET_INT(component, "Component", 0);
+  SOCKET_INT(mode, "Mode", 1);
+
+  SOCKET_IN_POINT(vector, "Vector", zero_float3(), SocketType::LINK_TEXTURE_GENERATED);
+  SOCKET_IN_FLOAT(scale, "Scale", 1.0f);
+  SOCKET_IN_FLOAT(randomness, "Randomness", 1.0f);
+
+  SOCKET_OUT_FLOAT(distance, "Distance");
+  SOCKET_OUT_COLOR(color, "Color");
+
+  return type;
+}
+
+MaterialXWorleyNode::MaterialXWorleyNode() : ShaderNode(get_node_type()) {}
+
+void MaterialXWorleyNode::compile(SVMCompiler &compiler)
+{
+  compiler.add_node(this,
+                    NODE_MATERIALX_WORLEY,
+                    SVMNodeMaterialXWorley{
+                        .dimensions = uint(dimensions),
+                        .component = uint(component),
+                        .mode = uint(mode),
+                        .scale = compiler.input_float("Scale"),
+                        .jitter = compiler.input_float("Randomness"),
+                        .coord = compiler.input_float3("Vector"),
+                        .distance_offset = compiler.output("Distance"),
+                        .color_offset = compiler.output("Color"),
+                    });
+}
+
+void MaterialXWorleyNode::compile(OSLCompiler &compiler)
+{
+  compiler.parameter(this, "dimensions");
+  compiler.parameter(this, "component");
+  compiler.parameter(this, "mode");
+  compiler.add(this, "node_materialx_worley");
 }
 
 /* MaterialX Cell Noise */

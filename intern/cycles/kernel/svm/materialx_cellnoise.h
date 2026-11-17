@@ -210,4 +210,37 @@ ccl_device_noinline void svm_node_materialx_cell_noise(
   }
 }
 
+/* MaterialX worleynoise2d/3d and unifiednoise type 2: exact mx_worley_noise.
+ * mode bit 1: style 1 (solid); bit 2: vector output (solid hashes
+ * mx_cell_noise_vec3); bits 3-4: metric. Distance is component F1/F2/F3 of
+ * the result and Color the whole result. Jitter is not clamped (MaterialX
+ * does not clamp it). */
+ccl_device_noinline void svm_node_materialx_worley(
+    ccl_private float *ccl_restrict stack,
+    const ccl_global SVMNodeMaterialXWorley &ccl_restrict node)
+{
+  const float3 coord = stack_load(stack, node.coord) * stack_load(stack, node.scale);
+  const float jitter = stack_load(stack, node.jitter);
+  const int style = (node.mode & 2u) ? 1 : 0;
+  const bool vector_output = (node.mode & 4u) != 0;
+  const int metric = int((node.mode >> 3) & 3u);
+  const float3 result = node.dimensions == 2 ?
+                            mtlx_worley_noise(make_float2(coord.x, coord.y),
+                                              jitter,
+                                              style,
+                                              metric,
+                                              vector_output) :
+                            mtlx_worley_noise(coord, jitter, style, metric, vector_output);
+  if (stack_valid(node.distance_offset)) {
+    stack_store_float(stack,
+                      node.distance_offset,
+                      node.component == 2 ? result.z :
+                      node.component == 1 ? result.y :
+                                            result.x);
+  }
+  if (stack_valid(node.color_offset)) {
+    stack_store_float3(stack, node.color_offset, result);
+  }
+}
+
 CCL_NAMESPACE_END

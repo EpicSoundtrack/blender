@@ -12643,7 +12643,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_unifiednoise_literal_type_branc
       EXPECT_EQ(range->get_range_type(), NODE_MAP_RANGE_LINEAR);
       unified_ranges++;
     }
-    if (auto *voronoi = dynamic_cast<VoronoiTextureNode *>(node)) {
+    if (auto *voronoi = dynamic_cast<MaterialXWorleyNode *>(node)) {
       saw_worley |= node->name == "Unified2D.worley" && voronoi->get_dimensions() == 2;
     }
     if (auto *noise = dynamic_cast<NoiseTextureNode *>(node)) {
@@ -13809,9 +13809,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_worleynoise_distance_subset)
   ASSERT_TRUE(materialx::lower(source, &lowered));
   int voronoi_count = 0;
   for (ShaderNode *node : lowered.nodes) {
-    if (const auto *voronoi = dynamic_cast<VoronoiTextureNode *>(node)) {
+    if (const auto *voronoi = dynamic_cast<MaterialXWorleyNode *>(node)) {
       ++voronoi_count;
-      EXPECT_EQ(voronoi->get_metric(), NODE_VORONOI_EUCLIDEAN);
     }
   }
   EXPECT_EQ(voronoi_count, 4);
@@ -44283,7 +44282,7 @@ TEST(materialx_usdshade_reader, worleynoise_accepts_default_constant_and_varying
       ASSERT_TRUE(result.lowered) << result.error;
       int linked_randomness = 0;
       for (const auto &[name, lowered] : result.lowered_nodes) {
-        if (dynamic_cast<VoronoiTextureNode *>(lowered)) {
+        if (dynamic_cast<MaterialXWorleyNode *>(lowered)) {
           EXPECT_NE(lowered->input("Randomness")->link, nullptr) << name;
           ++linked_randomness;
         }
@@ -44300,8 +44299,8 @@ TEST(materialx_usdshade_reader, worleynoise_accepts_default_constant_and_varying
     ASSERT_TRUE(solid.lowered) << solid.error;
     int solid_voronoi = 0;
     for (const auto &[name, lowered] : solid.lowered_nodes) {
-      if (auto *voronoi = dynamic_cast<VoronoiTextureNode *>(lowered)) {
-        EXPECT_NE(voronoi->get_materialx_worley() & 2, 0) << name;
+      if (auto *voronoi = dynamic_cast<MaterialXWorleyNode *>(lowered)) {
+        EXPECT_NE(voronoi->get_mode() & 2, 0) << name;
         ++solid_voronoi;
       }
     }

@@ -310,9 +310,7 @@ class VoronoiTextureNode : public TextureNode {
     if (dimensions == 4) {
       result |= KERNEL_FEATURE_NODE_VORONOI_EXTRA;
     }
-    else if (dimensions >= 2 &&
-             (feature == NODE_VORONOI_F3 || feature == NODE_VORONOI_SMOOTH_F1))
-    {
+    else if (dimensions >= 2 && feature == NODE_VORONOI_SMOOTH_F1) {
       result |= KERNEL_FEATURE_NODE_VORONOI_EXTRA;
     }
     return result;
@@ -331,8 +329,6 @@ class VoronoiTextureNode : public TextureNode {
   NODE_SOCKET_API(float, smoothness)
   NODE_SOCKET_API(float, randomness)
   NODE_SOCKET_API(float3, vector)
-  /* MaterialX lowering only: SVMNodeTexVoronoi::materialx_worley bits. */
-  NODE_SOCKET_API(int, materialx_worley)
 };
 
 class WaveTextureNode : public TextureNode {
@@ -1796,6 +1792,26 @@ class NormalMapNode : public ShaderNode {
   NODE_SOCKET_API(float3, color)
   NODE_SOCKET_API(int, convention)
   NODE_SOCKET_API(int, base)
+};
+
+/* MaterialX worleynoise2d/3d and unifiednoise type 2: exact mx_worley_noise.
+ * component selects F1/F2/F3 for Distance; mode holds style, vector output
+ * and metric bits (see svm_node_materialx_worley). */
+class MaterialXWorleyNode : public ShaderNode {
+ public:
+  SHADER_NODE_CLASS(MaterialXWorleyNode)
+
+  NODE_SOCKET_API(int, dimensions)
+  NODE_SOCKET_API(int, component)
+  NODE_SOCKET_API(int, mode)
+  NODE_SOCKET_API(float3, vector)
+  NODE_SOCKET_API(float, scale)
+  NODE_SOCKET_API(float, randomness)
+
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_MATERIALX_WORLEY;
+  }
 };
 
 /* MaterialX cellnoise2d/3d: exact mx_cell_noise_float / _vec3 (lookup3 of the
