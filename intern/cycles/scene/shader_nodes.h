@@ -1803,6 +1803,25 @@ class NormalMapNode : public ShaderNode {
   NODE_SOCKET_API(bool, use_materialx_frame)
 };
 
+/* MaterialX rotate2d/rotate3d/place2d rotation: the stock Vector Rotate axis
+ * forms with the MaterialX Sin/Cos accuracy for large angles on CUDA. */
+class MaterialXVectorRotateNode : public ShaderNode {
+ public:
+  SHADER_NODE_CLASS(MaterialXVectorRotateNode)
+
+  NODE_SOCKET_API(NodeVectorRotateType, rotate_type)
+  NODE_SOCKET_API(bool, invert)
+  NODE_SOCKET_API(float3, vector)
+  NODE_SOCKET_API(float3, center)
+  NODE_SOCKET_API(float3, axis)
+  NODE_SOCKET_API(float, angle)
+
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_MATERIALX_VECTOR_ROTATE;
+  }
+};
+
 /* MaterialX's screen-derivative height conversion. It marks its ancestors so
  * the SVM stack carries dual values through the procedural height chain. */
 class MaterialXHeightToNormalNode : public ShaderNode {

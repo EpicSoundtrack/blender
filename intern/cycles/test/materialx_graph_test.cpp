@@ -2143,16 +2143,16 @@ TEST(materialx_graph, lowers_exact_vector_rotation_utilities_to_native_vector_ro
   ShaderNode *uv_node = nullptr;
   ShaderNode *vector_node = nullptr;
   ShaderNode *angle_node = nullptr;
-  VectorRotateNode *rotate2d_node = nullptr;
-  VectorRotateNode *rotate3d_node = nullptr;
+  MaterialXVectorRotateNode *rotate2d_node = nullptr;
+  MaterialXVectorRotateNode *rotate3d_node = nullptr;
   MathNode *rotate2d_radians = nullptr;
   MathNode *rotate3d_radians = nullptr;
   for (ShaderNode *node : graph.nodes) {
     uv_node = node->name == "UV" ? node : uv_node;
     vector_node = node->name == "Vector" ? node : vector_node;
     angle_node = node->name == "Angle" ? node : angle_node;
-    rotate2d_node = node->name == "Rotate2D" ? dynamic_cast<VectorRotateNode *>(node) : rotate2d_node;
-    rotate3d_node = node->name == "Rotate3D" ? dynamic_cast<VectorRotateNode *>(node) : rotate3d_node;
+    rotate2d_node = node->name == "Rotate2D" ? dynamic_cast<MaterialXVectorRotateNode *>(node) : rotate2d_node;
+    rotate3d_node = node->name == "Rotate3D" ? dynamic_cast<MaterialXVectorRotateNode *>(node) : rotate3d_node;
     rotate2d_radians = node->name == "Rotate2D.radians" ? dynamic_cast<MathNode *>(node) : rotate2d_radians;
     rotate3d_radians = node->name == "Rotate3D.radians" ? dynamic_cast<MathNode *>(node) : rotate3d_radians;
   }
@@ -2205,10 +2205,10 @@ TEST(materialx_graph, lowers_connected_rotate3d_axis_to_native_vector_rotate)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{input, axis, rotate}}, &graph));
   ShaderNode *axis_node = nullptr;
-  VectorRotateNode *rotate_node = nullptr;
+  MaterialXVectorRotateNode *rotate_node = nullptr;
   for (ShaderNode *node : graph.nodes) {
     axis_node = node->name == "Axis" ? node : axis_node;
-    rotate_node = node->name == "Rotate3D" ? dynamic_cast<VectorRotateNode *>(node) : rotate_node;
+    rotate_node = node->name == "Rotate3D" ? dynamic_cast<MaterialXVectorRotateNode *>(node) : rotate_node;
   }
   ASSERT_NE(axis_node, nullptr);
   ASSERT_NE(rotate_node, nullptr);
@@ -2333,14 +2333,14 @@ TEST(materialx_graph, lowers_vector_rotation_utilities_with_installed_defaults)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{rotate2d, rotate3d}}, &graph));
 
-  VectorRotateNode *rotate2d_node = nullptr;
-  VectorRotateNode *rotate3d_node = nullptr;
+  MaterialXVectorRotateNode *rotate2d_node = nullptr;
+  MaterialXVectorRotateNode *rotate3d_node = nullptr;
   MathNode *rotate2d_radians = nullptr;
   MathNode *rotate3d_radians = nullptr;
   for (ShaderNode *node : graph.nodes) {
-    rotate2d_node = node->name == "Rotate2DDefaults" ? dynamic_cast<VectorRotateNode *>(node) :
+    rotate2d_node = node->name == "Rotate2DDefaults" ? dynamic_cast<MaterialXVectorRotateNode *>(node) :
                                                        rotate2d_node;
-    rotate3d_node = node->name == "Rotate3DDefaults" ? dynamic_cast<VectorRotateNode *>(node) :
+    rotate3d_node = node->name == "Rotate3DDefaults" ? dynamic_cast<MaterialXVectorRotateNode *>(node) :
                                                        rotate3d_node;
     rotate2d_radians = node->name == "Rotate2DDefaults.radians" ? dynamic_cast<MathNode *>(node) :
                                                                   rotate2d_radians;

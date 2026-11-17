@@ -4117,11 +4117,11 @@ TEST(materialx_usdshade_reader, reads_and_lowers_exact_vector_rotation_utilities
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));
-  VectorRotateNode *native_rotate2d = nullptr;
-  VectorRotateNode *native_rotate3d = nullptr;
+  MaterialXVectorRotateNode *native_rotate2d = nullptr;
+  MaterialXVectorRotateNode *native_rotate3d = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    native_rotate2d = node->name == "Rotate2D" ? dynamic_cast<VectorRotateNode *>(node) : native_rotate2d;
-    native_rotate3d = node->name == "Rotate3D" ? dynamic_cast<VectorRotateNode *>(node) : native_rotate3d;
+    native_rotate2d = node->name == "Rotate2D" ? dynamic_cast<MaterialXVectorRotateNode *>(node) : native_rotate2d;
+    native_rotate3d = node->name == "Rotate3D" ? dynamic_cast<MaterialXVectorRotateNode *>(node) : native_rotate3d;
   }
   ASSERT_NE(native_rotate2d, nullptr);
   EXPECT_EQ(native_rotate2d->get_rotate_type(), NODE_VECTOR_ROTATE_TYPE_AXIS_Z);
@@ -4224,10 +4224,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_connected_rotate3d_geomprop_axi
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));
   AttributeNode *native_axis = nullptr;
-  VectorRotateNode *native_rotate = nullptr;
+  MaterialXVectorRotateNode *native_rotate = nullptr;
   for (ShaderNode *node : lowered.nodes) {
     native_axis = node->name == "Axis" ? dynamic_cast<AttributeNode *>(node) : native_axis;
-    native_rotate = node->name == "Rotate" ? dynamic_cast<VectorRotateNode *>(node) : native_rotate;
+    native_rotate = node->name == "Rotate" ? dynamic_cast<MaterialXVectorRotateNode *>(node) : native_rotate;
   }
   ASSERT_NE(native_axis, nullptr);
   ASSERT_NE(native_rotate, nullptr);

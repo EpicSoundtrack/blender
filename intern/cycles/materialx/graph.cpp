@@ -23821,8 +23821,8 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       VectorMathNode *addpivot = graph->create_node<VectorMathNode>(); addpivot->name = node.name + ".addpivot"; addpivot->set_math_type(NODE_VECTOR_MATH_ADD);
       VectorMathNode *addpivot2 = graph->create_node<VectorMathNode>(); addpivot2->name = node.name + ".addpivot2"; addpivot2->set_math_type(NODE_VECTOR_MATH_ADD);
       MathNode *radians = graph->create_node<MathNode>(); radians->name = node.name + ".radians"; radians->set_math_type(NODE_MATH_RADIANS); radians->set_value1(node.inputs.at(usd_transform ? "rotation" : "rotate"));
-      VectorRotateNode *rotate = graph->create_node<VectorRotateNode>(); rotate->name = node.name + ".rotate"; rotate->set_rotate_type(NODE_VECTOR_ROTATE_TYPE_AXIS_Z); rotate->set_invert(true);
-      VectorRotateNode *rotate2 = graph->create_node<VectorRotateNode>(); rotate2->name = node.name + ".rotate2"; rotate2->set_rotate_type(NODE_VECTOR_ROTATE_TYPE_AXIS_Z); rotate2->set_invert(true);
+      MaterialXVectorRotateNode *rotate = graph->create_node<MaterialXVectorRotateNode>(); rotate->name = node.name + ".rotate"; rotate->set_rotate_type(NODE_VECTOR_ROTATE_TYPE_AXIS_Z); rotate->set_invert(true);
+      MaterialXVectorRotateNode *rotate2 = graph->create_node<MaterialXVectorRotateNode>(); rotate2->name = node.name + ".rotate2"; rotate2->set_rotate_type(NODE_VECTOR_ROTATE_TYPE_AXIS_Z); rotate2->set_invert(true);
       MixVectorNode *operation = graph->create_node<MixVectorNode>(); operation->set_fac(usd_transform ? 0.0f : node.inputs.at("operationorder"));
       for (ShaderNode *aux : {static_cast<ShaderNode *>(pivot), static_cast<ShaderNode *>(scale), static_cast<ShaderNode *>(offset), static_cast<ShaderNode *>(subpivot), static_cast<ShaderNode *>(applyscale), static_cast<ShaderNode *>(applyoffset), static_cast<ShaderNode *>(applyoffset2), static_cast<ShaderNode *>(applyscale2), static_cast<ShaderNode *>(addpivot), static_cast<ShaderNode *>(addpivot2), static_cast<ShaderNode *>(radians), static_cast<ShaderNode *>(rotate), static_cast<ShaderNode *>(rotate2)}) lowered_nodes.emplace(aux->name, aux);
       lowered = operation;
@@ -23875,7 +23875,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         radians->set_value1(0.0f);
       }
 
-      VectorRotateNode *rotate = graph->create_node<VectorRotateNode>();
+      MaterialXVectorRotateNode *rotate = graph->create_node<MaterialXVectorRotateNode>();
       rotate->set_rotate_type(node.nodedef == rotate2d_vector2_id ? NODE_VECTOR_ROTATE_TYPE_AXIS_Z :
                                                               NODE_VECTOR_ROTATE_TYPE_AXIS);
       rotate->set_invert(true);

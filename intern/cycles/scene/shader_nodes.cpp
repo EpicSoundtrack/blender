@@ -7984,6 +7984,56 @@ void MaterialXHeightToNormalNode::compile(OSLCompiler &compiler)
   compiler.add(this, "node_materialx_heighttonormal");
 }
 
+/* MaterialX Vector Rotate */
+
+NODE_DEFINE(MaterialXVectorRotateNode)
+{
+  NodeType *type = NodeType::add("materialx_vector_rotate", create, NodeType::SHADER);
+
+  static NodeEnum type_enum;
+  type_enum.insert("axis", NODE_VECTOR_ROTATE_TYPE_AXIS);
+  type_enum.insert("x_axis", NODE_VECTOR_ROTATE_TYPE_AXIS_X);
+  type_enum.insert("y_axis", NODE_VECTOR_ROTATE_TYPE_AXIS_Y);
+  type_enum.insert("z_axis", NODE_VECTOR_ROTATE_TYPE_AXIS_Z);
+  SOCKET_ENUM(rotate_type, "Type", type_enum, NODE_VECTOR_ROTATE_TYPE_AXIS);
+
+  SOCKET_BOOLEAN(invert, "Invert", false);
+
+  SOCKET_IN_VECTOR(vector, "Vector", zero_float3());
+  SOCKET_IN_POINT(center, "Center", zero_float3());
+  SOCKET_IN_VECTOR(axis, "Axis", make_float3(0.0f, 0.0f, 1.0f));
+  SOCKET_IN_FLOAT(angle, "Angle", 0.0f);
+  SOCKET_OUT_VECTOR(vector, "Vector");
+
+  return type;
+}
+
+MaterialXVectorRotateNode::MaterialXVectorRotateNode() : ShaderNode(get_node_type()) {}
+
+void MaterialXVectorRotateNode::compile(SVMCompiler &compiler)
+{
+  compiler.add_node(this,
+                    NODE_MATERIALX_VECTOR_ROTATE,
+                    SVMNodeVectorRotate{
+                        .rotate_type = rotate_type,
+                        .vector = compiler.input_float3("Vector"),
+                        .center = compiler.input_float3("Center"),
+                        .axis = compiler.input_float3("Axis"),
+                        .rotation = {},
+                        .angle = compiler.input_float("Angle"),
+                        .invert = invert,
+                        .result_offset = compiler.output("Vector"),
+                    });
+}
+
+void MaterialXVectorRotateNode::compile(OSLCompiler &compiler)
+{
+  /* OSL sin/cos stay accurate for large angles: reuse the stock shader. */
+  compiler.parameter(this, "rotate_type");
+  compiler.parameter(this, "invert");
+  compiler.add(this, "node_vector_rotate");
+}
+
 /* Radial Tiling */
 
 NODE_DEFINE(RadialTilingNode)

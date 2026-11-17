@@ -102,6 +102,7 @@ set(SRC_KERNEL_SVM_HEADERS
   svm/tex_coord.h
   svm/fractal_noise.h
   svm/materialx_heighttonormal.h
+  svm/materialx_vector_rotate.h
   svm/types.h
   svm/util.h
   svm/value.h
