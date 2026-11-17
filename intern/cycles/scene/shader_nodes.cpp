@@ -33,6 +33,7 @@
 #include "kernel/closure/bsdf_microfacet.h"
 #include "kernel/svm/color_util.h"
 #include "kernel/svm/mapping_util.h"
+#include "kernel/svm/materialx_blackbody.h"
 #include "kernel/svm/math_util.h"
 #include "kernel/svm/ramp_util.h"
 
@@ -6590,8 +6591,6 @@ NODE_DEFINE(BlackbodyNode)
   NodeType *type = NodeType::add("blackbody", create, NodeType::SHADER);
 
   SOCKET_IN_FLOAT(temperature, "Temperature", 1200.0f);
-  SOCKET_BOOLEAN(
-      use_materialx_blackbody, "MaterialX Blackbody", false, SocketType::INTERNAL);
   SOCKET_OUT_COLOR(color, "Color");
 
   return type;
@@ -6602,9 +6601,7 @@ BlackbodyNode::BlackbodyNode() : ShaderNode(get_node_type()) {}
 void BlackbodyNode::constant_fold(const ConstantFolder &folder)
 {
   if (folder.all_inputs_constant()) {
-    const float3 rgb_rec709 = use_materialx_blackbody ?
-                                  svm_math_materialx_blackbody_rec709(temperature) :
-                                  svm_math_blackbody_color_rec709(temperature);
+    const float3 rgb_rec709 = svm_math_blackbody_color_rec709(temperature);
     const float3 rgb = folder.scene->shader_manager->rec709_to_scene_linear(rgb_rec709);
     folder.make_constant(max(rgb, zero_float3()));
   }
@@ -6617,7 +6614,6 @@ void BlackbodyNode::compile(SVMCompiler &compiler)
                     SVMNodeBlackbody{
                         .temperature = compiler.input_float("Temperature"),
                         .color_offset = compiler.output("Color"),
-                        .materialx = uint8_t(use_materialx_blackbody),
                     });
 }
 
@@ -7982,6 +7978,46 @@ void MaterialXHeightToNormalNode::compile(SVMCompiler &compiler)
 void MaterialXHeightToNormalNode::compile(OSLCompiler &compiler)
 {
   compiler.add(this, "node_materialx_heighttonormal");
+}
+
+/* MaterialX Blackbody */
+
+NODE_DEFINE(MaterialXBlackbodyNode)
+{
+  NodeType *type = NodeType::add("materialx_blackbody", create, NodeType::SHADER);
+
+  SOCKET_IN_FLOAT(temperature, "Temperature", 1200.0f);
+  SOCKET_OUT_COLOR(color, "Color");
+
+  return type;
+}
+
+MaterialXBlackbodyNode::MaterialXBlackbodyNode() : ShaderNode(get_node_type()) {}
+
+void MaterialXBlackbodyNode::constant_fold(const ConstantFolder &folder)
+{
+  if (folder.all_inputs_constant()) {
+    const float3 rgb_rec709 = svm_math_materialx_blackbody_rec709(temperature);
+    const float3 rgb = folder.scene->shader_manager->rec709_to_scene_linear(rgb_rec709);
+    folder.make_constant(max(rgb, zero_float3()));
+  }
+}
+
+void MaterialXBlackbodyNode::compile(SVMCompiler &compiler)
+{
+  compiler.add_node(this,
+                    NODE_MATERIALX_BLACKBODY,
+                    SVMNodeBlackbody{
+                        .temperature = compiler.input_float("Temperature"),
+                        .color_offset = compiler.output("Color"),
+                    });
+}
+
+void MaterialXBlackbodyNode::compile(OSLCompiler &compiler)
+{
+  /* Unchanged from the batch-22 fork: OSL evaluates Blender's blackbody for a
+   * linked temperature (constant temperatures fold above). */
+  compiler.add(this, "node_blackbody");
 }
 
 /* MaterialX Vector Rotate */

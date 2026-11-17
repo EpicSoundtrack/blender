@@ -20,6 +20,7 @@
 #include "kernel/svm/noisetex.h"
 #include "kernel/svm/voronoi.h"
 #include "kernel/svm/white_noise.h"
+#include "kernel/svm/materialx_blackbody.h"
 #include "kernel/svm/materialx_heighttonormal.h"
 #include "kernel/svm/map_range.h"
 #include "kernel/svm/math.h"
@@ -3411,7 +3412,7 @@ TEST(materialx_graph, lowers_scalar_burn_and_dodge_measured_edge_literals)
 
 /* ND_blackbody is declared in MaterialX pbrlib/pbrlib_defs.mtlx as
  * blackbody(float temperature=5000.0) -> color3 and maps directly to Cycles'
- * native BlackbodyNode rather than a proxy color constant. */
+ * native MaterialXBlackbodyNode rather than a proxy color constant. */
 TEST(materialx_graph, lowers_blackbody_to_native_blackbody_node)
 {
   materialx::Node literal;
@@ -3435,13 +3436,13 @@ TEST(materialx_graph, lowers_blackbody_to_native_blackbody_node)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{literal, temperature, linked}}, &graph));
 
-  BlackbodyNode *literal_blackbody = nullptr;
-  BlackbodyNode *linked_blackbody = nullptr;
+  MaterialXBlackbodyNode *literal_blackbody = nullptr;
+  MaterialXBlackbodyNode *linked_blackbody = nullptr;
   ValueNode *temperature_value = nullptr;
   for (ShaderNode *node : graph.nodes) {
-    literal_blackbody = node->name == "LiteralBlackbody" ? dynamic_cast<BlackbodyNode *>(node) :
+    literal_blackbody = node->name == "LiteralBlackbody" ? dynamic_cast<MaterialXBlackbodyNode *>(node) :
                                                             literal_blackbody;
-    linked_blackbody = node->name == "LinkedBlackbody" ? dynamic_cast<BlackbodyNode *>(node) :
+    linked_blackbody = node->name == "LinkedBlackbody" ? dynamic_cast<MaterialXBlackbodyNode *>(node) :
                                                           linked_blackbody;
     temperature_value = node->name == "Temperature" ? dynamic_cast<ValueNode *>(node) :
                                                        temperature_value;
@@ -28212,12 +28213,11 @@ TEST(materialx_graph, blackbody_uses_materialx_mx_blackbody)
   node.outputs["out"] = materialx::Type::Color3;
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{node}}, &graph));
-  BlackbodyNode *blackbody = nullptr;
+  MaterialXBlackbodyNode *blackbody = nullptr;
   for (ShaderNode *n : graph.nodes) {
-    blackbody = n->name == "Blackbody" ? dynamic_cast<BlackbodyNode *>(n) : blackbody;
+    blackbody = n->name == "Blackbody" ? dynamic_cast<MaterialXBlackbodyNode *>(n) : blackbody;
   }
   ASSERT_NE(blackbody, nullptr);
-  EXPECT_TRUE(blackbody->get_use_materialx_blackbody());
 }
 
 namespace {

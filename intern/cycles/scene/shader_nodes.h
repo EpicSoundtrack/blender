@@ -1500,8 +1500,6 @@ class BlackbodyNode : public ShaderNode {
   void constant_fold(const ConstantFolder &folder) override;
 
   NODE_SOCKET_API(float, temperature)
-  /* MaterialX lowering only: mx_blackbody instead of Blender's model. */
-  NODE_SOCKET_API(bool, use_materialx_blackbody)
 };
 
 class VectorMapRangeNode : public ShaderNode {
@@ -1801,6 +1799,20 @@ class NormalMapNode : public ShaderNode {
   NODE_SOCKET_API(int, convention)
   NODE_SOCKET_API(int, base)
   NODE_SOCKET_API(bool, use_materialx_frame)
+};
+
+/* MaterialX blackbody: mx_blackbody (MaterialX pbrlib) instead of Blender's model. */
+class MaterialXBlackbodyNode : public ShaderNode {
+ public:
+  SHADER_NODE_CLASS(MaterialXBlackbodyNode)
+  void constant_fold(const ConstantFolder &folder) override;
+
+  NODE_SOCKET_API(float, temperature)
+
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_MATERIALX_BLACKBODY;
+  }
 };
 
 /* MaterialX rotate2d/rotate3d/place2d rotation: the stock Vector Rotate axis

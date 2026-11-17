@@ -23707,9 +23707,8 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       static_cast<CombineXYZNode *>(lowered)->set_z(0.0f);
     }
     else if (node.nodedef == blackbody_id) {
-      BlackbodyNode *blackbody = graph->create_node<BlackbodyNode>();
-      /* Batch 11 (b9x): MaterialX's mx_blackbody spline, not Blender's. */
-      blackbody->set_use_materialx_blackbody(true);
+      /* MaterialX's mx_blackbody spline, not Blender's. */
+      MaterialXBlackbodyNode *blackbody = graph->create_node<MaterialXBlackbodyNode>();
       if (const auto temperature = node.inputs.find("temperature"); temperature != node.inputs.end()) {
         blackbody->set_temperature(temperature->second);
       }

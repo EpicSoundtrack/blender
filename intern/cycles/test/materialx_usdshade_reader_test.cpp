@@ -4023,10 +4023,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_blackbody_color3)
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(graph, &lowered));
-  BlackbodyNode *native_blackbody = nullptr;
+  MaterialXBlackbodyNode *native_blackbody = nullptr;
   PrincipledBsdfNode *principled = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    native_blackbody = node->name == "Blackbody" ? dynamic_cast<BlackbodyNode *>(node) :
+    native_blackbody = node->name == "Blackbody" ? dynamic_cast<MaterialXBlackbodyNode *>(node) :
                                                    native_blackbody;
     principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
   }
