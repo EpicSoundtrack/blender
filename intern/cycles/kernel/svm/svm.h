@@ -60,6 +60,7 @@
 #include "kernel/svm/materialx_blackbody.h"
 #include "kernel/svm/materialx_cellnoise.h"
 #include "kernel/svm/materialx_heighttonormal.h"
+#include "kernel/svm/materialx_math.h"
 #include "kernel/svm/materialx_noise.h"
 #include "kernel/svm/materialx_normal_map.h"
 #include "kernel/svm/materialx_vector_rotate.h"
@@ -371,12 +372,6 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
       SVM_CASE(NODE_MATH)
       svm_node_math(stack, svm_node_get<SVMNodeMath>(kg, &offset));
       break;
-      SVM_CASE(NODE_MATH_DERIVATIVE)
-      IF_NOT_KERNEL_NODES_FEATURE(VOLUME)
-      {
-        svm_node_math_derivative(stack, svm_node_get<SVMNodeMath>(kg, &offset));
-      }
-      break;
       SVM_CASE(NODE_VECTOR_MATH)
       svm_node_vector_math<float3>(stack, svm_node_get<SVMNodeVectorMath>(kg, &offset));
       break;
@@ -534,6 +529,15 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
       SVM_CASE(NODE_MATERIALX_WORLEY)
       svm_node_materialx_worley(stack, svm_node_get<SVMNodeMaterialXWorley>(kg, &offset));
       break;
+      SVM_CASE(NODE_MATERIALX_MATH)
+      svm_node_math(stack, svm_node_get<SVMNodeMath>(kg, &offset));
+      break;
+      SVM_CASE(NODE_MATERIALX_MATH_DERIVATIVE)
+      IF_NOT_KERNEL_NODES_FEATURE(VOLUME)
+      {
+        svm_node_materialx_math_derivative(stack, svm_node_get<SVMNodeMath>(kg, &offset));
+      }
+      break;
       SVM_CASE(NODE_MATERIALX_NOISE)
       svm_node_materialx_noise(stack, svm_node_get<SVMNodeMaterialXNoise>(kg, &offset));
       break;
@@ -595,9 +599,6 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
       break;
       SVM_CASE(NODE_MAP_RANGE)
       svm_node_map_range(stack, svm_node_get<SVMNodeMapRange>(kg, &offset));
-      break;
-      SVM_CASE(NODE_MAP_RANGE_DERIVATIVE)
-      svm_node_map_range_derivative(stack, svm_node_get<SVMNodeMapRange>(kg, &offset));
       break;
       SVM_CASE(NODE_VECTOR_MAP_RANGE)
       svm_node_vector_map_range(stack, svm_node_get<SVMNodeVectorMapRange>(kg, &offset));

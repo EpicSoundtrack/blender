@@ -1532,10 +1532,11 @@ class ClampNode : public ShaderNode {
 class MathNode : public ShaderNode {
  public:
   SHADER_NODE_CLASS(MathNode)
-  /* Derivative propagation is MaterialX-only; stock Math keeps zero derivatives. */
+  /* MaterialX lowering only: NODE_MATERIALX_MATH carries derivatives; stock Math
+   * keeps NODE_MATH and zero derivatives. */
   ShaderNodeType shader_node_type() const override
   {
-    return use_materialx_derivatives ? NODE_MATH : NODE_NONE;
+    return use_materialx_derivatives ? NODE_MATERIALX_MATH : NODE_NONE;
   }
   void expand(ShaderGraph *graph) override;
   void constant_fold(const ConstantFolder &folder) override;

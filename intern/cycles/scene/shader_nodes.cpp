@@ -7027,7 +7027,7 @@ bool MathNode::is_linear_operation()
 void MathNode::compile(SVMCompiler &compiler)
 {
   compiler.add_node(this,
-                    NODE_MATH,
+                    use_materialx_derivatives ? NODE_MATERIALX_MATH : NODE_MATH,
                     SVMNodeMath{
                         .math_type = math_type,
                         .value1 = compiler.input_float("Value1"),

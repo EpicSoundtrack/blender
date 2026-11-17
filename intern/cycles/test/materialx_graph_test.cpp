@@ -23,6 +23,7 @@
 #include "kernel/svm/materialx_blackbody.h"
 #include "kernel/svm/materialx_cellnoise.h"
 #include "kernel/svm/materialx_heighttonormal.h"
+#include "kernel/svm/materialx_math.h"
 #include "kernel/svm/materialx_noise.h"
 #include "kernel/svm/map_range.h"
 #include "kernel/svm/math.h"
@@ -860,6 +861,12 @@ TEST(materialx_graph, math_and_noise_derivatives_are_materialx_only)
   ShaderGraph stock_graph;
   EXPECT_EQ(stock_graph.create_node<MathNode>()->shader_node_type(), NODE_NONE);
   EXPECT_EQ(stock_graph.create_node<NoiseTextureNode>()->shader_node_type(), NODE_NONE);
+  /* MaterialX node types are appended after the stock ones, so stock SVM node
+   * ids match upstream; stock Math/Noise/Map Range have no derivative opcode. */
+  EXPECT_GT(int(NODE_MATERIALX_HEIGHTTONORMAL), int(NODE_NONE));
+  EXPECT_GT(int(NODE_MATERIALX_MATH_DERIVATIVE), int(NODE_NONE));
+  EXPECT_EQ(int(NODE_MATH) + 1, int(NODE_VECTOR_MATH));
+  EXPECT_EQ(int(NODE_MAP_RANGE) + 1, int(NODE_VECTOR_MAP_RANGE));
   EXPECT_EQ(int(NODE_VORONOI_F1), 0);
   EXPECT_EQ(int(NODE_VORONOI_F2), 1);
   EXPECT_EQ(int(NODE_VORONOI_SMOOTH_F1), 2);
@@ -902,7 +909,7 @@ TEST(materialx_graph, math_and_noise_derivatives_are_materialx_only)
     if (auto *math = dynamic_cast<MathNode *>(node)) {
       math_nodes++;
       EXPECT_TRUE(math->get_use_materialx_derivatives()) << node->name;
-      EXPECT_EQ(math->shader_node_type(), NODE_MATH) << node->name;
+      EXPECT_EQ(math->shader_node_type(), NODE_MATERIALX_MATH) << node->name;
     }
     if (auto *noise = dynamic_cast<MaterialXNoiseNode *>(node)) {
       noise_nodes++;
@@ -1109,7 +1116,7 @@ TEST(materialx_graph, procedural_height_derivative_includes_seven_octaves_and_am
       .value3 = literal(0.0f),
       .result_offset = 12,
   };
-  svm_node_math_derivative(stack, multiply);
+  svm_node_materialx_math_derivative(stack, multiply);
   const dual1 actual = stack_load<dual1>(stack, 12);
   EXPECT_NEAR(actual.val, mtlx_fractal_noise_float(p, 6.0f, 0.5f, 2.0f) * amplitude, 1.0e-8f);
   const float step = 0.05f;
@@ -1180,7 +1187,7 @@ TEST(materialx_graph, amber_linear_range_multiply_add_keeps_height_derivatives)
         .steps = literal(4.0f),
         .result_offset = SVMStackOffset(result),
     };
-    svm_node_map_range_derivative(stack, node);
+    svm_node_materialx_map_range_derivative(stack, node);
   };
   const auto math = [&](NodeMathType operation,
                         SVMInputFloat first,
@@ -1193,7 +1200,7 @@ TEST(materialx_graph, amber_linear_range_multiply_add_keeps_height_derivatives)
         .value3 = literal(0.0f),
         .result_offset = SVMStackOffset(result),
     };
-    svm_node_math_derivative(stack, node);
+    svm_node_materialx_math_derivative(stack, node);
   };
   range(0, 6);
   range(3, 9);
@@ -1272,7 +1279,7 @@ TEST(materialx_graph, amber_joined_noise_height_derivative_matches_scalar_finite
           .steps = literal(4.0f),
           .result_offset = SVMStackOffset(result),
       };
-      svm_node_map_range_derivative(stack, node);
+      svm_node_materialx_map_range_derivative(stack, node);
     };
     const auto math = [&](NodeMathType operation, SVMInputFloat a, SVMInputFloat b, uint result) {
       const SVMNodeMath node{
@@ -1282,7 +1289,7 @@ TEST(materialx_graph, amber_joined_noise_height_derivative_matches_scalar_finite
           .value3 = literal(0.0f),
           .result_offset = SVMStackOffset(result),
       };
-      svm_node_math_derivative(stack, node);
+      svm_node_materialx_math_derivative(stack, node);
     };
 
     vector_math(NODE_VECTOR_MATH_MULTIPLY, stack_input3(0), literal3(240.0f), 9);
