@@ -826,6 +826,68 @@ TEST(materialx_graph, connected_fractal_heighttonormal_keeps_height_and_uv_deriv
   EXPECT_EQ(color_conversion->inputs[0]->link, native_height->output("Vector"));
 }
 
+/* Track B9: derivative propagation through Math/Noise is MaterialX-only. Stock nodes
+ * report NODE_NONE (zero derivatives, as upstream); nodes created by lower() opt in.
+ * The Voronoi F3 feature is appended so Blender's integer feature sync keeps
+ * F1/F2/Smooth F1/Distance to Edge/N-Sphere Radius = 0..4. */
+TEST(materialx_graph, math_and_noise_derivatives_are_materialx_only)
+{
+  ShaderGraph stock_graph;
+  EXPECT_EQ(stock_graph.create_node<MathNode>()->shader_node_type(), NODE_NONE);
+  EXPECT_EQ(stock_graph.create_node<NoiseTextureNode>()->shader_node_type(), NODE_NONE);
+  EXPECT_EQ(int(NODE_VORONOI_F1), 0);
+  EXPECT_EQ(int(NODE_VORONOI_F2), 1);
+  EXPECT_EQ(int(NODE_VORONOI_SMOOTH_F1), 2);
+  EXPECT_EQ(int(NODE_VORONOI_DISTANCE_TO_EDGE), 3);
+  EXPECT_EQ(int(NODE_VORONOI_N_SPHERE_RADIUS), 4);
+
+  materialx::Node position{"Position", "ND_position_vector3"};
+  position.string_inputs["space"] = "object";
+  position.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node position_scale{"PositionScale", "ND_multiply_vector3"};
+  position_scale.links["in1"] = {"Position", "out", materialx::Type::Vector3};
+  position_scale.vector3_inputs["in2"] = make_float3(18.0f, 18.0f, 18.0f);
+  position_scale.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node fractal{"Height", "ND_fractal3d_float"};
+  fractal.links["position"] = {"PositionScale", "out", materialx::Type::Vector3};
+  fractal.inputs["amplitude"] = 0.0002f;
+  fractal.inputs["lacunarity"] = 2.0f;
+  fractal.inputs["diminish"] = 0.5f;
+  fractal.int_inputs["octaves"] = 7;
+  fractal.outputs["out"] = materialx::Type::Float;
+  materialx::Node uv{"UV0", "ND_texcoord_vector2"};
+  uv.int_inputs["index"] = 0;
+  uv.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node height{"HeightToNormal", "ND_heighttonormal_vector3"};
+  height.links["in"] = {"Height", "out", materialx::Type::Float};
+  height.links["texcoord"] = {"UV0", "out", materialx::Type::Vector2};
+  height.inputs["scale"] = 1.0f;
+  height.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node normalmap{"NormalMap", "ND_normalmap_float"};
+  normalmap.links["in"] = {"HeightToNormal", "out", materialx::Type::Vector3};
+  normalmap.inputs["scale"] = 1.0f;
+  normalmap.outputs["out"] = materialx::Type::Vector3;
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(
+      {{position, position_scale, fractal, uv, height, normalmap}}, &graph, &error))
+      << error;
+  int math_nodes = 0, noise_nodes = 0;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *math = dynamic_cast<MathNode *>(node)) {
+      math_nodes++;
+      EXPECT_TRUE(math->get_use_materialx_derivatives()) << node->name;
+      EXPECT_EQ(math->shader_node_type(), NODE_MATH) << node->name;
+    }
+    if (auto *noise = dynamic_cast<NoiseTextureNode *>(node)) {
+      noise_nodes++;
+      EXPECT_TRUE(noise->get_use_materialx_derivatives()) << node->name;
+      EXPECT_EQ(noise->shader_node_type(), NODE_TEX_NOISE) << node->name;
+    }
+  }
+  EXPECT_GT(math_nodes + noise_nodes, 0);
+}
+
 TEST(materialx_graph, amber_two_unified_noises_lower_as_connected_heighttonormal)
 {
   materialx::Node rest{"Rest", "ND_geompropvalue_vector3"};

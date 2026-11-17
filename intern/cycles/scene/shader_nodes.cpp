@@ -1193,6 +1193,8 @@ NODE_DEFINE(NoiseTextureNode)
   SOCKET_BOOLEAN(use_materialx_vector_color, "MaterialX Vector Color", false, SocketType::INTERNAL);
   SOCKET_BOOLEAN(use_materialx_vector_fbm, "MaterialX Vector fBM", false, SocketType::INTERNAL);
   SOCKET_BOOLEAN(use_materialx_vector2_fbm, "MaterialX Vector2 fBM", false, SocketType::INTERNAL);
+  SOCKET_BOOLEAN(
+      use_materialx_derivatives, "MaterialX Derivatives", false, SocketType::INTERNAL);
 
   SOCKET_IN_POINT(vector, "Vector", zero_float3(), SocketType::LINK_TEXTURE_GENERATED);
   SOCKET_IN_FLOAT(w, "W", 0.0f);
@@ -6984,6 +6986,8 @@ NODE_DEFINE(MathNode)
   SOCKET_ENUM(math_type, "Type", type_enum, NODE_MATH_ADD);
 
   SOCKET_BOOLEAN(use_clamp, "Use Clamp", false);
+  SOCKET_BOOLEAN(
+      use_materialx_derivatives, "MaterialX Derivatives", false, SocketType::INTERNAL);
 
   SOCKET_IN_FLOAT(value1, "Value1", 0.5f);
   SOCKET_IN_FLOAT(value2, "Value2", 0.5f);

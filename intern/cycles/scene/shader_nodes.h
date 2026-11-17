@@ -263,9 +263,10 @@ class GradientTextureNode : public TextureNode {
 class NoiseTextureNode : public TextureNode {
  public:
   SHADER_NODE_CLASS(NoiseTextureNode)
+  /* Derivative propagation is MaterialX-only; stock Noise keeps zero derivatives. */
   ShaderNodeType shader_node_type() const override
   {
-    return NODE_TEX_NOISE;
+    return use_materialx_derivatives ? NODE_TEX_NOISE : NODE_NONE;
   }
 
   NODE_SOCKET_API(int, dimensions)
@@ -274,6 +275,7 @@ class NoiseTextureNode : public TextureNode {
   NODE_SOCKET_API(bool, use_materialx_vector_color)
   NODE_SOCKET_API(bool, use_materialx_vector_fbm)
   NODE_SOCKET_API(bool, use_materialx_vector2_fbm)
+  NODE_SOCKET_API(bool, use_materialx_derivatives)
   NODE_SOCKET_API(float, w)
   NODE_SOCKET_API(float, scale)
   NODE_SOCKET_API(float, detail)
@@ -1547,9 +1549,10 @@ class ClampNode : public ShaderNode {
 class MathNode : public ShaderNode {
  public:
   SHADER_NODE_CLASS(MathNode)
+  /* Derivative propagation is MaterialX-only; stock Math keeps zero derivatives. */
   ShaderNodeType shader_node_type() const override
   {
-    return NODE_MATH;
+    return use_materialx_derivatives ? NODE_MATH : NODE_NONE;
   }
   void expand(ShaderGraph *graph) override;
   void constant_fold(const ConstantFolder &folder) override;
@@ -1560,6 +1563,7 @@ class MathNode : public ShaderNode {
   NODE_SOCKET_API(float, value3)
   NODE_SOCKET_API(NodeMathType, math_type)
   NODE_SOCKET_API(bool, use_clamp)
+  NODE_SOCKET_API(bool, use_materialx_derivatives)
 };
 
 class NormalNode : public ShaderNode {

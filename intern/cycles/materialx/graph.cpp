@@ -15535,7 +15535,7 @@ void connect_regular_tiled_hexagon_nodes(const string &prefix,
   graph->connect(condition->output("Value"), result->input("Value2"));
 }
 
-bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
+static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_message)
 {
   const auto fail = [&](const string &reason) {
     if (error_message) *error_message = reason;
@@ -32806,6 +32806,27 @@ bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
     }
   }
 
+  return true;
+}
+
+
+/* Derivative propagation through Math and Noise nodes (needed by the MaterialX
+ * heighttonormal chain) is MaterialX-only: stock nodes keep zero derivatives. Flag
+ * every node this lowering created. */
+bool lower(const Graph &source, ShaderGraph *graph, string *error_message)
+{
+  const size_t first_new_node = graph ? graph->nodes.size() : 0;
+  if (!lower_nodes(source, graph, error_message)) {
+    return false;
+  }
+  for (size_t i = first_new_node; i < graph->nodes.size(); i++) {
+    if (auto *math = dynamic_cast<MathNode *>(graph->nodes[i])) {
+      math->set_use_materialx_derivatives(true);
+    }
+    else if (auto *noise = dynamic_cast<NoiseTextureNode *>(graph->nodes[i])) {
+      noise->set_use_materialx_derivatives(true);
+    }
+  }
   return true;
 }
 

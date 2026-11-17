@@ -378,10 +378,11 @@ enum NodeVoronoiDistanceMetric : uint {
 enum NodeVoronoiFeature : uint {
   NODE_VORONOI_F1,
   NODE_VORONOI_F2,
-  NODE_VORONOI_F3,
   NODE_VORONOI_SMOOTH_F1,
   NODE_VORONOI_DISTANCE_TO_EDGE,
   NODE_VORONOI_N_SPHERE_RADIUS,
+  /* MaterialX lowering only. Appended: Blender syncs the feature as an integer. */
+  NODE_VORONOI_F3,
 };
 
 enum NodeBlendWeightType : uint { NODE_LAYER_WEIGHT_FRESNEL, NODE_LAYER_WEIGHT_FACING };
