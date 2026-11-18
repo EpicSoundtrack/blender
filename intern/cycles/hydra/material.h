@@ -71,9 +71,10 @@ class HdCyclesMaterial final : public PXR_NS::HdMaterial {
                        PXR_NS::TfToken::HashFunctor>
         vector4_output_endpoints;
     std::unordered_set<PXR_NS::TfToken, PXR_NS::TfToken::HashFunctor> consumed_parameters;
-    /* Stock (non-MaterialX) nodes also match parameters by socket UI name, as upstream does;
-     * MaterialX ND_* nodes match socket identifiers only. */
-    bool match_socket_ui_name = false;
+    /* Stock (non-MaterialX) node: parameters also match by socket UI name and use the upstream
+     * value conversion, as upstream does. MaterialX ND_* nodes match socket identifiers only and
+     * widen vector2 values to float3 sockets. */
+    bool is_stock_node = false;
   };
 
   void Initialize(PXR_NS::HdRenderParam *renderParam);

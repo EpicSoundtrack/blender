@@ -5057,4 +5057,31 @@ TEST(HdCyclesMaterialXMapping, stock_cyclic_network_is_built_not_rejected)
   material.Finalize(&session);
 }
 
+TEST(HdCyclesMaterialXMapping, stock_vector2_to_float3_socket_keeps_upstream_conversion)
+{
+  /* vector2 -> (x, y, 0) widening is MaterialX-only; a stock node keeps the upstream conversion
+   * (no float3 conversion from a 2-component value: warning and zero). */
+  const HdMaterialNetworkSchema network(
+      HdMaterialNetworkSchema::Builder()
+          .SetNodes(HdRetainedContainerDataSource::New(
+              TfToken("Mapping"),
+              node("cycles_mapping",
+                   HdRetainedContainerDataSource::New(
+                       TfToken("location"), vector2_parameter(pxr::GfVec2f(1.0f, 2.0f))))))
+          .Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/StockVector2"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  MappingNode *mapping = nullptr;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    mapping = mapping ? mapping : dynamic_cast<MappingNode *>(node);
+  }
+  ASSERT_NE(mapping, nullptr);
+  EXPECT_EQ(mapping->get_location(), zero_float3());
+
+  material.Finalize(&session);
+}
+
 HDCYCLES_NAMESPACE_CLOSE_SCOPE

@@ -109,6 +109,22 @@ static bool GetFiniteFloatValue(const VtValue &value)
   return float_value.IsHolding<float>() && std::isfinite(float_value.UncheckedGet<float>());
 }
 
+/* MaterialX vector2 values written to Cycles float3 sockets become (x, y, 0). Stock USD nodes
+ * keep the upstream SetNodeValue conversion, which has no vector2 -> float3 widening. */
+static void SetMaterialXNodeValue(Node *node, const SocketType &socket, const VtValue &value)
+{
+  const bool float3_socket = socket.type == SocketType::COLOR ||
+                             socket.type == SocketType::VECTOR ||
+                             socket.type == SocketType::POINT ||
+                             socket.type == SocketType::NORMAL;
+  if (float3_socket && !value.CanCast<GfVec3f>() && value.CanCast<GfVec2f>()) {
+    const GfVec2f vector2 = VtValue::Cast<GfVec2f>(value).UncheckedGet<GfVec2f>();
+    SetNodeValue(node, socket, VtValue(GfVec3f(vector2[0], vector2[1], 0.0f)));
+    return;
+  }
+  SetNodeValue(node, socket, value);
+}
+
 static bool ValidateMaterialXColor4Network(const HdMaterialNetworkSchema &network)
 {
   HdMaterialNodeContainerSchema nodes = network.GetNodes();
@@ -1361,7 +1377,7 @@ void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
       }
       else {
         for (ShaderInput *input : endpointIt->second) {
-          SetNodeValue(input->parent, input->socket_type, value);
+          SetMaterialXNodeValue(input->parent, input->socket_type, value);
         }
       }
       continue;
@@ -1371,7 +1387,7 @@ void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
     const SocketType *input = nullptr;
     for (const SocketType &socket : nodeDesc.node->type->inputs) {
       if (string_iequals(socket.name.string(), inputName) ||
-          (nodeDesc.match_socket_ui_name && socket.ui_name == inputName))
+          (nodeDesc.is_stock_node && socket.ui_name == inputName))
       {
         input = &socket;
         break;
@@ -1386,7 +1402,12 @@ void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
       continue;
     }
 
-    SetNodeValue(nodeDesc.node, *input, value);
+    if (nodeDesc.is_stock_node) {
+      SetNodeValue(nodeDesc.node, *input, value);
+    }
+    else {
+      SetMaterialXNodeValue(nodeDesc.node, *input, value);
+    }
   }
 }
 
@@ -4733,7 +4754,7 @@ bool HdCyclesMaterial::PopulateShaderGraphInternal(
       }
 
       ustring cyclesType(nodeTypeId);
-      nodeDesc.match_socket_ui_name = !nodeTypeId.starts_with("ND_");
+      nodeDesc.is_stock_node = !nodeTypeId.starts_with("ND_");
       if (nodeTypeId.starts_with("cycles_") || nodeTypeId.starts_with("cycles:")) {
         /* Native Cycles note embedded in USDShade. */
         cyclesType = nodeTypeId.substr(strlen("cycles_"));
