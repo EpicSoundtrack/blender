@@ -7,7 +7,7 @@
 #include "scene/background.h"
 #include "scene/integrator.h"
 #include "scene/light.h"
-#ifdef WITH_USD
+#if defined(WITH_USD) && defined(WITH_MATERIALX)
 #  include "materialx/authority_pipeline.h"
 #endif
 #include "scene/osl.h"
@@ -16,7 +16,9 @@
 #include "scene/shader_nodes.h"
 
 #include "blender/image.h"
-#include "blender/materialx_authority.h"
+#if defined(WITH_USD) && defined(WITH_MATERIALX)
+#  include "blender/materialx_authority.h"
+#endif
 #include "blender/sync.h"
 #include "blender/util.h"
 
@@ -80,7 +82,7 @@ static EmissionSampling get_emission_sampling(blender::PointerRNA &ptr)
       ptr, "emission_sampling", EMISSION_SAMPLING_NUM, EMISSION_SAMPLING_AUTO);
 }
 
-#ifdef WITH_USD
+#if defined(WITH_USD) && defined(WITH_MATERIALX)
 /**
  * Read the explicit Material ID-property authority contract.
  *
@@ -1735,7 +1737,7 @@ void BlenderSync::sync_materials(blender::Depsgraph &b_depsgraph,
       /* Create the ephemeral render graph from the explicitly selected
        * USDShade source.
        * Normal Cycles materials keep their existing path. */
-#ifdef WITH_USD
+#if defined(WITH_USD) && defined(WITH_MATERIALX)
       const bool materialx_source_selected = build_materialx_graph_from_id_authority(
           b_mat, *b_data, graph.get());
 #else

@@ -22,7 +22,6 @@ set(SRC
   light.cpp
   light_linking.cpp
   mesh.cpp
-  materialx_authority.cpp
   object.cpp
   object_cull.cpp
   output_driver.cpp
@@ -45,7 +44,6 @@ set(SRC
   id_map.h
   image.h
   light_linking.h
-  materialx_authority.h
   object_cull.h
   output_driver.h
   sync.h
@@ -71,7 +69,6 @@ set(LIB
   PRIVATE cycles_device
   PRIVATE cycles_graph
   PRIVATE cycles_kernel
-  PRIVATE cycles_materialx
   PRIVATE cycles_scene
   PRIVATE cycles_session
   PRIVATE cycles_subd
@@ -83,6 +80,17 @@ set(LIB
   PRIVATE bf::dependencies::optional::openvdb
   PRIVATE bf::dependencies::optional::osl
 )
+
+# MaterialX-only: native USDShade authority lookup and lowering (cycles_materialx).
+if(WITH_MATERIALX)
+  list(APPEND SRC
+    materialx_authority.cpp
+    materialx_authority.h
+  )
+  list(APPEND LIB
+    PRIVATE cycles_materialx
+  )
+endif()
 
 set(ADDON_FILES
   addon/__init__.py
@@ -123,7 +131,7 @@ add_dependencies(bf_intern_cycles bf_rna)
 delayed_install(${CMAKE_CURRENT_SOURCE_DIR} "${ADDON_FILES}" ${CYCLES_INSTALL_PATH})
 
 # Actual localized Material copies and a separate preview Main; no render execution.
-if(WITH_GTESTS)
+if(WITH_GTESTS AND WITH_MATERIALX)
   blender_add_test_suite_lib(cycles_blender_authority
     "materialx_authority_test.cpp"
     "${INC}"
