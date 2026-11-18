@@ -11432,6 +11432,100 @@ TEST(materialx_usdshade_reader, reads_and_lowers_linked_attribute_reader_fallbac
   }
 }
 
+/* Batch 30 (b30x geomaf1 packed ND_geompropvalue_color4: C1/C2 read 0 in every
+ * region while OVRTX passed): ND_extract_color4 RGB off a linked-'default'
+ * color4 reader must read the selected ".fallback_result", not the raw
+ * zero-fallback AttributeNode registered under the reader's own name. */
+TEST(materialx_usdshade_reader, lowers_extract_color4_rgb_off_linked_attribute_fallback)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/LinkedFallbackExtract"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  const pxr::SdfValueTypeName color4 = pxr::SdfValueTypeNames->Color4f;
+  pxr::UsdShadeShader constant = shader("Fallback", "ND_constant_color4", color4);
+  constant.CreateInput(pxr::TfToken("value"), color4)
+      .Set(pxr::GfVec4f(0.625f, -1.25f, 2.75f, -0.125f));
+  pxr::UsdShadeShader reader = shader("Reader", "ND_geompropvalue_color4", color4);
+  reader.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+      .Set(string("materialx_absent_primvar"));
+  ASSERT_TRUE(reader.CreateInput(pxr::TfToken("default"), color4)
+                  .ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+  vector<pxr::UsdShadeShader> extracts;
+  for (int index = 0; index < 4; index++) {
+    pxr::UsdShadeShader extract = shader(("Extract" + std::to_string(index)).c_str(),
+                                         "ND_extract_color4", pxr::SdfValueTypeNames->Float);
+    ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), color4)
+                    .ConnectToSource(reader.ConnectableAPI(), pxr::TfToken("out")));
+    extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(index);
+    extracts.push_back(extract);
+  }
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  for (int index = 0; index < 4; index++) {
+    ASSERT_TRUE(surface
+                    .CreateInput(pxr::TfToken("unused_extract" + std::to_string(index)),
+                                 pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(extracts[index].ConnectableAPI(), pxr::TfToken("out")));
+  }
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  vector<materialx::SelectedOutput> selected;
+  for (const pxr::UsdShadeShader &extract : extracts) {
+    selected.push_back(
+        {extract.GetPath().GetString(), "ND_extract_color4", "out", materialx::Type::Float});
+  }
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs,
+                                                  &error))
+      << error;
+  bool linked_reader = false;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_geompropvalue_color4") {
+      linked_reader = true;
+      ASSERT_TRUE(node.links.count("fallback"));
+    }
+  }
+  ASSERT_TRUE(linked_reader);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  const auto ends_with = [](const string &name, const string &suffix) {
+    return name.size() >= suffix.size() &&
+           name.compare(name.size() - suffix.size(), suffix.size(), suffix) == 0;
+  };
+  int rgb_separates = 0;
+  for (ShaderNode *node : lowered.nodes) {
+    if (!dynamic_cast<SeparateColorNode *>(node)) {
+      continue;
+    }
+    ShaderInput *color = node->input("Color");
+    ASSERT_NE(color, nullptr);
+    ASSERT_NE(color->link, nullptr);
+    /* A Vector -> Color connection goes through an inserted ConvertNode. */
+    ShaderNode *source = color->link->parent;
+    if (!dynamic_cast<AttributeNode *>(source) && !ends_with(source->name.string(), ".fallback_result") &&
+        !source->inputs.empty() && source->inputs[0]->link)
+    {
+      source = source->inputs[0]->link->parent;
+    }
+    rgb_separates++;
+    /* The raw zero-fallback reader reads 0 where the attribute is absent. */
+    EXPECT_EQ(dynamic_cast<AttributeNode *>(source), nullptr) << source->name;
+    EXPECT_TRUE(ends_with(source->name.string(), ".fallback_result")) << source->name;
+  }
+  EXPECT_EQ(rgb_separates, 3);
+}
+
 /* Batch 29 (port of candidate read_projected_uniform_float_name): the add-on's
  * uniform String -> Float projection keeps the public String connection and adds a
  * private descriptor naming the derived float attribute on the consumer. */

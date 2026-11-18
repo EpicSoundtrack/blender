@@ -30529,8 +30529,16 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
            * "Color" socket -- ND_hextiledimage_color4's RGB is a
            * VectorMathNode "Vector" (packet-i C1 access violation in
            * ShaderGraph::connect). Resolve through lowered_output() and
-           * refuse rather than dereference a missing socket. */
-          ShaderOutput *rgb = image->output("Color");
+           * refuse rather than dereference a missing socket.
+           * Batch 30: a linked-'default' ND_geompropvalue_color4 registers its
+           * zero-fallback AttributeNode under the node's own name, so its
+           * "Color" is the raw read (0 where the attribute is absent); the
+           * selected value is the ".fallback_result" that lowered_output()
+           * returns (b30x geomaf1 packed color4: C1/C2 0 in all regions). */
+          const Node &source = *nodes_by_name.at(input->second.source_node);
+          ShaderOutput *rgb = is_linked_attribute_fallback(source) ?
+                                  lowered_output(input->second, nodes_by_name, lowered_nodes) :
+                                  image->output("Color");
           if (rgb == nullptr) {
             rgb = lowered_output(input->second, nodes_by_name, lowered_nodes);
           }
