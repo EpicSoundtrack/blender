@@ -909,7 +909,7 @@ TEST_F(materialx_principled_kernel, glass_original_anisotropic_actual_svm)
     for (const bool linked : {false, true}) {
     SCOPED_TRACE(linked);
     ShaderGraph graph;
-    GlassBsdfNode *glass = graph.create_node<GlassBsdfNode>();
+    MaterialXGlassBsdfNode *glass = graph.create_node<MaterialXGlassBsdfNode>();
     glass->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
     glass->set_IOR(c.ior);
     glass->set_thin_film_thickness(c.thickness);
@@ -938,9 +938,9 @@ TEST_F(materialx_principled_kernel, glass_original_anisotropic_actual_svm)
     const int header_offset = 1 + sizeof(SVMNodeClosureSetWeight) / sizeof(uint);
     const int data_offset = header_offset + 1 + sizeof(SVMNodeClosureBsdf) / sizeof(uint);
     ASSERT_EQ(words.at(0), uint(NODE_CLOSURE_SET_WEIGHT));
-    ASSERT_EQ(words.at(header_offset), uint(NODE_CLOSURE_BSDF));
-    ASSERT_EQ(words.size(), data_offset + sizeof(SVMNodeGlassBsdfData) / sizeof(uint));
-    SVMNodeGlassBsdfData packed;
+    ASSERT_EQ(words.at(header_offset), uint(NODE_MATERIALX_CLOSURE_BSDF));
+    ASSERT_EQ(words.size(), data_offset + sizeof(SVMNodeMaterialXGlassBsdfData) / sizeof(uint));
+    SVMNodeMaterialXGlassBsdfData packed;
     memcpy(&packed, words.data() + data_offset, sizeof(packed));
     EXPECT_FLOAT_EQ(stack_load(stack.data(), packed.tangent).x, 1.0f)
         << "packed tangent bits " << packed.tangent.x.bits << " offset " << tangent_offset;
@@ -952,10 +952,10 @@ TEST_F(materialx_principled_kernel, glass_original_anisotropic_actual_svm)
     ShaderData sd{};
     sd.N = sd.Ng = sd.wi = make_float3(0.0f, 0.0f, 1.0f);
     sd.num_closure_left = MAX_CLOSURE;
-    EXPECT_EQ((svm_node_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
+    EXPECT_EQ((svm_node_materialx_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
                   &kg, &sd, stack.data(), one_spectrum(), header,
                   PATH_RAY_VISIBILITY_CAMERA, 0, data_offset)), words.size());
-    EXPECT_EQ(svm_node_closure_bsdf_skip(data_offset, header.closure_type), words.size());
+    EXPECT_EQ(svm_node_materialx_closure_bsdf_skip(data_offset, header.closure_type), words.size());
     ASSERT_EQ(sd.num_closure, 1);
     const MicrofacetBsdf *bsdf = reinterpret_cast<const MicrofacetBsdf *>(&sd.closure[0]);
     EXPECT_NEAR(bsdf->alpha_x, c.alpha_x, 1e-6f);

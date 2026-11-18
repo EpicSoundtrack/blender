@@ -396,7 +396,7 @@ TEST(materialx_graph, standard_surface_latent_sss_and_film_defaults_match_explic
       EXPECT_FLOAT_EQ(p->get_thin_film_ior(), 1.5f);
       bool saw_glass = false;
       for (ShaderNode *n : lowered.nodes)
-        if (auto *g = dynamic_cast<GlassBsdfNode *>(n)) {
+        if (auto *g = dynamic_cast<MaterialXGlassBsdfNode *>(n)) {
           saw_glass = true;
           EXPECT_FLOAT_EQ(g->get_thin_film_ior(), 1.5f);
         }

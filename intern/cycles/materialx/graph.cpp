@@ -1317,7 +1317,7 @@ bool glass_alpha_subset_ok(const float2 alpha)
 }
 
 void configure_materialx_glass(ShaderGraph *graph,
-                              GlassBsdfNode *glass,
+                              MaterialXGlassBsdfNode *glass,
                               const Node &node,
                               const float2 alpha,
                               const float alpha_floor,
@@ -13982,7 +13982,7 @@ bool validate(const Graph &source,
         const auto roughness = node.vector2_inputs.find("roughness");
         /* Only the explicit scatter_mode="RT" (full glass: reflection +
          * transmission via a single Fresnel-weighted closure) maps onto a
-         * real Cycles closure (GlassBsdfNode). scatter_mode="R" (the
+         * real Cycles closure (MaterialXGlassBsdfNode). scatter_mode="R" (the
          * MaterialX default) has no equivalent: GlossyBsdfNode has no IOR/
          * Fresnel input at all (only a flat color tint), so a dielectric
          * reflection-only lobe with a physical IOR can't be represented.
@@ -16739,7 +16739,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
      * block-nesting limit (C1061). */
     if (node.nodedef == dielectric_bsdf_id) {
       const float weight = node.inputs.contains("weight") ? node.inputs.at("weight") : 1.0f;
-      GlassBsdfNode *glass = graph->create_node<GlassBsdfNode>();
+      MaterialXGlassBsdfNode *glass = graph->create_node<MaterialXGlassBsdfNode>();
       glass->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
       if (!node.links.contains("tint")) {
         const float3 tint = node.color3_inputs.contains("tint") ?
@@ -24389,7 +24389,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         }
 
         if (has_standard_surface_transmission(node)) {
-          GlassBsdfNode *transmission = graph->create_node<GlassBsdfNode>();
+          MaterialXGlassBsdfNode *transmission = graph->create_node<MaterialXGlassBsdfNode>();
           transmission->name = node.name + ".standard_surface_transmission";
           transmission->set_color(one_float3());
           transmission->set_roughness(0.2f);
@@ -24695,7 +24695,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           lowered = metallic;
         }
         else if (node.nodedef == lama_iridescence_id) {
-          GlassBsdfNode *glass = graph->create_node<GlassBsdfNode>();
+          MaterialXGlassBsdfNode *glass = graph->create_node<MaterialXGlassBsdfNode>();
           glass->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
           glass->set_color(make_float3(1.0f, 1.0f, 1.0f));
           glass->set_IOR(1.0f);

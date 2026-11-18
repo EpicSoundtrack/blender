@@ -708,11 +708,6 @@ class GlassBsdfNode : public BsdfNode {
  public:
   SHADER_NODE_CLASS(GlassBsdfNode)
 
-  NODE_SOCKET_API(float, alpha_x)
-  NODE_SOCKET_API(float, alpha_y)
-  NODE_SOCKET_API(float, rotation)
-  NODE_SOCKET_API(float3, tangent)
-
   ClosureType get_closure_type() override
   {
     return distribution;
@@ -1948,6 +1943,34 @@ class MaterialXSubsurfaceScatteringNode : public BsdfNode {
   NODE_SOCKET_API(float, subsurface_roughness)
   NODE_SOCKET_API(float, subsurface_anisotropy)
   NODE_SOCKET_API(ClosureType, method)
+};
+
+/* MaterialX dielectric_bsdf / lama dielectric and the standard_surface / open_pbr
+ * transmission lobes: the stock Glass closure plus physical (possibly anisotropic)
+ * Alpha X/Y overrides with rotation and tangent. */
+class MaterialXGlassBsdfNode : public BsdfNode {
+ public:
+  SHADER_NODE_CLASS(MaterialXGlassBsdfNode)
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_MATERIALX_CLOSURE_BSDF;
+  }
+
+  NODE_SOCKET_API(float, alpha_x)
+  NODE_SOCKET_API(float, alpha_y)
+  NODE_SOCKET_API(float, rotation)
+  NODE_SOCKET_API(float3, tangent)
+
+  ClosureType get_closure_type() override
+  {
+    return distribution;
+  }
+
+  NODE_SOCKET_API(float, roughness)
+  NODE_SOCKET_API(float, IOR)
+  NODE_SOCKET_API(float, thin_film_thickness)
+  NODE_SOCKET_API(float, thin_film_ior)
+  NODE_SOCKET_API(ClosureType, distribution)
 };
 
 /* MaterialX blackbody: mx_blackbody (MaterialX pbrlib) instead of Blender's model. */

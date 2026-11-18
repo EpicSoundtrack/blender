@@ -2423,11 +2423,6 @@ NODE_DEFINE(GlassBsdfNode)
   SOCKET_ENUM(
       distribution, "Distribution", distribution_enum, CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
   SOCKET_IN_FLOAT(roughness, "Roughness", 0.0f);
-  /* Negative physical alpha overrides retain the stock Roughness path. */
-  SOCKET_IN_FLOAT(alpha_x, "Alpha X", -1.0f);
-  SOCKET_IN_FLOAT(alpha_y, "Alpha Y", -1.0f);
-  SOCKET_IN_FLOAT(rotation, "Rotation", 0.0f);
-  SOCKET_IN_NORMAL(tangent, "Tangent", zero_float3());
   SOCKET_IN_FLOAT(IOR, "IOR", 1.5f);
 
   SOCKET_IN_FLOAT(thin_film_thickness, "Thin Film Thickness", 0.0f);
@@ -2451,10 +2446,6 @@ void GlassBsdfNode::compile(SVMCompiler &compiler)
                         .color = compiler.input_float3("Color"),
                         .roughness = compiler.input_float("Roughness"),
                         .ior = compiler.input_float("IOR"),
-                        .alpha_x = compiler.input_float("Alpha X"),
-                        .alpha_y = compiler.input_float("Alpha Y"),
-                        .rotation = compiler.input_float("Rotation"),
-                        .tangent = compiler.input_float3("Tangent"),
                         .thin_film_thickness = compiler.input_float("Thin Film Thickness"),
                         .thin_film_ior = compiler.input_float("Thin Film IOR"),
                         .normal_offset = compiler.input_link("Normal"),
@@ -8394,6 +8385,71 @@ bool MaterialXSubsurfaceScatteringNode::has_bssrdf_bump()
   ShaderInput *normal_in = input("Normal");
   return (normal_in->link &&
           normal_in->link->parent->special_type != SHADER_SPECIAL_TYPE_GEOMETRY);
+}
+
+/* MaterialX Glass BSDF */
+
+NODE_DEFINE(MaterialXGlassBsdfNode)
+{
+  NodeType *type = NodeType::add("materialx_glass_bsdf", create, NodeType::SHADER);
+
+  SOCKET_IN_COLOR(color, "Color", make_float3(0.8f, 0.8f, 0.8f));
+  SOCKET_IN_NORMAL(normal, "Normal", zero_float3(), SocketType::LINK_NORMAL);
+  SOCKET_IN_FLOAT(surface_mix_weight, "SurfaceMixWeight", 0.0f, SocketType::SVM_INTERNAL);
+
+  static NodeEnum distribution_enum;
+  distribution_enum.insert("beckmann", CLOSURE_BSDF_MICROFACET_BECKMANN_GLASS_ID);
+  distribution_enum.insert("ggx", CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
+  distribution_enum.insert("multi_ggx", CLOSURE_BSDF_MICROFACET_MULTI_GGX_GLASS_ID);
+  SOCKET_ENUM(
+      distribution, "Distribution", distribution_enum, CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
+  SOCKET_IN_FLOAT(roughness, "Roughness", 0.0f);
+  /* Negative physical alpha overrides retain the stock Roughness path. */
+  SOCKET_IN_FLOAT(alpha_x, "Alpha X", -1.0f);
+  SOCKET_IN_FLOAT(alpha_y, "Alpha Y", -1.0f);
+  SOCKET_IN_FLOAT(rotation, "Rotation", 0.0f);
+  SOCKET_IN_NORMAL(tangent, "Tangent", zero_float3());
+  SOCKET_IN_FLOAT(IOR, "IOR", 1.5f);
+
+  SOCKET_IN_FLOAT(thin_film_thickness, "Thin Film Thickness", 0.0f);
+  SOCKET_IN_FLOAT(thin_film_ior, "Thin Film IOR", 1.33f);
+
+  SOCKET_OUT_CLOSURE(BSDF, "BSDF");
+
+  return type;
+}
+
+MaterialXGlassBsdfNode::MaterialXGlassBsdfNode() : BsdfNode(get_node_type())
+{
+  closure = CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID;
+}
+
+void MaterialXGlassBsdfNode::compile(SVMCompiler &compiler)
+{
+  closure = distribution;
+  materialx_closure_compile(this,
+                            compiler,
+                            "Color",
+                            color,
+                            closure,
+                            SVMNodeMaterialXGlassBsdfData{
+                        .color = compiler.input_float3("Color"),
+                        .roughness = compiler.input_float("Roughness"),
+                        .ior = compiler.input_float("IOR"),
+                        .alpha_x = compiler.input_float("Alpha X"),
+                        .alpha_y = compiler.input_float("Alpha Y"),
+                        .rotation = compiler.input_float("Rotation"),
+                        .tangent = compiler.input_float3("Tangent"),
+                        .thin_film_thickness = compiler.input_float("Thin Film Thickness"),
+                        .thin_film_ior = compiler.input_float("Thin Film IOR"),
+                        .normal_offset = compiler.input_link("Normal"),
+                    });
+}
+
+void MaterialXGlassBsdfNode::compile(OSLCompiler &compiler)
+{
+  compiler.parameter(this, "distribution");
+  compiler.add(this, "node_materialx_glass_bsdf");
 }
 
 /* MaterialX Blackbody */

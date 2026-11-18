@@ -32,6 +32,10 @@ ccl_device_inline int svm_node_materialx_closure_bsdf_skip(int offset, const uin
     case CLOSURE_BSSRDF_RANDOM_WALK_LEGACY_ID:
     case CLOSURE_BSSRDF_RANDOM_WALK_SKIN_ID:
       return offset + sizeof(SVMNodeMaterialXBssrdfData) / sizeof(uint);
+    case CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID:
+    case CLOSURE_BSDF_MICROFACET_BECKMANN_GLASS_ID:
+    case CLOSURE_BSDF_MICROFACET_MULTI_GGX_GLASS_ID:
+      return offset + sizeof(SVMNodeMaterialXGlassBsdfData) / sizeof(uint);
     default: /* CLOSURE_BSDF_DIFFUSE_ID, CLOSURE_BSDF_BURLEY_ID. */
       return offset + sizeof(SVMNodeMaterialXDiffuseBsdfData) / sizeof(uint);
   }
@@ -176,6 +180,84 @@ ccl_device_noinline int svm_node_materialx_closure_bsdf(
           const Spectrum f82 = rgb_to_spectrum(tint);
           bsdf_microfacet_setup_fresnel_f82_tint(kg, bsdf, sd->wi, fresnel, f82, is_multiggx);
         }
+      }
+      break;
+    }
+    case CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID:
+    case CLOSURE_BSDF_MICROFACET_BECKMANN_GLASS_ID:
+    case CLOSURE_BSDF_MICROFACET_MULTI_GGX_GLASS_ID: {
+      const ccl_global SVMNodeMaterialXGlassBsdfData &bsdf_data = svm_node_get<SVMNodeMaterialXGlassBsdfData>(
+          kg, &offset);
+
+#ifdef __CAUSTICS_TRICKS__
+      const bool reflective_caustics = (kernel_data.integrator.caustics_reflective ||
+                                        (ray_visibility & PATH_RAY_VISIBILITY_DIFFUSE) == 0);
+      const bool refractive_caustics = (kernel_data.integrator.caustics_refractive ||
+                                        (ray_visibility & PATH_RAY_VISIBILITY_DIFFUSE) == 0);
+      if (!(reflective_caustics || refractive_caustics)) {
+        break;
+      }
+#else
+      const bool reflective_caustics = true;
+      const bool refractive_caustics = true;
+#endif
+
+      float3 N = stack_load_float3_default(stack, bsdf_data.normal_offset, sd->N);
+      N = safe_normalize_fallback(N, sd->N);
+
+      const float thinfilm_thickness = stack_load(stack, bsdf_data.thin_film_thickness);
+      const float thinfilm_ior = fmaxf(stack_load(stack, bsdf_data.thin_film_ior), 1e-5f);
+
+      ccl_private MicrofacetBsdf *bsdf = (ccl_private MicrofacetBsdf *)bsdf_alloc(
+          sd, sizeof(MicrofacetBsdf), make_spectrum(mix_weight));
+      ccl_private FresnelGeneralizedSchlick *fresnel =
+          (bsdf != nullptr) ? (ccl_private FresnelGeneralizedSchlick *)closure_alloc_extra(
+                                  sd, sizeof(FresnelGeneralizedSchlick)) :
+                              nullptr;
+
+      if (bsdf && fresnel) {
+        bsdf->N = maybe_ensure_valid_specular_reflection(sd, N);
+        bsdf->T = zero_float3();
+
+        const float ior = fmaxf(stack_load(stack, bsdf_data.ior), 1e-5f);
+        bsdf->ior = (sd->flag & SD_BACKFACING) ? 1.0f / ior : ior;
+        const float physical_alpha_x = stack_load(stack, bsdf_data.alpha_x);
+        const float physical_alpha_y = stack_load(stack, bsdf_data.alpha_y);
+        /* MaterialX lowering only: physical (possibly anisotropic) alpha overrides. */
+        const bool materialx_alpha = physical_alpha_x >= 0.0f && physical_alpha_y >= 0.0f;
+        if (materialx_alpha) {
+          bsdf->alpha_x = physical_alpha_x;
+          bsdf->alpha_y = physical_alpha_y;
+        }
+        else {
+          bsdf->alpha_x = bsdf->alpha_y = sqr(saturatef(stack_load(stack, bsdf_data.roughness)));
+        }
+        if (bsdf->alpha_x != bsdf->alpha_y) {
+          bsdf->T = safe_normalize(stack_load(stack, bsdf_data.tangent));
+          const float rotation = stack_load(stack, bsdf_data.rotation);
+          if (rotation != 0.0f) {
+            bsdf->T = rotate_around_axis(bsdf->T, bsdf->N, rotation * M_2PI_F);
+          }
+        }
+
+        fresnel->f0 = make_float3(F0_from_ior(ior));
+        fresnel->f90 = one_spectrum();
+        fresnel->exponent = -ior;
+        const float3 color = max(stack_load(stack, bsdf_data.color), zero_float3());
+        fresnel->reflection_tint = reflective_caustics ? rgb_to_spectrum(color) : zero_spectrum();
+        fresnel->transmission_tint = refractive_caustics ? rgb_to_spectrum(color) :
+                                                           zero_spectrum();
+        fresnel->thin_film.thickness = thinfilm_thickness;
+        fresnel->thin_film.ior = (sd->flag & SD_BACKFACING) ? thinfilm_ior / ior : thinfilm_ior;
+        /* setup bsdf */
+        if (type == CLOSURE_BSDF_MICROFACET_BECKMANN_GLASS_ID) {
+          sd->flag |= bsdf_microfacet_beckmann_glass_setup(bsdf, materialx_alpha);
+        }
+        else {
+          sd->flag |= bsdf_microfacet_ggx_glass_setup(bsdf, materialx_alpha);
+        }
+        const bool is_multiggx = (type == CLOSURE_BSDF_MICROFACET_MULTI_GGX_GLASS_ID);
+        bsdf_microfacet_setup_fresnel_generalized_schlick(kg, bsdf, sd->wi, fresnel, is_multiggx);
       }
       break;
     }

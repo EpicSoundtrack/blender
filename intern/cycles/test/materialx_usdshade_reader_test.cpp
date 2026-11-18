@@ -27656,9 +27656,9 @@ TEST(materialx_usdshade_reader, reads_dielectric_original_candidate_anisotropic_
   ASSERT_TRUE(materialx::validate(source));
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
-  GlassBsdfNode *glass = nullptr;
+  MaterialXGlassBsdfNode *glass = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    glass = node->name == "Original" ? dynamic_cast<GlassBsdfNode *>(node) : glass;
+    glass = node->name == "Original" ? dynamic_cast<MaterialXGlassBsdfNode *>(node) : glass;
   }
   ASSERT_NE(glass, nullptr);
   EXPECT_EQ(glass->get_distribution(), CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
@@ -27729,9 +27729,9 @@ TEST(materialx_usdshade_reader, reads_lama_iridescence_original_candidate_anisot
   ASSERT_TRUE(materialx::validate(source));
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
-  GlassBsdfNode *glass = nullptr;
+  MaterialXGlassBsdfNode *glass = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    glass = node->name == "Original" ? dynamic_cast<GlassBsdfNode *>(node) : glass;
+    glass = node->name == "Original" ? dynamic_cast<MaterialXGlassBsdfNode *>(node) : glass;
   }
   ASSERT_NE(glass, nullptr);
   EXPECT_EQ(glass->get_distribution(), CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
@@ -27796,9 +27796,9 @@ TEST(materialx_usdshade_reader, reads_lama_iridescence_isotropic_defaults)
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  GlassBsdfNode *native_glass = nullptr;
+  MaterialXGlassBsdfNode *native_glass = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    native_glass = node->name == "Iridescence" ? dynamic_cast<GlassBsdfNode *>(node) : native_glass;
+    native_glass = node->name == "Iridescence" ? dynamic_cast<MaterialXGlassBsdfNode *>(node) : native_glass;
   }
   ASSERT_NE(native_glass, nullptr);
   EXPECT_FLOAT_EQ(native_glass->get_IOR(), 1.0f);
@@ -27846,9 +27846,9 @@ TEST(materialx_usdshade_reader, reads_lama_iridescence_roughness_floor_and_one_b
 
     ShaderGraph lowered;
     ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
-    GlassBsdfNode *native_glass = nullptr;
+    MaterialXGlassBsdfNode *native_glass = nullptr;
     for (ShaderNode *node : lowered.nodes) {
-      native_glass = node->name == "Iridescence" ? dynamic_cast<GlassBsdfNode *>(node) :
+      native_glass = node->name == "Iridescence" ? dynamic_cast<MaterialXGlassBsdfNode *>(node) :
                                                    native_glass;
     }
     ASSERT_NE(native_glass, nullptr);
@@ -29207,12 +29207,12 @@ TEST(materialx_usdshade_reader, standard_surface_amber_depth_preserves_linked_tr
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(parsed, &lowered, &error)) << error;
   VolumeCoefficientsNode *volume = nullptr;
-  GlassBsdfNode *glass = nullptr;
+  MaterialXGlassBsdfNode *glass = nullptr;
   ShaderNode *native_tint = nullptr;
   const string tint_name = read_surface->links.at("transmission_color").source_node;
   for (ShaderNode *node : lowered.nodes) {
     if (auto *candidate = dynamic_cast<VolumeCoefficientsNode *>(node)) volume = candidate;
-    if (auto *candidate = dynamic_cast<GlassBsdfNode *>(node)) glass = candidate;
+    if (auto *candidate = dynamic_cast<MaterialXGlassBsdfNode *>(node)) glass = candidate;
     if (node->name == tint_name) native_tint = node;
   }
   ASSERT_NE(volume, nullptr);
@@ -32034,7 +32034,7 @@ TEST(materialx_usdshade_reader, reads_and_lowers_generic_surface_requested_bsdf_
       {"ND_translucent_bsdf", "translucent_bsdf"},
       {"ND_subsurface_bsdf", "materialx_subsurface_scattering"},
       {"ND_conductor_bsdf", "materialx_metallic_bsdf"},
-      {"ND_dielectric_bsdf", "glass_bsdf"},
+      {"ND_dielectric_bsdf", "materialx_glass_bsdf"},
   };
 
   for (const Case &c : cases) {
@@ -46634,9 +46634,9 @@ TEST(materialx_usdshade_reader, lama_iridescence_connected_film_controls)
   EXPECT_TRUE(mix->links.contains("fg"));
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
-  GlassBsdfNode *glass = nullptr;
+  MaterialXGlassBsdfNode *glass = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    glass = node->name == "Iridescence" ? dynamic_cast<GlassBsdfNode *>(node) : glass;
+    glass = node->name == "Iridescence" ? dynamic_cast<MaterialXGlassBsdfNode *>(node) : glass;
   }
   ASSERT_NE(glass, nullptr);
   EXPECT_NE(glass->input("Thin Film Thickness")->link, nullptr);

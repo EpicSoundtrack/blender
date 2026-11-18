@@ -68,6 +68,7 @@ set(SRC_OSL
   node_normal_map.osl
   node_materialx_cell_noise.osl
   node_materialx_diffuse_bsdf.osl
+  node_materialx_glass_bsdf.osl
   node_materialx_metallic_bsdf.osl
   node_materialx_heighttonormal.osl
   node_materialx_noise.osl

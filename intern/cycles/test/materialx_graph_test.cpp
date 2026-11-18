@@ -861,7 +861,13 @@ TEST(materialx_graph, stock_bsdf_hidden_materialx_sockets_default_to_stock)
   EXPECT_EQ(metallic->get_tint(), one_float3());
   EXPECT_LT(metallic->get_alpha_x(), 0.0f);
   EXPECT_LT(metallic->get_alpha_y(), 0.0f);
-  const GlassBsdfNode *glass = graph.create_node<GlassBsdfNode>();
+  const GlassBsdfNode *stock_glass = graph.create_node<GlassBsdfNode>();
+  for (const char *name : {"alpha_x", "alpha_y", "rotation", "tangent"}) {
+    EXPECT_EQ(stock_glass->type->find_input(ustring(name)), nullptr) << name;
+  }
+  EXPECT_EQ(stock_glass->shader_node_type(), NODE_CLOSURE_BSDF);
+  const MaterialXGlassBsdfNode *glass = graph.create_node<MaterialXGlassBsdfNode>();
+  EXPECT_EQ(glass->shader_node_type(), NODE_MATERIALX_CLOSURE_BSDF);
   EXPECT_LT(glass->get_alpha_x(), 0.0f);
   EXPECT_LT(glass->get_alpha_y(), 0.0f);
   const PrincipledBsdfNode *principled = graph.create_node<PrincipledBsdfNode>();
@@ -20282,7 +20288,7 @@ TEST(materialx_graph, lowers_standard_surface_to_native_closure_composition)
 
   PrincipledBsdfNode *principled = nullptr;
   SheenBsdfNode *sheen = nullptr;
-  GlassBsdfNode *transmission = nullptr;
+  MaterialXGlassBsdfNode *transmission = nullptr;
   GlossyBsdfNode *coat = nullptr;
   MixClosureNode *transmission_mix = nullptr;
   AddClosureNode *sheen_sum = nullptr;
@@ -20290,7 +20296,7 @@ TEST(materialx_graph, lowers_standard_surface_to_native_closure_composition)
   for (ShaderNode *node : graph.nodes) {
     principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
     sheen = sheen ? sheen : dynamic_cast<SheenBsdfNode *>(node);
-    transmission = transmission ? transmission : dynamic_cast<GlassBsdfNode *>(node);
+    transmission = transmission ? transmission : dynamic_cast<MaterialXGlassBsdfNode *>(node);
     coat = coat ? coat : dynamic_cast<GlossyBsdfNode *>(node);
     if (node->name == "StandardSurface.standard_surface_transmission_mix") {
       transmission_mix = dynamic_cast<MixClosureNode *>(node);
@@ -21363,9 +21369,9 @@ TEST(materialx_graph, lowers_dielectric_bsdf_rt_glass)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{node}}, &graph));
 
-  GlassBsdfNode *glass = nullptr;
+  MaterialXGlassBsdfNode *glass = nullptr;
   for (ShaderNode *n : graph.nodes) {
-    glass = n->name == "Glass" ? dynamic_cast<GlassBsdfNode *>(n) : glass;
+    glass = n->name == "Glass" ? dynamic_cast<MaterialXGlassBsdfNode *>(n) : glass;
   }
   ASSERT_NE(glass, nullptr);
   EXPECT_EQ(glass->get_distribution(), CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID);
@@ -21387,9 +21393,9 @@ TEST(materialx_graph, lowers_dielectric_alpha_to_glass_perceptual_roughness_bsdf
   string error;
   ASSERT_TRUE(materialx::lower({{dielectric}}, &graph, &error)) << error;
 
-  GlassBsdfNode *glass = nullptr;
+  MaterialXGlassBsdfNode *glass = nullptr;
   for (ShaderNode *node : graph.nodes) {
-    glass = node->name == "DielectricAlpha" ? dynamic_cast<GlassBsdfNode *>(node) : glass;
+    glass = node->name == "DielectricAlpha" ? dynamic_cast<MaterialXGlassBsdfNode *>(node) : glass;
   }
   ASSERT_NE(glass, nullptr);
   EXPECT_FLOAT_EQ(glass->get_roughness(), std::sqrt(0.1f));
@@ -21414,9 +21420,9 @@ TEST(materialx_graph, lowers_dielectric_alpha_to_glass_perceptual_roughness_surf
   string error;
   ASSERT_TRUE(materialx::lower({{dielectric, surface}}, &graph, &error)) << error;
 
-  GlassBsdfNode *glass = nullptr;
+  MaterialXGlassBsdfNode *glass = nullptr;
   for (ShaderNode *node : graph.nodes) {
-    glass = node->name == "DielectricAlpha" ? dynamic_cast<GlassBsdfNode *>(node) : glass;
+    glass = node->name == "DielectricAlpha" ? dynamic_cast<MaterialXGlassBsdfNode *>(node) : glass;
   }
   ASSERT_NE(glass, nullptr);
   EXPECT_FLOAT_EQ(glass->get_roughness(), std::sqrt(0.1f));
@@ -21440,9 +21446,9 @@ TEST(materialx_graph, lowers_dielectric_alpha_boundaries_to_glass_perceptual_rou
     string error;
     ASSERT_TRUE(materialx::lower({{dielectric}}, &graph, &error)) << error;
 
-    GlassBsdfNode *glass = nullptr;
+    MaterialXGlassBsdfNode *glass = nullptr;
     for (ShaderNode *node : graph.nodes) {
-      glass = node->name == "DielectricBoundary" ? dynamic_cast<GlassBsdfNode *>(node) : glass;
+      glass = node->name == "DielectricBoundary" ? dynamic_cast<MaterialXGlassBsdfNode *>(node) : glass;
     }
     ASSERT_NE(glass, nullptr);
     EXPECT_FLOAT_EQ(glass->get_roughness(), test_case.second);
@@ -21467,9 +21473,9 @@ TEST(materialx_graph, lowers_lama_iridescence_alpha_to_glass_perceptual_roughnes
   string error;
   ASSERT_TRUE(materialx::lower({{iridescence, surface}}, &graph, &error)) << error;
 
-  GlassBsdfNode *glass = nullptr;
+  MaterialXGlassBsdfNode *glass = nullptr;
   for (ShaderNode *node : graph.nodes) {
-    glass = node->name == "IridescenceAlpha" ? dynamic_cast<GlassBsdfNode *>(node) : glass;
+    glass = node->name == "IridescenceAlpha" ? dynamic_cast<MaterialXGlassBsdfNode *>(node) : glass;
   }
   ASSERT_NE(glass, nullptr);
   EXPECT_FLOAT_EQ(glass->get_roughness(), 0.2f);
@@ -21498,9 +21504,9 @@ TEST(materialx_graph, lowers_lama_iridescence_alpha_boundaries_to_glass_perceptu
     string error;
     ASSERT_TRUE(materialx::lower({{iridescence, surface}}, &graph, &error)) << error;
 
-    GlassBsdfNode *glass = nullptr;
+    MaterialXGlassBsdfNode *glass = nullptr;
     for (ShaderNode *node : graph.nodes) {
-      glass = node->name == "IridescenceBoundary" ? dynamic_cast<GlassBsdfNode *>(node) : glass;
+      glass = node->name == "IridescenceBoundary" ? dynamic_cast<MaterialXGlassBsdfNode *>(node) : glass;
     }
     ASSERT_NE(glass, nullptr);
     EXPECT_FLOAT_EQ(glass->get_roughness(), test_case.second);
@@ -23109,7 +23115,7 @@ TEST(materialx_graph,
   ASSERT_TRUE(materialx::lower({{surface}}, &graph));
   graph.expand_weights();
   for (ShaderNode *node : graph.nodes) {
-    if (dynamic_cast<GlassBsdfNode *>(node)) {
+    if (dynamic_cast<MaterialXGlassBsdfNode *>(node)) {
       ss_audit_expect_color(ss_audit_effective_color(node), zero_float3());
     }
     if (auto *principled = dynamic_cast<PrincipledBsdfNode *>(node)) {
@@ -23220,7 +23226,7 @@ TEST(materialx_graph, standard_surface_optional_lobes_use_mapped_sdk_defaults)
       ss_audit_expect_color(ss_audit_color_input(coat->input("Color")), make_float3(0.25f));
       EXPECT_FLOAT_EQ(coat->get_roughness(), 0.1f);
     }
-    if (auto *glass = dynamic_cast<GlassBsdfNode *>(node)) {
+    if (auto *glass = dynamic_cast<MaterialXGlassBsdfNode *>(node)) {
       ++seen;
       ss_audit_expect_color(ss_audit_color_input(glass->input("Color")), one_float3());
       EXPECT_FLOAT_EQ(glass->get_roughness(), 0.2f);
@@ -23568,10 +23574,10 @@ TEST(materialx_graph, standard_surface_literal_depth_creates_beer_volume)
   string error;
   ASSERT_TRUE(materialx::lower({{source}}, &graph, &error)) << error;
   VolumeCoefficientsNode *volume = nullptr;
-  GlassBsdfNode *glass = nullptr;
+  MaterialXGlassBsdfNode *glass = nullptr;
   for (ShaderNode *node : graph.nodes) {
     if (auto *candidate = dynamic_cast<VolumeCoefficientsNode *>(node)) volume = candidate;
-    if (auto *candidate = dynamic_cast<GlassBsdfNode *>(node)) glass = candidate;
+    if (auto *candidate = dynamic_cast<MaterialXGlassBsdfNode *>(node)) glass = candidate;
   }
   ASSERT_NE(volume, nullptr);
   ASSERT_NE(glass, nullptr);
@@ -23599,11 +23605,11 @@ TEST(materialx_graph, standard_surface_linked_color_depth_drives_beer_volume)
   string error;
   ASSERT_TRUE(materialx::lower({{tint, surface}}, &graph, &error)) << error;
   VolumeCoefficientsNode *volume = nullptr;
-  GlassBsdfNode *glass = nullptr;
+  MaterialXGlassBsdfNode *glass = nullptr;
   ShaderNode *native_tint = nullptr;
   for (ShaderNode *node : graph.nodes) {
     if (auto *candidate = dynamic_cast<VolumeCoefficientsNode *>(node)) volume = candidate;
-    if (auto *candidate = dynamic_cast<GlassBsdfNode *>(node)) glass = candidate;
+    if (auto *candidate = dynamic_cast<MaterialXGlassBsdfNode *>(node)) glass = candidate;
     if (node->name == tint.name) native_tint = node;
   }
   ASSERT_NE(volume, nullptr);

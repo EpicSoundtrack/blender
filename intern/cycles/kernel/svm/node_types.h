@@ -157,6 +157,24 @@ struct SVMNodeMaterialXBssrdfData {
 static_assert(alignof(SVMNodeMaterialXBssrdfData) <= alignof(uint));
 static_assert(sizeof(SVMNodeMaterialXBssrdfData) % sizeof(uint) == 0);
 
+/* NODE_MATERIALX_CLOSURE_BSDF data for the glass closures: the stock layout plus physical
+ * Alpha X/Y overrides (negative = stock roughness), rotation and a constant tangent. */
+struct SVMNodeMaterialXGlassBsdfData {
+  SVMInputFloat3 color;
+  SVMInputFloat roughness;
+  SVMInputFloat ior;
+  SVMInputFloat alpha_x;
+  SVMInputFloat alpha_y;
+  SVMInputFloat rotation;
+  SVMInputFloat3 tangent;
+  SVMInputFloat thin_film_thickness;
+  SVMInputFloat thin_film_ior;
+  SVMStackOffset normal_offset;
+  uint8_t _pad[3];
+};
+static_assert(alignof(SVMNodeMaterialXGlassBsdfData) <= alignof(uint));
+static_assert(sizeof(SVMNodeMaterialXGlassBsdfData) % sizeof(uint) == 0);
+
 /* NODE_MATERIALX_NOISE */
 struct SVMNodeMaterialXNoise {
   uint dimensions;
@@ -1180,10 +1198,6 @@ struct SVMNodeGlassBsdfData {
   SVMInputFloat3 color;
   SVMInputFloat roughness;
   SVMInputFloat ior;
-  SVMInputFloat alpha_x;
-  SVMInputFloat alpha_y;
-  SVMInputFloat rotation;
-  SVMInputFloat3 tangent;
   SVMInputFloat thin_film_thickness;
   SVMInputFloat thin_film_ior;
   SVMStackOffset normal_offset;
