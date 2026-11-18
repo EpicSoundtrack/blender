@@ -576,49 +576,29 @@ ccl_device
         break;
       }
 #endif
-      const Spectrum metallic_weight =
-          (type == CLOSURE_BSDF_PHYSICAL_CONDUCTOR) ? closure_weight * mix_weight :
-                                                    rgb_to_spectrum(make_float3(mix_weight));
       ccl_private MicrofacetBsdf *bsdf = (ccl_private MicrofacetBsdf *)bsdf_alloc(
-          sd, sizeof(MicrofacetBsdf), metallic_weight);
+          sd, sizeof(MicrofacetBsdf), rgb_to_spectrum(make_float3(mix_weight)));
 
       if (bsdf != nullptr) {
         float3 N = stack_load_float3_default(stack, cdata.normal_offset, sd->N);
         N = safe_normalize_fallback(N, sd->N);
         const float3 valid_reflection_N = maybe_ensure_valid_specular_reflection(sd, N);
-        const float alpha_x = stack_load(stack, cdata.alpha_x);
-        const float alpha_y = stack_load(stack, cdata.alpha_y);
-        if (alpha_x >= 0.0f && alpha_y >= 0.0f) {
-          bsdf->alpha_x = alpha_x;
-          bsdf->alpha_y = alpha_y;
-          bsdf->T = zero_float3();
-          if (alpha_x != alpha_y) {
-            bsdf->T = safe_normalize(stack_load(stack, cdata.tangent));
-            const float rotation = stack_load(stack, cdata.rotation);
-            if (rotation != 0.0f) {
-              bsdf->T = rotate_around_axis(bsdf->T, N, rotation * M_2PI_F);
-            }
+        const float anisotropy = saturatef(stack_load(stack, cdata.anisotropy));
+        const float roughness = saturatef(stack_load(stack, cdata.roughness));
+        bsdf->alpha_x = sqr(roughness);
+        bsdf->alpha_y = sqr(roughness);
+        if (anisotropy > 0.0f && stack_valid(cdata.tangent_offset)) {
+          bsdf->T = stack_load_float3(stack, cdata.tangent_offset);
+          const float aspect = sqrtf(1.0f - anisotropy * 0.9f);
+          bsdf->alpha_x /= aspect;
+          bsdf->alpha_y *= aspect;
+          const float anisotropic_rotation = stack_load(stack, cdata.rotation);
+          if (anisotropic_rotation != 0.0f) {
+            bsdf->T = rotate_around_axis(bsdf->T, N, anisotropic_rotation * M_2PI_F);
           }
         }
         else {
-          const float anisotropy = saturatef(stack_load(stack, cdata.anisotropy));
-          const float roughness = saturatef(stack_load(stack, cdata.roughness));
-          bsdf->alpha_x = sqr(roughness);
-          bsdf->alpha_y = sqr(roughness);
-          if (anisotropy > 0.0f && stack_valid(cdata.tangent_offset)) {
-            bsdf->T = stack_load_float3(stack, cdata.tangent_offset);
-            const float aspect = sqrtf(1.0f - anisotropy * 0.9f);
-            bsdf->alpha_x /= aspect;
-            bsdf->alpha_y *= aspect;
-            const float anisotropic_rotation = stack_load(stack, cdata.rotation);
-            if (anisotropic_rotation != 0.0f) {
-              bsdf->T = rotate_around_axis(bsdf->T, N, anisotropic_rotation * M_2PI_F);
-            }
-          }
-          else {
-            bsdf->T = zero_float3();
-          }
-
+          bsdf->T = zero_float3();
         }
 
         bsdf->N = valid_reflection_N;
@@ -1154,9 +1134,7 @@ ccl_device
       float3 N = stack_load_float3_default(stack, bsdf_data.normal_offset, sd->N);
       N = safe_normalize_fallback(N, sd->N);
 
-      /* Keep BSSRDF albedo independent of the completed closure's scalar weight. */
-      const float bssrdf_closure_weight = stack_load(stack, bsdf_data.closure_weight);
-      const Spectrum weight = closure_weight * bssrdf_closure_weight * mix_weight;
+      const Spectrum weight = closure_weight * mix_weight;
       ccl_private Bssrdf *bssrdf = bssrdf_alloc(sd, weight);
 
       if (bssrdf) {

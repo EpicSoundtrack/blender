@@ -121,6 +121,42 @@ struct SVMNodeMaterialXDiffuseBsdfData {
 static_assert(alignof(SVMNodeMaterialXDiffuseBsdfData) <= alignof(uint));
 static_assert(sizeof(SVMNodeMaterialXDiffuseBsdfData) % sizeof(uint) == 0);
 
+/* NODE_MATERIALX_CLOSURE_BSDF data for the physical/F82 conductors: the stock layout plus
+ * physical Alpha X/Y overrides (negative = stock roughness) and a constant tangent. */
+struct SVMNodeMaterialXMetallicBsdfData {
+  ClosureType distribution;
+  SVMInputFloat3 base_ior;    /* IOR (physical) or Base Color (F82) */
+  SVMInputFloat3 edge_tint_k; /* Extinction (physical) or Edge Tint (F82) */
+  SVMInputFloat alpha_x;
+  SVMInputFloat alpha_y;
+  SVMInputFloat3 tangent;
+  SVMInputFloat roughness;
+  SVMInputFloat anisotropy;
+  SVMInputFloat rotation;
+  SVMInputFloat thin_film_thickness;
+  SVMInputFloat thin_film_ior;
+  SVMStackOffset normal_offset;
+  SVMStackOffset tangent_offset;
+  uint8_t _pad[2];
+};
+static_assert(alignof(SVMNodeMaterialXMetallicBsdfData) <= alignof(uint));
+static_assert(sizeof(SVMNodeMaterialXMetallicBsdfData) % sizeof(uint) == 0);
+
+/* NODE_MATERIALX_CLOSURE_BSDF data for the BSSRDFs: the stock layout plus a scalar closure
+ * weight that scales the closure but not the albedo. */
+struct SVMNodeMaterialXBssrdfData {
+  SVMInputFloat3 radius;
+  SVMInputFloat scale;
+  SVMInputFloat closure_weight;
+  SVMInputFloat ior;
+  SVMInputFloat anisotropy;
+  SVMInputFloat roughness;
+  SVMStackOffset normal_offset;
+  uint8_t _pad[3];
+};
+static_assert(alignof(SVMNodeMaterialXBssrdfData) <= alignof(uint));
+static_assert(sizeof(SVMNodeMaterialXBssrdfData) % sizeof(uint) == 0);
+
 /* NODE_MATERIALX_NOISE */
 struct SVMNodeMaterialXNoise {
   uint dimensions;
@@ -1161,9 +1197,6 @@ struct SVMNodeMetallicBsdfData {
   ClosureType distribution;
   SVMInputFloat3 base_ior;    /* IOR (physical) or Base Color (F82) */
   SVMInputFloat3 edge_tint_k; /* Extinction (physical) or Edge Tint (F82) */
-  SVMInputFloat alpha_x;
-  SVMInputFloat alpha_y;
-  SVMInputFloat3 tangent;
   SVMInputFloat roughness;
   SVMInputFloat anisotropy;
   SVMInputFloat rotation;
@@ -1191,7 +1224,6 @@ static_assert(sizeof(SVMNodeHairBsdfData) % sizeof(uint) == 0);
 struct SVMNodeBssrdfData {
   SVMInputFloat3 radius;
   SVMInputFloat scale;
-  SVMInputFloat closure_weight;
   SVMInputFloat ior;
   SVMInputFloat anisotropy;
   SVMInputFloat roughness;

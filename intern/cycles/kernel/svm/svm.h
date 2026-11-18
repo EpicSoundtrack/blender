@@ -544,7 +544,7 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
         const ccl_global SVMNodeClosureBsdf &bsdf_node = svm_node_get<SVMNodeClosureBsdf>(kg,
                                                                                           &offset);
         offset = svm_node_materialx_closure_bsdf<node_feature_mask, type>(
-            kg, sd, stack, closure_weight, bsdf_node, offset);
+            kg, sd, stack, closure_weight, bsdf_node, path_visibility, path_flag, offset);
       }
       break;
       SVM_CASE(NODE_MATERIALX_NOISE)

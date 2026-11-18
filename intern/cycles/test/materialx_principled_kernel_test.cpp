@@ -64,6 +64,27 @@ class CapturePrincipledSVM : public SVMCompiler {
     return words;
   }
 };
+/* Track B7 (batch 24): MaterialX conductor/subsurface/diffuse leaves compile to
+ * NODE_MATERIALX_CLOSURE_BSDF; evaluate whichever closure opcode was captured. */
+template<uint node_feature_mask, ShaderType shader_type>
+static int eval_captured_closure(const uint opcode,
+                                 KernelGlobals kg,
+                                 ShaderData *sd,
+                                 float *stack,
+                                 const Spectrum closure_weight,
+                                 const SVMNodeClosureBsdf &header,
+                                 const PathRayVisibility ray_visibility,
+                                 const uint32_t path_flag,
+                                 const int offset)
+{
+  if (opcode == uint(NODE_MATERIALX_CLOSURE_BSDF)) {
+    return svm_node_materialx_closure_bsdf<node_feature_mask, shader_type>(
+        kg, sd, stack, closure_weight, header, ray_visibility, path_flag, offset);
+  }
+  EXPECT_EQ(opcode, uint(NODE_CLOSURE_BSDF));
+  return svm_node_closure_bsdf<node_feature_mask, shader_type>(
+      kg, sd, stack, closure_weight, header, ray_visibility, path_flag, offset);
+}
 struct ClosureObservation {
   Spectrum diffuse = zero_spectrum(), sss = zero_spectrum();
   Spectrum sss_albedo = zero_spectrum(), emission = zero_spectrum();
@@ -444,7 +465,7 @@ TEST_F(materialx_principled_kernel, physical_metallic_tint_weights_actual_svm_cl
                                          CLOSURE_BSDF_F82_CONDUCTOR})
   {
     ShaderGraph graph;
-    auto *metallic = graph.create_node<MetallicBsdfNode>();
+    auto *metallic = graph.create_node<MaterialXMetallicBsdfNode>();
     metallic->set_fresnel_type(fresnel_type);
     metallic->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_ID);
     metallic->set_roughness(0.3f);
@@ -463,12 +484,12 @@ TEST_F(materialx_principled_kernel, physical_metallic_tint_weights_actual_svm_cl
       svm_node_closure_set_weight(&closure_weight, weight_data);
       expect_spectrum(closure_weight, rgb_to_spectrum(tint));
     }
-    ASSERT_EQ(words.at(offset++), uint(NODE_CLOSURE_BSDF));
+    ASSERT_EQ(words.at(offset++), uint(NODE_MATERIALX_CLOSURE_BSDF));
     SVMNodeClosureBsdf header;
     memcpy(&header, words.data() + offset, sizeof(header));
     offset += sizeof(header) / sizeof(uint);
     ASSERT_EQ(header.closure_type, fresnel_type);
-    ASSERT_EQ(words.size(), offset + sizeof(SVMNodeMetallicBsdfData) / sizeof(uint));
+    ASSERT_EQ(words.size(), offset + sizeof(SVMNodeMaterialXMetallicBsdfData) / sizeof(uint));
 
     globals.svm_nodes.data = words.data();
     globals.svm_nodes.width = int(words.size());
@@ -477,7 +498,7 @@ TEST_F(materialx_principled_kernel, physical_metallic_tint_weights_actual_svm_cl
     ShaderData sd{};
     sd.N = sd.Ng = sd.wi = make_float3(0.0f, 0.0f, 1.0f);
     sd.num_closure_left = MAX_CLOSURE;
-    const int end = svm_node_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
+    const int end = svm_node_materialx_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
         &kg,
         &sd,
         stack.data(),
@@ -518,7 +539,7 @@ TEST_F(materialx_principled_kernel,
          {CLOSURE_BSDF_PHYSICAL_CONDUCTOR, CLOSURE_BSDF_F82_CONDUCTOR})
     {
       ShaderGraph graph;
-      auto *metallic = graph.create_node<MetallicBsdfNode>();
+      auto *metallic = graph.create_node<MaterialXMetallicBsdfNode>();
       metallic->set_fresnel_type(fresnel_type);
       metallic->set_distribution(CLOSURE_BSDF_MICROFACET_GGX_ID);
       metallic->set_roughness(0.3f);
@@ -582,12 +603,12 @@ TEST_F(materialx_principled_kernel,
         svm_node_closure_set_weight(&closure_weight, weight_data);
         expect_spectrum(closure_weight, rgb_to_spectrum(tint));
       }
-      ASSERT_EQ(words.at(offset++), uint(NODE_CLOSURE_BSDF));
+      ASSERT_EQ(words.at(offset++), uint(NODE_MATERIALX_CLOSURE_BSDF));
       SVMNodeClosureBsdf header;
       memcpy(&header, words.data() + offset, sizeof(header));
       offset += sizeof(header) / sizeof(uint);
       ASSERT_EQ(header.closure_type, fresnel_type);
-      ASSERT_EQ(words.size(), offset + sizeof(SVMNodeMetallicBsdfData) / sizeof(uint));
+      ASSERT_EQ(words.size(), offset + sizeof(SVMNodeMaterialXMetallicBsdfData) / sizeof(uint));
 
       globals.svm_nodes.data = words.data();
       globals.svm_nodes.width = int(words.size());
@@ -595,7 +616,7 @@ TEST_F(materialx_principled_kernel,
       ShaderData sd{};
       sd.N = sd.Ng = sd.wi = make_float3(0.0f, 0.0f, 1.0f);
       sd.num_closure_left = MAX_CLOSURE;
-      const int end = svm_node_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
+      const int end = svm_node_materialx_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
           &kg,
           &sd,
           stack.data(),
@@ -605,7 +626,8 @@ TEST_F(materialx_principled_kernel,
           0,
           int(offset));
       EXPECT_EQ(end, words.size());
-      EXPECT_EQ(svm_node_closure_bsdf_skip(int(offset), header.closure_type), int(words.size()));
+      EXPECT_EQ(svm_node_materialx_closure_bsdf_skip(int(offset), header.closure_type),
+                int(words.size()));
       ASSERT_EQ(sd.num_closure, 1);
       const auto *bsdf = reinterpret_cast<const MicrofacetBsdf *>(&sd.closure[0]);
       EXPECT_NEAR(bsdf->alpha_x, c.expected_x, 1e-7);
@@ -643,10 +665,10 @@ TEST_F(materialx_principled_kernel, materialx_conductor_multiscatter_actual_svm_
     source.vector2_inputs["roughness"] = make_float2(0.22f, 0.34f);
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{source}}, &graph));
-    MetallicBsdfNode *metallic = nullptr;
+    MaterialXMetallicBsdfNode *metallic = nullptr;
     for (ShaderNode *node : graph.nodes) {
       if (node->name == source.name) {
-        metallic = dynamic_cast<MetallicBsdfNode *>(node);
+        metallic = dynamic_cast<MaterialXMetallicBsdfNode *>(node);
       }
     }
     ASSERT_NE(metallic, nullptr);
@@ -663,7 +685,7 @@ TEST_F(materialx_principled_kernel, materialx_conductor_multiscatter_actual_svm_
     offset += sizeof(weight_data) / sizeof(uint);
     Spectrum closure_weight = one_spectrum();
     svm_node_closure_set_weight(&closure_weight, weight_data);
-    ASSERT_EQ(words.at(offset++), uint(NODE_CLOSURE_BSDF));
+    ASSERT_EQ(words.at(offset++), uint(NODE_MATERIALX_CLOSURE_BSDF));
     SVMNodeClosureBsdf header;
     memcpy(&header, words.data() + offset, sizeof(header));
     offset += sizeof(header) / sizeof(uint);
@@ -677,7 +699,7 @@ TEST_F(materialx_principled_kernel, materialx_conductor_multiscatter_actual_svm_
     sd.N = sd.Ng = make_float3(0, 0, 1);
     sd.wi = wi;
     sd.num_closure_left = MAX_CLOSURE;
-    svm_node_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
+    svm_node_materialx_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
         &kg, &sd, stack.data(), closure_weight, header, PATH_RAY_VISIBILITY_CAMERA, 0, int(offset));
     ASSERT_EQ(sd.num_closure, 1);
     const auto *bsdf = reinterpret_cast<const MicrofacetBsdf *>(&sd.closure[0]);
@@ -722,7 +744,7 @@ TEST_F(materialx_principled_kernel, burley_full_actual_svm_and_angular_oracle)
       std::array<float, SVM_STACK_SIZE> stack{};
       const int end = svm_node_materialx_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
           &kg, &sd, stack.data(), rgb_to_spectrum(node->get_color()), header,
-          data_offset);
+          PATH_RAY_VISIBILITY_CAMERA, 0, data_offset);
       EXPECT_EQ(end, int(words.size()));
       EXPECT_EQ(svm_node_materialx_closure_bsdf_skip(data_offset, header.closure_type), int(words.size()));
       if (weight == 0.0f) {
@@ -798,17 +820,17 @@ TEST_F(materialx_principled_kernel, burley_full_default_diffuse_and_allocator_gu
           if (gate == 0) {
             end = svm_node_materialx_closure_bsdf<0, SHADER_TYPE_SURFACE>(
                 &kg, &sd, stack.data(), rgb_to_spectrum(node->get_color()), actual_header,
-                data_offset);
+                PATH_RAY_VISIBILITY_CAMERA, 0, data_offset);
           }
           else if (gate == 1) {
             end = svm_node_materialx_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_VOLUME>(
                 &kg, &sd, stack.data(), rgb_to_spectrum(node->get_color()), actual_header,
-                data_offset);
+                PATH_RAY_VISIBILITY_CAMERA, 0, data_offset);
           }
           else {
             end = svm_node_materialx_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
                 &kg, &sd, stack.data(), rgb_to_spectrum(node->get_color()), actual_header,
-                data_offset);
+                PATH_RAY_VISIBILITY_CAMERA, 0, data_offset);
           }
           EXPECT_EQ(end, int(words.size()));
           if (gate != 3 || weight == 0.0f) {
@@ -1294,8 +1316,8 @@ TEST_F(materialx_principled_kernel, lama_sdk_column_major_rotation_reader_to_act
     ShaderData sd{};
     sd.N = sd.Ng = sd.wi = c.normal;
     sd.num_closure_left = MAX_CLOSURE;
-    EXPECT_EQ((svm_node_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
-                  &kg, &sd, stack.data(), closure_weight, header,
+    EXPECT_EQ((eval_captured_closure<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
+                  words.at(header_offset), &kg, &sd, stack.data(), closure_weight, header,
                   PATH_RAY_VISIBILITY_CAMERA, 0, data_offset)), words.size());
     ASSERT_EQ(sd.num_closure, 1);
     const auto *bsdf = reinterpret_cast<const MicrofacetBsdf *>(&sd.closure[0]);
@@ -1523,7 +1545,8 @@ TEST_F(materialx_principled_kernel, lama_sdk_extreme_anisotropy_reader_to_actual
     ShaderData sd{};
     sd.N = sd.Ng = sd.wi = c.normal;
     sd.num_closure_left = MAX_CLOSURE;
-    EXPECT_EQ((svm_node_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
+    EXPECT_EQ((eval_captured_closure<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
+                  words.at(header_offset),
                   &kg,
                   &sd,
                   stack.data(),

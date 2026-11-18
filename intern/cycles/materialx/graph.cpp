@@ -12291,7 +12291,7 @@ bool validate(const Graph &source,
      * mx_fresnel_hoffman_schlick) evaluates
      *   F(x) = mix(F0, F90, (1-x)^e) - a*x*(1-x)^6,
      *   a = mix(F0, F90, (6/7)^e) * (1 - F82) / ((1/7)*(6/7)^6)
-     * with GGX. Cycles' F82-tint conductor (MetallicBsdfNode,
+     * with GGX. Cycles' F82-tint conductor (MaterialXMetallicBsdfNode,
      * CLOSURE_BSDF_F82_CONDUCTOR; kernel/closure/bsdf_util.h fresnel_f82 /
      * fresnel_f82tint_B) is F_schlick(F0, F90 = 1, e = 5) - B*x*(1-x)^6 with B
      * solved so F(1/7) = F_schlick(1/7) * tint -- the identical expression when
@@ -14782,7 +14782,7 @@ ShaderOutput *lowered_output(const Link &link,
     if (is_bsdf_combinator(source.nodedef)) {
       return lowered->output("Closure");
     }
-    /* SubsurfaceScatteringNode's closure output socket is "BSSRDF", not
+    /* MaterialXSubsurfaceScatteringNode's closure output socket is "BSSRDF", not
      * "BSDF" like every other BsdfNode subclass. */
     return lowered->output(source.nodedef == subsurface_bsdf_id ? "BSSRDF" : "BSDF");
   }
@@ -16678,7 +16678,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     }
     if (node.nodedef == subsurface_bsdf_id || node.nodedef == lama_sss_id) {
       const float weight = node.inputs.contains("weight") ? node.inputs.at("weight") : 1.0f;
-      SubsurfaceScatteringNode *sss = graph->create_node<SubsurfaceScatteringNode>();
+      MaterialXSubsurfaceScatteringNode *sss = graph->create_node<MaterialXSubsurfaceScatteringNode>();
       sss->set_method(CLOSURE_BSSRDF_RANDOM_WALK_ID);
       /* MaterialX radius is already a scene-unit distance (ND_lama_sss: its
        * reference graph feeds sssRadius * sssScale * sssUnitLength to
@@ -24476,7 +24476,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
        * fall through to the generic is_bsdf_producer dispatch below. */
       else if (node.nodedef == generalized_schlick_bsdf_id) {
         /* Exact F82-tint conductor subset -- see validate(). */
-        MetallicBsdfNode *metallic = graph->create_node<MetallicBsdfNode>();
+        MaterialXMetallicBsdfNode *metallic = graph->create_node<MaterialXMetallicBsdfNode>();
         metallic->set_fresnel_type(CLOSURE_BSDF_F82_CONDUCTOR);
         metallic->set_distribution(CLOSURE_BSDF_MICROFACET_MULTI_GGX_ID);
         metallic->set_color(node.color3_inputs.contains("color0") ?
@@ -24569,7 +24569,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           lowered = translucent;
         }
         else if (node.nodedef == conductor_bsdf_id) {
-          MetallicBsdfNode *metallic = graph->create_node<MetallicBsdfNode>();
+          MaterialXMetallicBsdfNode *metallic = graph->create_node<MaterialXMetallicBsdfNode>();
           metallic->set_fresnel_type(CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
           metallic->set_distribution(CLOSURE_BSDF_MICROFACET_MULTI_GGX_ID);
           ConductorAlphaControls alpha_controls;
@@ -24643,7 +24643,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           lowered = sheen;
         }
         else if (node.nodedef == lama_conductor_id) {
-          MetallicBsdfNode *metallic = graph->create_node<MetallicBsdfNode>();
+          MaterialXMetallicBsdfNode *metallic = graph->create_node<MaterialXMetallicBsdfNode>();
           metallic->set_fresnel_type(CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
           metallic->set_distribution(CLOSURE_BSDF_MICROFACET_MULTI_GGX_ID);
           metallic->set_tint(node.color3_inputs.contains("tint") ?
@@ -25113,7 +25113,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           lowered = sheen;
         }
         else if (node.nodedef == conductor_bsdf_id) {
-          MetallicBsdfNode *metallic = graph->create_node<MetallicBsdfNode>();
+          MaterialXMetallicBsdfNode *metallic = graph->create_node<MaterialXMetallicBsdfNode>();
           metallic->set_fresnel_type(CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
           metallic->set_distribution(CLOSURE_BSDF_MICROFACET_MULTI_GGX_ID);
           if (!node.links.contains("ior")) {

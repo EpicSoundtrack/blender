@@ -44,7 +44,7 @@ enum class Type {
   Matrix33,
   Matrix44,
   /** BSDF closure-producer observation: a real Cycles closure value (e.g.
-   *  MaterialXDiffuseBsdfNode's "BSDF" output, or SubsurfaceScatteringNode's
+   *  MaterialXDiffuseBsdfNode's "BSDF" output, or MaterialXSubsurfaceScatteringNode's
    *  "BSSRDF" output) produced by a leaf BSDF nodedef (oren_nayar_diffuse_
    *  bsdf, translucent_bsdf, sheen_bsdf, subsurface_bsdf, conductor_bsdf,
    *  dielectric_bsdf). Not yet consumed by any terminal/combinator in this

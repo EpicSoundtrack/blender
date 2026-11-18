@@ -27462,9 +27462,9 @@ TEST(materialx_usdshade_reader, reads_lama_conductor_scientific_isotropic_defaul
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  MetallicBsdfNode *native_conductor = nullptr;
+  MaterialXMetallicBsdfNode *native_conductor = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    native_conductor = node->name == "Conductor" ? dynamic_cast<MetallicBsdfNode *>(node) : native_conductor;
+    native_conductor = node->name == "Conductor" ? dynamic_cast<MaterialXMetallicBsdfNode *>(node) : native_conductor;
   }
   ASSERT_NE(native_conductor, nullptr);
   EXPECT_EQ(native_conductor->get_fresnel_type(), CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
@@ -27526,9 +27526,9 @@ TEST(materialx_usdshade_reader, reads_lama_conductor_scientific_pbr26_tint_and_a
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  MetallicBsdfNode *native_conductor = nullptr;
+  MaterialXMetallicBsdfNode *native_conductor = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    native_conductor = node->name == "Conductor" ? dynamic_cast<MetallicBsdfNode *>(node) :
+    native_conductor = node->name == "Conductor" ? dynamic_cast<MaterialXMetallicBsdfNode *>(node) :
                                                     native_conductor;
   }
   ASSERT_NE(native_conductor, nullptr);
@@ -27598,9 +27598,9 @@ TEST(materialx_usdshade_reader, reads_lama_conductor_artistic_via_artistic_ior_c
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  MetallicBsdfNode *native_conductor = nullptr;
+  MaterialXMetallicBsdfNode *native_conductor = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    native_conductor = node->name == "Conductor" ? dynamic_cast<MetallicBsdfNode *>(node) : native_conductor;
+    native_conductor = node->name == "Conductor" ? dynamic_cast<MaterialXMetallicBsdfNode *>(node) : native_conductor;
   }
   ASSERT_NE(native_conductor, nullptr);
   ASSERT_NE(native_conductor->input("IOR")->link, nullptr);
@@ -32032,8 +32032,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_generic_surface_requested_bsdf_
     const char *expected_type;
   } cases[] = {
       {"ND_translucent_bsdf", "translucent_bsdf"},
-      {"ND_subsurface_bsdf", "subsurface_scattering"},
-      {"ND_conductor_bsdf", "metallic_bsdf"},
+      {"ND_subsurface_bsdf", "materialx_subsurface_scattering"},
+      {"ND_conductor_bsdf", "materialx_metallic_bsdf"},
       {"ND_dielectric_bsdf", "glass_bsdf"},
   };
 
@@ -32324,11 +32324,11 @@ TEST(materialx_usdshade_reader, direct_subsurface_preserves_linked_weight_and_co
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  SubsurfaceScatteringNode *sss = nullptr;
+  MaterialXSubsurfaceScatteringNode *sss = nullptr;
   ShaderNode *value = nullptr;
   ShaderNode *color = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    sss = node->name == "Closure" ? dynamic_cast<SubsurfaceScatteringNode *>(node) : sss;
+    sss = node->name == "Closure" ? dynamic_cast<MaterialXSubsurfaceScatteringNode *>(node) : sss;
     value = node->name == "Weight" ? node : value;
     color = node->name == "Albedo" ? node : color;
   }
@@ -32378,10 +32378,10 @@ TEST(materialx_usdshade_reader, surface_closure_literal_normal_is_seeded)
   ShaderGraph lowered;
   string lower_error;
   ASSERT_TRUE(materialx::lower(source, &lowered, &lower_error)) << lower_error;
-  SubsurfaceScatteringNode *sss = nullptr;
+  MaterialXSubsurfaceScatteringNode *sss = nullptr;
   VectorMathNode *normal = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    sss = node->name == "Closure" ? dynamic_cast<SubsurfaceScatteringNode *>(node) : sss;
+    sss = node->name == "Closure" ? dynamic_cast<MaterialXSubsurfaceScatteringNode *>(node) : sss;
     normal = node->name == "Closure.normal" ? dynamic_cast<VectorMathNode *>(node) : normal;
   }
   ASSERT_NE(sss, nullptr);
@@ -43559,7 +43559,7 @@ TEST(materialx_usdshade_reader, batch3_generalized_schlick_lowers_to_f82_tint_co
   ASSERT_TRUE(materialx::validate(source));
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  MetallicBsdfNode *metallic = batch3_find<MetallicBsdfNode>(lowered, "Closure");
+  MaterialXMetallicBsdfNode *metallic = batch3_find<MaterialXMetallicBsdfNode>(lowered, "Closure");
   ASSERT_NE(metallic, nullptr);
   EXPECT_EQ(metallic->get_fresnel_type(), CLOSURE_BSDF_F82_CONDUCTOR);
   EXPECT_EQ(metallic->get_distribution(), CLOSURE_BSDF_MICROFACET_MULTI_GGX_ID);
@@ -43581,7 +43581,7 @@ TEST(materialx_usdshade_reader, batch3_generalized_schlick_weight_mixes_with_nul
   ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &source, &error)) << error;
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  MetallicBsdfNode *metallic = batch3_find<MetallicBsdfNode>(lowered, "Closure.weighted_metallic");
+  MaterialXMetallicBsdfNode *metallic = batch3_find<MaterialXMetallicBsdfNode>(lowered, "Closure.weighted_metallic");
   ASSERT_NE(metallic, nullptr);
   EXPECT_FLOAT_EQ(metallic->get_color().x, 1.0f);
   EXPECT_FLOAT_EQ(metallic->get_edge_tint().x, 1.0f);
@@ -47515,9 +47515,9 @@ TEST(materialx_usdshade_reader, lama_sss_unvalued_subset_is_default)
     ASSERT_TRUE(read) << mode << ": " << error;
     ShaderGraph lowered;
     ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
-    SubsurfaceScatteringNode *bssrdf = nullptr;
+    MaterialXSubsurfaceScatteringNode *bssrdf = nullptr;
     for (ShaderNode *node : lowered.nodes) {
-      if (auto *candidate = dynamic_cast<SubsurfaceScatteringNode *>(node)) {
+      if (auto *candidate = dynamic_cast<MaterialXSubsurfaceScatteringNode *>(node)) {
         bssrdf = candidate;
       }
     }

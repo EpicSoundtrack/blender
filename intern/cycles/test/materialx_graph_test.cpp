@@ -847,7 +847,17 @@ TEST(materialx_graph, stock_bsdf_hidden_materialx_sockets_default_to_stock)
   EXPECT_EQ(diffuse->get_closure_weight(), 1.0f);
   EXPECT_EQ(diffuse->shader_node_type(), NODE_MATERIALX_CLOSURE_BSDF);
   EXPECT_GT(int(NODE_MATERIALX_CLOSURE_BSDF), int(NODE_NONE));
-  const MetallicBsdfNode *metallic = graph.create_node<MetallicBsdfNode>();
+  /* Batch 24: Metallic and Subsurface Scattering likewise. */
+  const MetallicBsdfNode *stock_metallic = graph.create_node<MetallicBsdfNode>();
+  for (const char *name : {"tint", "alpha_x", "alpha_y"}) {
+    EXPECT_EQ(stock_metallic->type->find_input(ustring(name)), nullptr) << name;
+  }
+  EXPECT_EQ(stock_metallic->shader_node_type(), NODE_CLOSURE_BSDF);
+  const SubsurfaceScatteringNode *stock_sss = graph.create_node<SubsurfaceScatteringNode>();
+  EXPECT_EQ(stock_sss->type->find_input(ustring("closure_weight")), nullptr);
+  EXPECT_EQ(stock_sss->shader_node_type(), NODE_CLOSURE_BSDF);
+  const MaterialXMetallicBsdfNode *metallic = graph.create_node<MaterialXMetallicBsdfNode>();
+  EXPECT_EQ(metallic->shader_node_type(), NODE_MATERIALX_CLOSURE_BSDF);
   EXPECT_EQ(metallic->get_tint(), one_float3());
   EXPECT_LT(metallic->get_alpha_x(), 0.0f);
   EXPECT_LT(metallic->get_alpha_y(), 0.0f);
@@ -857,8 +867,10 @@ TEST(materialx_graph, stock_bsdf_hidden_materialx_sockets_default_to_stock)
   const PrincipledBsdfNode *principled = graph.create_node<PrincipledBsdfNode>();
   EXPECT_EQ(principled->get_base_weight(), 1.0f);
   EXPECT_FALSE(principled->get_use_independent_subsurface_color());
-  const SubsurfaceScatteringNode *sss = graph.create_node<SubsurfaceScatteringNode>();
+  const MaterialXSubsurfaceScatteringNode *sss =
+      graph.create_node<MaterialXSubsurfaceScatteringNode>();
   EXPECT_EQ(sss->get_closure_weight(), 1.0f);
+  EXPECT_EQ(sss->shader_node_type(), NODE_MATERIALX_CLOSURE_BSDF);
 }
 
 /* Track B9: derivative propagation through Math/Noise is MaterialX-only. Stock nodes
@@ -3499,14 +3511,14 @@ TEST(materialx_graph, lowers_artistic_ior_to_exact_pbrlib_arithmetic_outputs)
 
   CombineColorNode *ior = nullptr;
   CombineColorNode *extinction = nullptr;
-  MetallicBsdfNode *metallic = nullptr;
+  MaterialXMetallicBsdfNode *metallic = nullptr;
   MathNode *green_ior_sum = nullptr;
   for (ShaderNode *node : graph.nodes) {
     ior = node->name == "ArtisticIOR.ior" ? dynamic_cast<CombineColorNode *>(node) : ior;
     extinction = node->name == "ArtisticIOR.extinction" ?
                      dynamic_cast<CombineColorNode *>(node) :
                      extinction;
-    metallic = node->name == "Conductor" ? dynamic_cast<MetallicBsdfNode *>(node) : metallic;
+    metallic = node->name == "Conductor" ? dynamic_cast<MaterialXMetallicBsdfNode *>(node) : metallic;
     green_ior_sum = node->name == "ArtisticIOR.Green.ior" ? dynamic_cast<MathNode *>(node) :
                                                             green_ior_sum;
   }
@@ -20806,9 +20818,9 @@ TEST(materialx_graph, lowers_subsurface_bsdf_random_walk)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{node}}, &graph));
 
-  SubsurfaceScatteringNode *sss = nullptr;
+  MaterialXSubsurfaceScatteringNode *sss = nullptr;
   for (ShaderNode *n : graph.nodes) {
-    sss = n->name == "Subsurface" ? dynamic_cast<SubsurfaceScatteringNode *>(n) : sss;
+    sss = n->name == "Subsurface" ? dynamic_cast<MaterialXSubsurfaceScatteringNode *>(n) : sss;
   }
   ASSERT_NE(sss, nullptr);
   EXPECT_EQ(sss->get_method(), CLOSURE_BSSRDF_RANDOM_WALK_ID);
@@ -20870,9 +20882,9 @@ TEST(materialx_graph, direct_subsurface_literal_weight_preserves_albedo)
 
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{node}}, &graph)) << weight;
-    SubsurfaceScatteringNode *sss = nullptr;
+    MaterialXSubsurfaceScatteringNode *sss = nullptr;
     for (ShaderNode *n : graph.nodes) {
-      sss = n->name == "Subsurface" ? dynamic_cast<SubsurfaceScatteringNode *>(n) : sss;
+      sss = n->name == "Subsurface" ? dynamic_cast<MaterialXSubsurfaceScatteringNode *>(n) : sss;
     }
     ASSERT_NE(sss, nullptr);
     EXPECT_FLOAT_EQ(sss->get_color().x, 0.5f) << weight;
@@ -20905,10 +20917,10 @@ TEST(materialx_graph, direct_subsurface_linked_color_keeps_literal_and_default_w
 
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{color, node}}, &graph)) << weight;
-    SubsurfaceScatteringNode *sss = nullptr;
+    MaterialXSubsurfaceScatteringNode *sss = nullptr;
     ShaderNode *albedo = nullptr;
     for (ShaderNode *n : graph.nodes) {
-      sss = n->name == "Subsurface" ? dynamic_cast<SubsurfaceScatteringNode *>(n) : sss;
+      sss = n->name == "Subsurface" ? dynamic_cast<MaterialXSubsurfaceScatteringNode *>(n) : sss;
       albedo = n->name == "Albedo" ? n : albedo;
     }
     ASSERT_NE(sss, nullptr);
@@ -20936,10 +20948,10 @@ TEST(materialx_graph, direct_subsurface_links_weight_independently_of_albedo)
 
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{weight, node}}, &graph));
-  SubsurfaceScatteringNode *sss = nullptr;
+  MaterialXSubsurfaceScatteringNode *sss = nullptr;
   ShaderNode *value = nullptr;
   for (ShaderNode *n : graph.nodes) {
-    sss = n->name == "Subsurface" ? dynamic_cast<SubsurfaceScatteringNode *>(n) : sss;
+    sss = n->name == "Subsurface" ? dynamic_cast<MaterialXSubsurfaceScatteringNode *>(n) : sss;
     value = n->name == "Weight" ? n : value;
   }
   ASSERT_NE(sss, nullptr);
@@ -20963,10 +20975,10 @@ TEST(materialx_graph, direct_subsurface_literal_radius_keeps_materialx_distance_
     node.outputs["out"] = output_type;
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{node}}, &graph));
-    SubsurfaceScatteringNode *sss = nullptr;
+    MaterialXSubsurfaceScatteringNode *sss = nullptr;
     for (ShaderNode *lowered : graph.nodes) {
       sss = lowered->name == "Subsurface" ?
-                dynamic_cast<SubsurfaceScatteringNode *>(lowered) : sss;
+                dynamic_cast<MaterialXSubsurfaceScatteringNode *>(lowered) : sss;
     }
     ASSERT_NE(sss, nullptr);
     EXPECT_FLOAT_EQ(sss->get_scale(), 1.0f);
@@ -20987,10 +20999,10 @@ TEST(materialx_graph, direct_subsurface_default_radius_keeps_materialx_distance_
     node.outputs["out"] = output_type;
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{node}}, &graph));
-    SubsurfaceScatteringNode *sss = nullptr;
+    MaterialXSubsurfaceScatteringNode *sss = nullptr;
     for (ShaderNode *lowered : graph.nodes) {
       sss = lowered->name == "Subsurface" ?
-                dynamic_cast<SubsurfaceScatteringNode *>(lowered) : sss;
+                dynamic_cast<MaterialXSubsurfaceScatteringNode *>(lowered) : sss;
     }
     ASSERT_NE(sss, nullptr);
     EXPECT_FLOAT_EQ(sss->get_scale(), 1.0f);
@@ -21016,11 +21028,11 @@ TEST(materialx_graph, direct_subsurface_linked_radius_keeps_materialx_distance_u
     node.outputs["out"] = output_type;
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{radius, node}}, &graph));
-    SubsurfaceScatteringNode *sss = nullptr;
+    MaterialXSubsurfaceScatteringNode *sss = nullptr;
     ShaderNode *value = nullptr;
     for (ShaderNode *lowered : graph.nodes) {
       sss = lowered->name == "Subsurface" ?
-                dynamic_cast<SubsurfaceScatteringNode *>(lowered) : sss;
+                dynamic_cast<MaterialXSubsurfaceScatteringNode *>(lowered) : sss;
       value = lowered->name == "RadiusValue" ? lowered : value;
     }
     ASSERT_NE(sss, nullptr);
@@ -21038,7 +21050,7 @@ TEST(materialx_graph, direct_subsurface_linked_radius_keeps_materialx_distance_u
 
 TEST(materialx_graph, direct_subsurface_socket_defaults_preserve_native_and_lama_behavior)
 {
-  SubsurfaceScatteringNode native;
+  MaterialXSubsurfaceScatteringNode native;
   EXPECT_FLOAT_EQ(native.get_scale(), 0.005f);
   ShaderInput *closure_weight = native.input("ClosureWeight");
   ASSERT_NE(closure_weight, nullptr);
@@ -21054,9 +21066,9 @@ TEST(materialx_graph, direct_subsurface_socket_defaults_preserve_native_and_lama
   lama.outputs["out"] = materialx::Type::BSDF;
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{lama}}, &graph));
-  SubsurfaceScatteringNode *sss = nullptr;
+  MaterialXSubsurfaceScatteringNode *sss = nullptr;
   for (ShaderNode *n : graph.nodes) {
-    sss = n->name == "Lama" ? dynamic_cast<SubsurfaceScatteringNode *>(n) : sss;
+    sss = n->name == "Lama" ? dynamic_cast<MaterialXSubsurfaceScatteringNode *>(n) : sss;
   }
   ASSERT_NE(sss, nullptr);
   EXPECT_FLOAT_EQ(sss->get_color().x, 0.25f);
@@ -21091,9 +21103,9 @@ TEST(materialx_graph, lowers_conductor_bsdf_physical_ior)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{node}}, &graph));
 
-  MetallicBsdfNode *metallic = nullptr;
+  MaterialXMetallicBsdfNode *metallic = nullptr;
   for (ShaderNode *n : graph.nodes) {
-    metallic = n->name == "Conductor" ? dynamic_cast<MetallicBsdfNode *>(n) : metallic;
+    metallic = n->name == "Conductor" ? dynamic_cast<MaterialXMetallicBsdfNode *>(n) : metallic;
   }
   ASSERT_NE(metallic, nullptr);
   EXPECT_EQ(metallic->get_fresnel_type(), CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
@@ -21120,9 +21132,9 @@ TEST(materialx_graph, lowers_conductor_bsdf_alpha_for_both_output_types_and_defa
 
       ShaderGraph graph;
       ASSERT_TRUE(materialx::lower({{node}}, &graph));
-      MetallicBsdfNode *metallic = nullptr;
+      MaterialXMetallicBsdfNode *metallic = nullptr;
       for (ShaderNode *lowered : graph.nodes) {
-        metallic = lowered->name == "Conductor" ? dynamic_cast<MetallicBsdfNode *>(lowered) : metallic;
+        metallic = lowered->name == "Conductor" ? dynamic_cast<MaterialXMetallicBsdfNode *>(lowered) : metallic;
       }
       ASSERT_NE(metallic, nullptr);
       EXPECT_NEAR(metallic->get_roughness(), std::sqrt(alpha), 1e-6f)
@@ -21146,9 +21158,9 @@ TEST(materialx_graph, lowers_conductor_bsdf_pbr26_anisotropic_alpha)
 
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{node}}, &graph));
-    MetallicBsdfNode *metallic = nullptr;
+    MaterialXMetallicBsdfNode *metallic = nullptr;
     for (ShaderNode *lowered : graph.nodes) {
-      metallic = lowered->name == "Conductor" ? dynamic_cast<MetallicBsdfNode *>(lowered) : metallic;
+      metallic = lowered->name == "Conductor" ? dynamic_cast<MaterialXMetallicBsdfNode *>(lowered) : metallic;
     }
     ASSERT_NE(metallic, nullptr);
     EXPECT_NEAR(metallic->get_roughness(), 0.52296834f, 1e-6f);
@@ -21183,13 +21195,13 @@ TEST(materialx_graph, lowers_conductor_bsdf_pbr26_weighted_closure)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{node}}, &graph));
   MixClosureNode *weighted = nullptr;
-  MetallicBsdfNode *metallic = nullptr;
+  MaterialXMetallicBsdfNode *metallic = nullptr;
   TransparentBsdfNode *zero = nullptr;
   for (ShaderNode *lowered : graph.nodes) {
     if (auto *mix = dynamic_cast<MixClosureNode *>(lowered)) {
       weighted = mix;
     }
-    if (auto *metal = dynamic_cast<MetallicBsdfNode *>(lowered)) {
+    if (auto *metal = dynamic_cast<MaterialXMetallicBsdfNode *>(lowered)) {
       metallic = metal;
     }
     if (auto *transparent = dynamic_cast<TransparentBsdfNode *>(lowered)) {
@@ -21272,12 +21284,12 @@ TEST(materialx_graph, routes_weighted_conductor_link_to_metallic_child)
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{ior, conductor}}, &graph));
     ShaderNode *ior_lowered = nullptr;
-    MetallicBsdfNode *metallic = nullptr;
+    MaterialXMetallicBsdfNode *metallic = nullptr;
     MixClosureNode *mix = nullptr;
     for (ShaderNode *lowered : graph.nodes) {
       ior_lowered = lowered->name == "ConductorIOR" ? lowered : ior_lowered;
       metallic = lowered->name == "Conductor.weighted_metallic" ?
-                     dynamic_cast<MetallicBsdfNode *>(lowered) : metallic;
+                     dynamic_cast<MaterialXMetallicBsdfNode *>(lowered) : metallic;
       mix = lowered->name == "Conductor" ? dynamic_cast<MixClosureNode *>(lowered) : mix;
     }
     ASSERT_NE(ior_lowered, nullptr);
@@ -21332,7 +21344,7 @@ TEST(materialx_graph, conductor_extreme_alpha_admission_for_both_output_types)
         return n->name == "Conductor";
       });
       ASSERT_NE(found, graph.nodes.end());
-      ASSERT_NE(dynamic_cast<MetallicBsdfNode *>(*found), nullptr);
+      ASSERT_NE(dynamic_cast<MaterialXMetallicBsdfNode *>(*found), nullptr);
     }
   }
 }
@@ -22341,9 +22353,9 @@ TEST(materialx_graph, lowers_lama_sss_scaled_radius)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{node}}, &graph));
 
-  SubsurfaceScatteringNode *sss = nullptr;
+  MaterialXSubsurfaceScatteringNode *sss = nullptr;
   for (ShaderNode *n : graph.nodes) {
-    sss = n->name == "LamaSSS" ? dynamic_cast<SubsurfaceScatteringNode *>(n) : sss;
+    sss = n->name == "LamaSSS" ? dynamic_cast<MaterialXSubsurfaceScatteringNode *>(n) : sss;
   }
   ASSERT_NE(sss, nullptr);
   EXPECT_FLOAT_EQ(sss->get_radius().x, 2.0f);
@@ -22366,10 +22378,10 @@ TEST(materialx_graph, lowers_lama_conductor_default_anisotropy_direction_to_uv0_
 
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{node}}, &graph));
-  MetallicBsdfNode *metallic = nullptr;
+  MaterialXMetallicBsdfNode *metallic = nullptr;
   TangentNode *default_tangent = nullptr;
   for (ShaderNode *lowered : graph.nodes) {
-    metallic = lowered->name == "LamaConductor" ? dynamic_cast<MetallicBsdfNode *>(lowered) :
+    metallic = lowered->name == "LamaConductor" ? dynamic_cast<MaterialXMetallicBsdfNode *>(lowered) :
                                                     metallic;
     default_tangent = lowered->name == "LamaConductor.anisotropyDirection" ?
                           dynamic_cast<TangentNode *>(lowered) :

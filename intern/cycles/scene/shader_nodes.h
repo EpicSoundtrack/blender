@@ -659,12 +659,9 @@ class MetallicBsdfNode : public BsdfNode {
   }
 
   NODE_SOCKET_API(float3, edge_tint)
-  NODE_SOCKET_API(float3, tint)
   NODE_SOCKET_API(float3, ior)
   NODE_SOCKET_API(float3, k)
   NODE_SOCKET_API(float3, tangent)
-  NODE_SOCKET_API(float, alpha_x)
-  NODE_SOCKET_API(float, alpha_y)
   NODE_SOCKET_API(float, roughness)
   NODE_SOCKET_API(float, anisotropy)
   NODE_SOCKET_API(float, rotation)
@@ -765,7 +762,6 @@ class SubsurfaceScatteringNode : public BsdfNode {
   }
 
   NODE_SOCKET_API(float, scale)
-  NODE_SOCKET_API(float, closure_weight)
   NODE_SOCKET_API(float3, radius)
   NODE_SOCKET_API(float, subsurface_ior)
   NODE_SOCKET_API(float, subsurface_roughness)
@@ -1883,6 +1879,74 @@ class MaterialXDiffuseBsdfNode : public BsdfNode {
 
   NODE_SOCKET_API(float, roughness)
   NODE_SOCKET_API(float, closure_weight)
+  NODE_SOCKET_API(ClosureType, method)
+};
+
+/* MaterialX conductor_bsdf / lama conductor leaves: the stock Metallic closure plus Tint
+ * (physical conductor closure weight) and physical Alpha X/Y overrides. */
+class MaterialXMetallicBsdfNode : public BsdfNode {
+ public:
+  SHADER_NODE_CLASS(MaterialXMetallicBsdfNode)
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_MATERIALX_CLOSURE_BSDF;
+  }
+
+  void simplify_settings(Scene *scene) override;
+  ClosureType get_closure_type() override
+  {
+    return closure;
+  }
+
+  NODE_SOCKET_API(float3, edge_tint)
+  NODE_SOCKET_API(float3, tint)
+  NODE_SOCKET_API(float3, ior)
+  NODE_SOCKET_API(float3, k)
+  NODE_SOCKET_API(float3, tangent)
+  NODE_SOCKET_API(float, alpha_x)
+  NODE_SOCKET_API(float, alpha_y)
+  NODE_SOCKET_API(float, roughness)
+  NODE_SOCKET_API(float, anisotropy)
+  NODE_SOCKET_API(float, rotation)
+  NODE_SOCKET_API(float, thin_film_thickness)
+  NODE_SOCKET_API(float, thin_film_ior)
+  NODE_SOCKET_API(ClosureType, distribution)
+  NODE_SOCKET_API(ClosureType, fresnel_type)
+
+  void attributes(Shader *shader, AttributeRequestSet *attributes) override;
+  bool has_attribute_dependency() override
+  {
+    return true;
+  }
+
+  bool is_isotropic();
+};
+
+/* MaterialX subsurface_bsdf / lama sss leaves: the stock Subsurface Scattering closure plus a
+ * scalar closure weight that does not scale the albedo. */
+class MaterialXSubsurfaceScatteringNode : public BsdfNode {
+ public:
+  SHADER_NODE_CLASS(MaterialXSubsurfaceScatteringNode)
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_MATERIALX_CLOSURE_BSDF;
+  }
+  bool has_surface_bssrdf() override
+  {
+    return true;
+  }
+  bool has_bssrdf_bump() override;
+  ClosureType get_closure_type() override
+  {
+    return method;
+  }
+
+  NODE_SOCKET_API(float, scale)
+  NODE_SOCKET_API(float, closure_weight)
+  NODE_SOCKET_API(float3, radius)
+  NODE_SOCKET_API(float, subsurface_ior)
+  NODE_SOCKET_API(float, subsurface_roughness)
+  NODE_SOCKET_API(float, subsurface_anisotropy)
   NODE_SOCKET_API(ClosureType, method)
 };
 

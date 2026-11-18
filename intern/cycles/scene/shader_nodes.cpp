@@ -2226,7 +2226,6 @@ NODE_DEFINE(MetallicBsdfNode)
   NodeType *type = NodeType::add("metallic_bsdf", create, NodeType::SHADER);
 
   SOCKET_IN_COLOR(color, "Base Color", make_float3(0.617f, 0.577f, 0.540f));
-  SOCKET_IN_COLOR(tint, "Tint", one_float3());
   SOCKET_IN_NORMAL(normal, "Normal", zero_float3(), SocketType::LINK_NORMAL);
   SOCKET_IN_FLOAT(surface_mix_weight, "SurfaceMixWeight", 0.0f, SocketType::SVM_INTERNAL);
 
@@ -2249,9 +2248,6 @@ NODE_DEFINE(MetallicBsdfNode)
 
   SOCKET_IN_VECTOR(tangent, "Tangent", zero_float3(), SocketType::LINK_TANGENT);
 
-  /* Negative overrides preserve the stock perceptual roughness path. */
-  SOCKET_IN_FLOAT(alpha_x, "Alpha X", -1.0f);
-  SOCKET_IN_FLOAT(alpha_y, "Alpha Y", -1.0f);
   SOCKET_IN_FLOAT(roughness, "Roughness", 0.5f);
   SOCKET_IN_FLOAT(anisotropy, "Anisotropy", 0.0f);
   SOCKET_IN_FLOAT(rotation, "Rotation", 0.0f);
@@ -2273,12 +2269,6 @@ bool MetallicBsdfNode::is_isotropic()
 {
   /* Keep in sync with the thresholds in OSL's node_conductor_bsdf and SVM's
    * svm_node_metallic_bsdf. */
-  if (input("Alpha X")->link || input("Alpha Y")->link) {
-    return false;
-  }
-  if (alpha_x >= 0.0f && alpha_y >= 0.0f) {
-    return alpha_x == alpha_y;
-  }
   return (!input("Anisotropy")->link && fabsf(anisotropy) <= 1e-4f);
 }
 
@@ -2303,22 +2293,6 @@ void MetallicBsdfNode::simplify_settings(Scene * /* scene */)
 
 void MetallicBsdfNode::compile(SVMCompiler &compiler)
 {
-  if (fresnel_type == CLOSURE_BSDF_PHYSICAL_CONDUCTOR) {
-    if (input("Tint")->link) {
-      compiler.add_node(this,
-                        NODE_CLOSURE_WEIGHT,
-                        SVMNodeClosureWeight{
-                            .weight_offset = compiler.input_link("Tint"),
-                        });
-    }
-    else {
-      compiler.add_node(this,
-                        NODE_CLOSURE_SET_WEIGHT,
-                        SVMNodeClosureSetWeight{
-                            .rgb = tint,
-                        });
-    }
-  }
   compiler.add_bsdf_node(
       SVMNodeClosureBsdf{
           .closure_type = fresnel_type,
@@ -2332,9 +2306,6 @@ void MetallicBsdfNode::compile(SVMCompiler &compiler)
           .edge_tint_k = fresnel_type == CLOSURE_BSDF_PHYSICAL_CONDUCTOR ?
                              compiler.input_float3("Extinction") :
                              compiler.input_float3("Edge Tint"),
-          .alpha_x = compiler.input_float("Alpha X"),
-          .alpha_y = compiler.input_float("Alpha Y"),
-          .tangent = compiler.input_float3("Tangent"),
           .roughness = compiler.input_float("Roughness"),
           .anisotropy = compiler.input_float("Anisotropy"),
           .rotation = compiler.input_float("Rotation"),
@@ -3052,7 +3023,6 @@ NODE_DEFINE(SubsurfaceScatteringNode)
   SOCKET_ENUM(method, "Method", method_enum, CLOSURE_BSSRDF_RANDOM_WALK_ID);
 
   SOCKET_IN_FLOAT(scale, "Scale", 0.005f);
-  SOCKET_IN_FLOAT(closure_weight, "ClosureWeight", 1.0f);
   SOCKET_IN_VECTOR(radius, "Radius", make_float3(1.0f, 0.2f, 0.1f));
 
   SOCKET_IN_FLOAT(subsurface_ior, "IOR", 1.4f);
@@ -3076,7 +3046,6 @@ void SubsurfaceScatteringNode::compile(SVMCompiler &compiler)
                     SVMNodeBssrdfData{
                         .radius = compiler.input_float3("Radius"),
                         .scale = compiler.input_float("Scale"),
-                        .closure_weight = compiler.input_float("ClosureWeight"),
                         .ior = compiler.input_float("IOR"),
                         .anisotropy = compiler.input_float("Anisotropy"),
                         .roughness = compiler.input_float("Roughness"),
@@ -8161,9 +8130,13 @@ static void materialx_closure_compile(BsdfNode *node,
                                       const char *weight_name,
                                       const float3 weight,
                                       const ClosureType closure,
-                                      const T &data)
+                                      const T &data,
+                                      const bool use_weight = true)
 {
-  if (node->input(weight_name)->link) {
+  if (!use_weight) {
+    /* No closure weight node (the closure ignores it), as the stock node. */
+  }
+  else if (node->input(weight_name)->link) {
     compiler.add_node(node,
                       NODE_CLOSURE_WEIGHT,
                       SVMNodeClosureWeight{
@@ -8232,6 +8205,195 @@ void MaterialXDiffuseBsdfNode::compile(OSLCompiler &compiler)
 {
   compiler.parameter(this, "method");
   compiler.add(this, "node_materialx_diffuse_bsdf");
+}
+
+/* MaterialX Metallic BSDF */
+
+NODE_DEFINE(MaterialXMetallicBsdfNode)
+{
+  NodeType *type = NodeType::add("materialx_metallic_bsdf", create, NodeType::SHADER);
+
+  SOCKET_IN_COLOR(color, "Base Color", make_float3(0.617f, 0.577f, 0.540f));
+  SOCKET_IN_COLOR(tint, "Tint", one_float3());
+  SOCKET_IN_NORMAL(normal, "Normal", zero_float3(), SocketType::LINK_NORMAL);
+  SOCKET_IN_FLOAT(surface_mix_weight, "SurfaceMixWeight", 0.0f, SocketType::SVM_INTERNAL);
+
+  static NodeEnum distribution_enum;
+  distribution_enum.insert("beckmann", CLOSURE_BSDF_MICROFACET_BECKMANN_ID);
+  distribution_enum.insert("ggx", CLOSURE_BSDF_MICROFACET_GGX_ID);
+  distribution_enum.insert("multi_ggx", CLOSURE_BSDF_MICROFACET_MULTI_GGX_ID);
+  SOCKET_ENUM(
+      distribution, "Distribution", distribution_enum, CLOSURE_BSDF_MICROFACET_MULTI_GGX_ID);
+
+  static NodeEnum fresnel_type_enum;
+  fresnel_type_enum.insert("f82", CLOSURE_BSDF_F82_CONDUCTOR);
+  fresnel_type_enum.insert("physical_conductor", CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
+  SOCKET_ENUM(fresnel_type, "fresnel_type", fresnel_type_enum, CLOSURE_BSDF_F82_CONDUCTOR);
+
+  SOCKET_IN_COLOR(edge_tint, "Edge Tint", make_float3(0.695f, 0.726f, 0.770f));
+
+  SOCKET_IN_VECTOR(ior, "IOR", make_float3(2.757f, 2.513f, 2.231f));
+  SOCKET_IN_VECTOR(k, "Extinction", make_float3(3.867f, 3.404f, 3.009f));
+
+  SOCKET_IN_VECTOR(tangent, "Tangent", zero_float3(), SocketType::LINK_TANGENT);
+
+  /* Negative overrides preserve the stock perceptual roughness path. */
+  SOCKET_IN_FLOAT(alpha_x, "Alpha X", -1.0f);
+  SOCKET_IN_FLOAT(alpha_y, "Alpha Y", -1.0f);
+  SOCKET_IN_FLOAT(roughness, "Roughness", 0.5f);
+  SOCKET_IN_FLOAT(anisotropy, "Anisotropy", 0.0f);
+  SOCKET_IN_FLOAT(rotation, "Rotation", 0.0f);
+
+  SOCKET_IN_FLOAT(thin_film_thickness, "Thin Film Thickness", 0.0f);
+  SOCKET_IN_FLOAT(thin_film_ior, "Thin Film IOR", 1.33f);
+
+  SOCKET_OUT_CLOSURE(BSDF, "BSDF");
+
+  return type;
+}
+
+MaterialXMetallicBsdfNode::MaterialXMetallicBsdfNode() : BsdfNode(get_node_type())
+{
+  closure = CLOSURE_BSDF_PHYSICAL_CONDUCTOR;
+}
+
+bool MaterialXMetallicBsdfNode::is_isotropic()
+{
+  /* Keep in sync with the thresholds in OSL's node_conductor_bsdf and SVM's
+   * svm_node_metallic_bsdf. */
+  if (input("Alpha X")->link || input("Alpha Y")->link) {
+    return false;
+  }
+  if (alpha_x >= 0.0f && alpha_y >= 0.0f) {
+    return alpha_x == alpha_y;
+  }
+  return (!input("Anisotropy")->link && fabsf(anisotropy) <= 1e-4f);
+}
+
+void MaterialXMetallicBsdfNode::attributes(Shader *shader, AttributeRequestSet *attributes)
+{
+  if (shader->has_surface_link()) {
+    if (!input("Tangent")->link && !is_isotropic()) {
+      attributes->add(ATTR_STD_GENERATED);
+    }
+  }
+
+  ShaderNode::attributes(shader, attributes);
+}
+
+void MaterialXMetallicBsdfNode::simplify_settings(Scene * /* scene */)
+{
+  /* If the anisotropy is close enough to zero, fall back to the isotropic case. */
+  if (is_isotropic()) {
+    disconnect_unused_input("Tangent");
+  }
+}
+
+void MaterialXMetallicBsdfNode::compile(SVMCompiler &compiler)
+{
+  /* Tint is the physical conductor's closure weight; F82 ignores the closure weight. */
+  materialx_closure_compile(
+      this,
+      compiler,
+      "Tint",
+      tint,
+      fresnel_type,
+      SVMNodeMaterialXMetallicBsdfData{
+          .distribution = distribution,
+          .base_ior = fresnel_type == CLOSURE_BSDF_PHYSICAL_CONDUCTOR ?
+                          compiler.input_float3("IOR") :
+                          compiler.input_float3("Base Color"),
+          .edge_tint_k = fresnel_type == CLOSURE_BSDF_PHYSICAL_CONDUCTOR ?
+                             compiler.input_float3("Extinction") :
+                             compiler.input_float3("Edge Tint"),
+          .alpha_x = compiler.input_float("Alpha X"),
+          .alpha_y = compiler.input_float("Alpha Y"),
+          .tangent = compiler.input_float3("Tangent"),
+          .roughness = compiler.input_float("Roughness"),
+          .anisotropy = compiler.input_float("Anisotropy"),
+          .rotation = compiler.input_float("Rotation"),
+          .thin_film_thickness = compiler.input_float("Thin Film Thickness"),
+          .thin_film_ior = compiler.input_float("Thin Film IOR"),
+          .normal_offset = compiler.input_link("Normal"),
+          .tangent_offset = compiler.input_link("Tangent"),
+      },
+      fresnel_type == CLOSURE_BSDF_PHYSICAL_CONDUCTOR);
+}
+
+void MaterialXMetallicBsdfNode::compile(OSLCompiler &compiler)
+{
+  compiler.parameter(this, "distribution");
+  compiler.parameter(this, "fresnel_type");
+  compiler.add(this, "node_materialx_metallic_bsdf");
+}
+
+/* MaterialX Subsurface Scattering */
+
+NODE_DEFINE(MaterialXSubsurfaceScatteringNode)
+{
+  NodeType *type = NodeType::add("materialx_subsurface_scattering", create, NodeType::SHADER);
+
+  SOCKET_IN_COLOR(color, "Color", make_float3(0.8f, 0.8f, 0.8f));
+  SOCKET_IN_NORMAL(normal, "Normal", zero_float3(), SocketType::LINK_NORMAL);
+  SOCKET_IN_FLOAT(surface_mix_weight, "SurfaceMixWeight", 0.0f, SocketType::SVM_INTERNAL);
+
+  static NodeEnum method_enum;
+  method_enum.insert("burley", CLOSURE_BSSRDF_BURLEY_ID);
+  method_enum.insert("random_walk", CLOSURE_BSSRDF_RANDOM_WALK_ID);
+  method_enum.insert("random_walk_skin", CLOSURE_BSSRDF_RANDOM_WALK_SKIN_ID);
+  method_enum.insert("random_walk_legacy", CLOSURE_BSSRDF_RANDOM_WALK_LEGACY_ID);
+  SOCKET_ENUM(method, "Method", method_enum, CLOSURE_BSSRDF_RANDOM_WALK_ID);
+
+  SOCKET_IN_FLOAT(scale, "Scale", 0.005f);
+  SOCKET_IN_FLOAT(closure_weight, "ClosureWeight", 1.0f);
+  SOCKET_IN_VECTOR(radius, "Radius", make_float3(1.0f, 0.2f, 0.1f));
+
+  SOCKET_IN_FLOAT(subsurface_ior, "IOR", 1.4f);
+  SOCKET_IN_FLOAT(subsurface_roughness, "Roughness", 1.0f);
+  SOCKET_IN_FLOAT(subsurface_anisotropy, "Anisotropy", 0.0f);
+
+  SOCKET_OUT_CLOSURE(BSSRDF, "BSSRDF");
+
+  return type;
+}
+
+MaterialXSubsurfaceScatteringNode::MaterialXSubsurfaceScatteringNode() : BsdfNode(get_node_type())
+{
+  closure = method;
+}
+
+void MaterialXSubsurfaceScatteringNode::compile(SVMCompiler &compiler)
+{
+  closure = method;
+  materialx_closure_compile(this,
+                            compiler,
+                            "Color",
+                            color,
+                            closure,
+                            SVMNodeMaterialXBssrdfData{
+                        .radius = compiler.input_float3("Radius"),
+                        .scale = compiler.input_float("Scale"),
+                        .closure_weight = compiler.input_float("ClosureWeight"),
+                        .ior = compiler.input_float("IOR"),
+                        .anisotropy = compiler.input_float("Anisotropy"),
+                        .roughness = compiler.input_float("Roughness"),
+                        .normal_offset = compiler.input_link("Normal"),
+                    });
+}
+
+void MaterialXSubsurfaceScatteringNode::compile(OSLCompiler &compiler)
+{
+  closure = method;
+  compiler.parameter(this, "method");
+  compiler.add(this, "node_materialx_subsurface_scattering");
+}
+
+bool MaterialXSubsurfaceScatteringNode::has_bssrdf_bump()
+{
+  /* detect if anything is plugged into the normal input besides the default */
+  ShaderInput *normal_in = input("Normal");
+  return (normal_in->link &&
+          normal_in->link->parent->special_type != SHADER_SPECIAL_TYPE_GEOMETRY);
 }
 
 /* MaterialX Blackbody */
