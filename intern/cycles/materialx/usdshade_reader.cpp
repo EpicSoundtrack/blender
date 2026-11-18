@@ -17661,6 +17661,88 @@ bool read_integer_predicate_operands(const pxr::UsdShadeShader &shader,
       }
       node->string_inputs[alias_key] = alias;
       node->string_inputs[original_key] = original;
+      /* Batch 31 (b31x absent_* integer fallbacks rendered 0): where the
+       * attribute is absent the projection creates no word attribute, so the
+       * producer's 'default'/'fallback' must be carried with the operand: a
+       * literal or literal ND_constant_integer as its exact Int32 value, or a
+       * nested Integer reader by the private word alias the projection
+       * attested on it ("mx_private_words_out"). Zero needs no carrier. */
+      const pxr::UsdShadeInput fallback = producer.GetInput(
+          pxr::TfToken(primvar_reader ? "fallback" : "default"));
+      if (fallback && fallback.HasConnectedSource()) {
+        const auto fallback_sources = fallback.GetConnectedSources();
+        pxr::UsdShadeShader leaf;
+        pxr::TfToken leaf_id;
+        if (fallback_sources.size() == 1 &&
+            fallback_sources[0].sourceName == pxr::TfToken("out"))
+        {
+          leaf = pxr::UsdShadeShader(fallback_sources[0].source.GetPrim());
+          leaf.GetShaderId(&leaf_id);
+        }
+        const pxr::UsdShadeInput leaf_value = leaf_id.GetString() == "ND_constant_integer" ?
+                                                  leaf.GetInput(pxr::TfToken("value")) :
+                                                  pxr::UsdShadeInput();
+        const bool leaf_primvar = leaf_id.GetString() == "ND_UsdPrimvarReader_integer";
+        int literal = 0;
+        string leaf_alias, leaf_original, leaf_name;
+        if (leaf_value && leaf_value.GetTypeName() == pxr::SdfValueTypeNames->Int &&
+            !leaf_value.HasConnectedSource() && leaf_value.GetAttr().GetNumTimeSamples() == 0 &&
+            leaf_value.Get(&literal))
+        {
+          if (literal != 0) {
+            node->string_inputs[string("mx_private_fallback_value_") + name] = std::to_string(
+                literal);
+          }
+        }
+        else if ((leaf_id.GetString() == "ND_geompropvalue_integer" || leaf_primvar)) {
+          const pxr::UsdShadeInput leaf_prop = leaf.GetInput(
+              pxr::TfToken(leaf_primvar ? "varname" : "geomprop"));
+          const pxr::UsdShadeInput leaf_default = leaf.GetInput(
+              pxr::TfToken(leaf_primvar ? "fallback" : "default"));
+          int leaf_default_value = 0;
+          const auto read_leaf_descriptor = [&](const char *key, string *value) {
+            const pxr::UsdShadeInput input = leaf.GetInput(pxr::TfToken(key));
+            return input && input.GetTypeName() == pxr::SdfValueTypeNames->String &&
+                   input.GetAttr().GetNumTimeSamples() == 0 && !input.HasConnectedSource() &&
+                   input.Get(value) && !value->empty();
+          };
+          if (!leaf_prop || leaf_prop.GetTypeName() != pxr::SdfValueTypeNames->String ||
+              leaf_prop.HasConnectedSource() || leaf_prop.GetAttr().GetNumTimeSamples() != 0 ||
+              !leaf_prop.Get(&leaf_name) || leaf_name.empty() ||
+              (leaf_default && (leaf_default.HasConnectedSource() ||
+                                !leaf_default.Get(&leaf_default_value) ||
+                                leaf_default_value != 0)) ||
+              !read_leaf_descriptor("mx_private_words_out", &leaf_alias) ||
+              !read_leaf_descriptor("mx_public_geomprop_out", &leaf_original) ||
+              leaf_original != leaf_name ||
+              leaf_alias.rfind("__mx_private_i32_words_", 0) != 0)
+          {
+            set_error(error_message,
+                      nodedef + " has an unattested nested Integer fallback for '" + name + "'");
+            return false;
+          }
+          node->string_inputs[string("mx_private_fallback_words_") + name] = leaf_alias;
+        }
+        else {
+          set_error(error_message,
+                    nodedef + " has an unsupported linked Integer fallback for '" + name + "'");
+          return false;
+        }
+      }
+      else if (fallback) {
+        int literal = 0;
+        if (fallback.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+            fallback.GetAttr().GetNumTimeSamples() != 0)
+        {
+          set_error(error_message,
+                    nodedef + " has an untyped Integer fallback for '" + name + "'");
+          return false;
+        }
+        if (fallback.Get(&literal) && literal != 0) {
+          node->string_inputs[string("mx_private_fallback_value_") + name] = std::to_string(
+              literal);
+        }
+      }
       has_private_words = true;
       continue;
     }

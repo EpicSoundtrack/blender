@@ -12,7 +12,9 @@
 #include <fstream>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -16413,6 +16415,230 @@ TEST(materialx_usdshade_reader, integer_predicate_private_words_compare_int32_ex
     EXPECT_EQ(eval(result, 32767.0f, 65535.0f), equal ? 1.0f : 0.0f);
     EXPECT_EQ(eval(result, 32767.0f, 65534.0f), equal ? 0.0f : 1.0f);
     EXPECT_EQ(eval(result, -32768.0f, 0.0f), equal ? 0.0f : 1.0f);
+  }
+}
+
+/* Batch 31 (b31x cx30 geomb1/gxu1: ND_geompropvalue_integer and
+ * ND_UsdPrimvarReader_integer absent_literal / absent_constant_link /
+ * absent_varying_link fallbacks, incl. signed boundaries, rendered 0 in Cycles
+ * while OVRTX passed): with the private Int32 word projection the absent
+ * reader has no word attribute, so the predicate read words (0, 0) instead of
+ * the reader's fallback. Evaluates the lowered ND_ifequal_integerI condition
+ * with the operand attribute absent. */
+TEST(materialx_usdshade_reader, integer_private_words_absent_reader_selects_fallback)
+{
+  const char *under_alias = "__mx_private_i32_words_00000000000000a1";
+  const char *reference_alias = "__mx_private_i32_words_00000000000000b2";
+  const char *nested_alias = "__mx_private_i32_words_00000000000000c3";
+  const int boundaries[] = {
+      INT32_MIN, INT32_MIN + 1, -16777217, -1, 0, 16777216, 16777217, INT32_MAX};
+  for (const char *reader_id : {"ND_geompropvalue_integer", "ND_UsdPrimvarReader_integer"}) {
+    const bool primvar = string(reader_id) == "ND_UsdPrimvarReader_integer";
+    for (const int form : {0, 1, 2}) { /* literal, constant link, varying (nested reader) link */
+      for (const int literal : boundaries) {
+        if (form == 2 && literal != boundaries[0]) {
+          continue; /* the varying fallback's values come from the nested words */
+        }
+        SCOPED_TRACE(string(reader_id) + " form " + std::to_string(form) + " literal " +
+                     std::to_string(literal));
+        const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+        const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+            stage, pxr::SdfPath("/Looks/AbsentIntegerFallback"));
+        const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+          pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+              stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+          result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+          result.CreateOutput(pxr::TfToken("out"), type);
+          return result;
+        };
+        const pxr::SdfValueTypeName integer = pxr::SdfValueTypeNames->Int;
+        const pxr::SdfValueTypeName text = pxr::SdfValueTypeNames->String;
+        pxr::UsdShadeShader under_test = shader("under_test", reader_id, integer);
+        under_test.CreateInput(pxr::TfToken(primvar ? "varname" : "geomprop"), text)
+            .Set(string("numeric_pair_absent_attribute"));
+        pxr::UsdShadeInput fallback = under_test.CreateInput(
+            pxr::TfToken(primvar ? "fallback" : "default"), integer);
+        fallback.Set(form == 0 ? literal : 0);
+        if (form == 1) {
+          pxr::UsdShadeShader constant = shader("fallback_constant", "ND_constant_integer", integer);
+          constant.CreateInput(pxr::TfToken("value"), integer).Set(literal);
+          ASSERT_TRUE(fallback.ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+        }
+        else if (form == 2) {
+          pxr::UsdShadeShader point = shader("fallback_point", "ND_geompropvalue_integer", integer);
+          point.CreateInput(pxr::TfToken("geomprop"), text).Set(string("conditional_value1"));
+          point.CreateInput(pxr::TfToken("default"), integer).Set(0);
+          point.CreateInput(pxr::TfToken("mx_private_words_out"), text).Set(string(nested_alias));
+          point.CreateInput(pxr::TfToken("mx_public_geomprop_out"), text)
+              .Set(string("conditional_value1"));
+          point.CreateInput(pxr::TfToken("mx_public_graph_sha256"), text).Set(string(64, 'a'));
+          point.CreateInput(pxr::TfToken("mx_projection_descriptor_sha256"), text)
+              .Set(string(64, 'c'));
+          ASSERT_TRUE(fallback.ConnectToSource(point.ConnectableAPI(), pxr::TfToken("out")));
+        }
+        pxr::UsdShadeShader reference = shader("reference_integer", "ND_geompropvalue_integer",
+                                               integer);
+        reference.CreateInput(pxr::TfToken("geomprop"), text).Set(string("expected_integer"));
+        reference.CreateInput(pxr::TfToken("default"), integer).Set(0);
+        pxr::UsdShadeShader match = shader("integer_match", "ND_ifequal_integerI", integer);
+        match.CreateInput(pxr::TfToken("in1"), integer).Set(1);
+        match.CreateInput(pxr::TfToken("in2"), integer).Set(0);
+        ASSERT_TRUE(match.CreateInput(pxr::TfToken("value1"), integer)
+                        .ConnectToSource(under_test.ConnectableAPI(), pxr::TfToken("out")));
+        ASSERT_TRUE(match.CreateInput(pxr::TfToken("value2"), integer)
+                        .ConnectToSource(reference.ConnectableAPI(), pxr::TfToken("out")));
+        const auto descriptor = [&](const char *name, const string &value) {
+          match.CreateInput(pxr::TfToken(name), text).Set(value);
+        };
+        descriptor("mx_private_words_value1", under_alias);
+        descriptor("mx_public_geomprop_value1", "numeric_pair_absent_attribute");
+        descriptor("mx_private_words_value2", reference_alias);
+        descriptor("mx_public_geomprop_value2", "expected_integer");
+        descriptor("mx_public_graph_sha256", string(64, 'a'));
+        descriptor("mx_projection_descriptor_sha256", string(64, 'b'));
+        pxr::UsdShadeShader surface = shader(
+            "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+        ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_integer"), integer)
+                        .ConnectToSource(match.ConnectableAPI(), pxr::TfToken("out")));
+        ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                        .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+        materialx::Graph graph;
+        vector<materialx::Link> outputs;
+        string error;
+        const vector<materialx::SelectedOutput> selected = {
+            {match.GetPath().GetString(), "ND_ifequal_integerI", "out", materialx::Type::Integer}};
+        ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph,
+                                                        &outputs, &error))
+            << error;
+        const materialx::Node *node = nullptr;
+        for (const materialx::Node &candidate : graph.nodes) {
+          if (candidate.nodedef == "ND_ifequal_integerI") {
+            node = &candidate;
+          }
+        }
+        ASSERT_NE(node, nullptr);
+        ASSERT_TRUE(materialx::validate(graph));
+        ShaderGraph lowered;
+        ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+        ShaderNode *condition = nullptr;
+        for (ShaderNode *lowered_node : lowered.nodes) {
+          if (lowered_node->name == node->name + ".condition") {
+            condition = lowered_node;
+          }
+        }
+        ASSERT_NE(condition, nullptr);
+
+        /* Attribute model: alias -> present words, or absent (no entry). */
+        std::map<string, std::pair<float, float>> present;
+        const auto words = [](const int value) {
+          const int64_t v = value;
+          const int64_t high = v >= 0 ? v / 65536 : -((-v + 65535) / 65536);
+          return std::pair<float, float>(float(high), float(v - high * 65536));
+        };
+        std::function<float(ShaderOutput *)> eval = [&](ShaderOutput *output) -> float {
+          ShaderNode *source = output->parent;
+          if (auto *value = dynamic_cast<ValueNode *>(source)) {
+            return value->get_value();
+          }
+          if (dynamic_cast<ConvertNode *>(source)) {
+            return eval(source->inputs[0]->link);
+          }
+          if (auto *attribute = dynamic_cast<AttributeNode *>(source)) {
+            const auto found = present.find(attribute->get_attribute().string());
+            const bool fallback = attribute->get_use_fallback();
+            if (output->name() == "Alpha") {
+              return found != present.end() ? 1.0f :
+                     fallback               ? attribute->get_fallback_alpha() :
+                                              0.0f;
+            }
+            ADD_FAILURE() << "unexpected attribute output " << output->name().string();
+            return NAN;
+          }
+          if (dynamic_cast<SeparateXYZNode *>(source)) {
+            ShaderNode *vector = source->input("Vector")->link->parent;
+            while (dynamic_cast<ConvertNode *>(vector) != nullptr) {
+              vector = vector->inputs[0]->link->parent;
+            }
+            auto *attribute = dynamic_cast<AttributeNode *>(vector);
+            EXPECT_NE(attribute, nullptr);
+            if (attribute == nullptr) {
+              return NAN;
+            }
+            const auto found = present.find(attribute->get_attribute().string());
+            const float3 fallback = attribute->get_use_fallback() ? attribute->get_fallback_color() :
+                                                                    zero_float3();
+            const float x = found != present.end() ? found->second.first : fallback.x;
+            const float y = found != present.end() ? found->second.second : fallback.y;
+            return output->name() == "X" ? x : output->name() == "Y" ? y : 0.0f;
+          }
+          auto *math = dynamic_cast<MathNode *>(source);
+          EXPECT_NE(math, nullptr) << source->name.string();
+          if (math == nullptr) {
+            return NAN;
+          }
+          const float a = math->input("Value1")->link ? eval(math->input("Value1")->link) :
+                                                        math->get_value1();
+          const float b = math->input("Value2")->link ? eval(math->input("Value2")->link) :
+                                                        math->get_value2();
+          switch (math->get_math_type()) {
+            case NODE_MATH_ADD:
+              return a + b;
+            case NODE_MATH_GREATER_THAN:
+              return a > b ? 1.0f : 0.0f;
+            case NODE_MATH_LESS_THAN:
+              return a < b ? 1.0f : 0.0f;
+            case NODE_MATH_MAXIMUM:
+              return std::max(a, b);
+            case NODE_MATH_SUBTRACT:
+              return a - b;
+            case NODE_MATH_MULTIPLY:
+              return a * b;
+            default:
+              ADD_FAILURE() << "unexpected math type in " << source->name.string();
+              return NAN;
+          }
+        };
+        const auto run = [&](const std::optional<int> under, const int expected,
+                             const std::optional<int> nested) {
+          present.clear();
+          if (under) {
+            present[under_alias] = words(*under);
+          }
+          present[reference_alias] = words(expected);
+          if (nested) {
+            present[nested_alias] = words(*nested);
+          }
+          return eval(condition->output("Value"));
+        };
+        if (form == 2) {
+          /* absent_varying_link_fallback (+ signed boundaries): the nested words. */
+          for (const int value : boundaries) {
+            EXPECT_EQ(run(std::nullopt, value, value), 1.0f) << value;
+            EXPECT_EQ(run(std::nullopt, value == INT32_MAX ? INT32_MAX - 1 : value + 1, value),
+                      0.0f)
+                << value;
+          }
+          /* A nested attribute that is itself absent reads its literal default 0. */
+          EXPECT_EQ(run(std::nullopt, 0, std::nullopt), 1.0f);
+          /* Present: the operand's own words win over the fallback. */
+          EXPECT_EQ(run(INT32_MIN, INT32_MIN, 7), 1.0f);
+          EXPECT_EQ(run(INT32_MIN, 7, 7), 0.0f);
+        }
+        else {
+          EXPECT_EQ(run(std::nullopt, literal, std::nullopt), 1.0f);
+          EXPECT_EQ(run(std::nullopt, literal == INT32_MAX ? INT32_MAX - 1 : literal + 1,
+                        std::nullopt),
+                    0.0f);
+          if (literal != 0) {
+            EXPECT_EQ(run(std::nullopt, 0, std::nullopt), 0.0f);
+          }
+          const int other = literal == 5 ? 6 : 5;
+          EXPECT_EQ(run(other, other, std::nullopt), 1.0f);
+          EXPECT_EQ(run(other, literal, std::nullopt), literal == other ? 1.0f : 0.0f);
+        }
+      }
+    }
   }
 }
 

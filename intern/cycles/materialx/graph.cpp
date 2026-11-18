@@ -3339,6 +3339,31 @@ size_t integer_predicate_private_words(const Node &node)
          size_t(node.string_inputs.contains("mx_private_words_value2"));
 }
 
+/* Exact decimal Int32 ("-2147483648" .. "2147483647", no padding or sign on 0). */
+bool integer_private_fallback_value(const string &text, int *value)
+{
+  if (text.empty() || text.size() > 11) {
+    return false;
+  }
+  size_t index = text[0] == '-' ? 1 : 0;
+  if (index == text.size() || (text[index] == '0' && text.size() != 1)) {
+    return false;
+  }
+  int64_t result = 0;
+  for (; index < text.size(); index++) {
+    if (text[index] < '0' || text[index] > '9') {
+      return false;
+    }
+    result = result * 10 + (text[index] - '0');
+  }
+  result = text[0] == '-' ? -result : result;
+  if (result < INT32_MIN || result > INT32_MAX) {
+    return false;
+  }
+  *value = int(result);
+  return true;
+}
+
 bool integer_predicate_private_words_descriptor_valid(const Node &node)
 {
   const size_t words = integer_predicate_private_words(node);
@@ -3349,7 +3374,32 @@ bool integer_predicate_private_words_descriptor_valid(const Node &node)
              return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
            });
   };
-  return words >= 1 && words <= 2 && node.string_inputs.size() == 2 + 2 * words &&
+  /* Batch 31: at most one absent-attribute fallback per word operand, an
+   * exact Int32 decimal or a nested reader's private word alias. */
+  size_t fallbacks = 0;
+  for (const char *operand : {"value1", "value2"}) {
+    const auto value = node.string_inputs.find(string("mx_private_fallback_value_") + operand);
+    const auto alias = node.string_inputs.find(string("mx_private_fallback_words_") + operand);
+    if (value == node.string_inputs.end() && alias == node.string_inputs.end()) {
+      continue;
+    }
+    if ((value != node.string_inputs.end() && alias != node.string_inputs.end()) ||
+        !node.string_inputs.contains(string("mx_private_words_") + operand))
+    {
+      return false;
+    }
+    if (value != node.string_inputs.end()) {
+      int parsed = 0;
+      if (!integer_private_fallback_value(value->second, &parsed)) {
+        return false;
+      }
+    }
+    else if (alias->second.rfind("__mx_private_i32_words_", 0) != 0) {
+      return false;
+    }
+    fallbacks++;
+  }
+  return words >= 1 && words <= 2 && node.string_inputs.size() == 2 + 2 * words + fallbacks &&
          exact_sha("mx_public_graph_sha256") && exact_sha("mx_projection_descriptor_sha256");
 }
 
@@ -16177,7 +16227,78 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           separate->name = node.name + ".i32." + operand + ".separate";
           lowered_nodes.emplace(separate->name, separate);
           graph->connect(attribute->output("Vector"), separate->input("Vector"));
-          return {separate->output("X"), separate->output("Y")};
+          const auto fallback_value = node.string_inputs.find(
+              string("mx_private_fallback_value_") + operand);
+          const auto fallback_alias = node.string_inputs.find(
+              string("mx_private_fallback_words_") + operand);
+          if (fallback_value == node.string_inputs.end() &&
+              fallback_alias == node.string_inputs.end())
+          {
+            return {separate->output("X"), separate->output("Y")};
+          }
+          /* Batch 31: the projection creates no word attribute where the
+           * reader's attribute is absent; select the reader's fallback words
+           * there, as the Batch 16/29 two-reader form: a second reader of the
+           * alias with fallback 1 agrees in Alpha wherever the words exist and
+           * exceeds the first (fallback 0, words (0, 0)) by exactly 1 where
+           * they do not, so word = W0 + absent * fallback_word (exact). */
+          attribute->set_use_fallback(true);
+          attribute->set_fallback_color(zero_float3());
+          attribute->set_fallback_alpha(0.0f);
+          AttributeNode *one = graph->create_node<AttributeNode>();
+          one->set_use_materialx_exact(true);
+          one->name = node.name + ".i32." + operand + ".attribute_one";
+          one->set_attribute(ustring(alias->second));
+          one->set_use_fallback(true);
+          one->set_fallback_color(one_float3());
+          one->set_fallback_alpha(1.0f);
+          lowered_nodes.emplace(one->name, one);
+          MathNode *absent = make_math(string(operand) + ".absent", NODE_MATH_SUBTRACT);
+          graph->connect(one->output("Alpha"), absent->input("Value1"));
+          graph->connect(attribute->output("Alpha"), absent->input("Value2"));
+          std::pair<ShaderOutput *, ShaderOutput *> fallback_words;
+          if (fallback_value != node.string_inputs.end()) {
+            int integer = 0;
+            integer_private_fallback_value(fallback_value->second, &integer);
+            const std::pair<float, float> split = integer_words(integer);
+            ValueNode *high = graph->create_node<ValueNode>();
+            high->name = node.name + ".i32." + operand + ".fallback_high";
+            high->set_value(split.first);
+            lowered_nodes.emplace(high->name, high);
+            ValueNode *low = graph->create_node<ValueNode>();
+            low->name = node.name + ".i32." + operand + ".fallback_low";
+            low->set_value(split.second);
+            lowered_nodes.emplace(low->name, low);
+            fallback_words = {high->output("Value"), low->output("Value")};
+          }
+          else {
+            /* Nested reader (literal default 0): its own absent words are (0, 0). */
+            AttributeNode *nested = graph->create_node<AttributeNode>();
+            nested->set_use_materialx_exact(true);
+            nested->name = node.name + ".i32." + operand + ".fallback_attribute";
+            nested->set_attribute(ustring(fallback_alias->second));
+            lowered_nodes.emplace(nested->name, nested);
+            SeparateXYZNode *nested_words = graph->create_node<SeparateXYZNode>();
+            nested_words->name = node.name + ".i32." + operand + ".fallback_separate";
+            lowered_nodes.emplace(nested_words->name, nested_words);
+            graph->connect(nested->output("Vector"), nested_words->input("Vector"));
+            fallback_words = {nested_words->output("X"), nested_words->output("Y")};
+          }
+          ShaderOutput *selected[2];
+          const char *parts[2] = {"high", "low"};
+          ShaderOutput *read[2] = {separate->output("X"), separate->output("Y")};
+          ShaderOutput *fallback[2] = {fallback_words.first, fallback_words.second};
+          for (int i = 0; i < 2; i++) {
+            MathNode *scaled = make_math(string(operand) + ".fallback_" + parts[i] + "_absent",
+                                         NODE_MATH_MULTIPLY);
+            graph->connect(absent->output("Value"), scaled->input("Value1"));
+            graph->connect(fallback[i], scaled->input("Value2"));
+            MathNode *word = make_math(string(operand) + ".selected_" + parts[i], NODE_MATH_ADD);
+            graph->connect(read[i], word->input("Value1"));
+            graph->connect(scaled->output("Value"), word->input("Value2"));
+            selected[i] = word->output("Value");
+          }
+          return {selected[0], selected[1]};
         }
         int integer = 0;
         if (const auto link = node.links.find(operand); link != node.links.end()) {
