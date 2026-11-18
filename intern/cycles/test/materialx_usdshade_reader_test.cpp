@@ -11432,6 +11432,83 @@ TEST(materialx_usdshade_reader, reads_and_lowers_linked_attribute_reader_fallbac
   }
 }
 
+/* Batch 29 (port of candidate read_projected_uniform_float_name): the add-on's
+ * uniform String -> Float projection keeps the public String connection and adds a
+ * private descriptor naming the derived float attribute on the consumer. */
+TEST(materialx_usdshade_reader, reads_projected_uniform_string_float_consumer)
+{
+  for (const char *producer_id : {"ND_geompropvalueuniform_string", "ND_UsdPrimvarReader_string"}) {
+    SCOPED_TRACE(producer_id);
+    const bool geomprop = string(producer_id) == "ND_geompropvalueuniform_string";
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/UniformString"));
+    const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+      pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+          stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+      result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      result.CreateOutput(pxr::TfToken("out"), type);
+      return result;
+    };
+    pxr::UsdShadeShader producer = shader("Name", producer_id, pxr::SdfValueTypeNames->String);
+    producer.CreateInput(pxr::TfToken(geomprop ? "geomprop" : "varname"),
+                         pxr::SdfValueTypeNames->String)
+        .Set(string("name_attr"));
+    producer.CreateInput(pxr::TfToken(geomprop ? "default" : "fallback"),
+                         pxr::SdfValueTypeNames->String)
+        .Set(string("alpha"));
+    pxr::UsdShadeShader consumer = shader("Value", "ND_geompropvalue_float",
+                                          pxr::SdfValueTypeNames->Float);
+    ASSERT_TRUE(consumer.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+                    .ConnectToSource(producer.ConnectableAPI(), pxr::TfToken("out")));
+    consumer.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+    const string private_name = "__mx_usf_" + string(40, 'a');
+    const auto descriptor = [&](const char *key, const string &value) {
+      consumer.CreateInput(pxr::TfToken(key), pxr::SdfValueTypeNames->String).Set(value);
+    };
+    descriptor("mx_private_uniform_geomprop", private_name);
+    descriptor("mx_public_uniform_source",
+               producer.GetOutput(pxr::TfToken("out")).GetAttr().GetPath().GetString());
+    descriptor("mx_public_graph_sha256", string(64, '0'));
+    descriptor("mx_projection_descriptor_sha256", string(64, 'f'));
+    descriptor("mx_public_uniform_consumer", consumer.GetPath().GetString());
+    pxr::UsdShadeShader surface = shader(
+        "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(consumer.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    const auto read = [&](materialx::Graph *graph, string *error) {
+      vector<materialx::Link> outputs;
+      const vector<materialx::SelectedOutput> selected = {
+          {consumer.GetPath().GetString(), "ND_geompropvalue_float", "out",
+           materialx::Type::Float}};
+      return materialx::resolve_manifest_outputs(material, "mtlx", selected, graph, &outputs,
+                                                 error);
+    };
+    {
+      materialx::Graph graph;
+      string error;
+      ASSERT_TRUE(read(&graph, &error)) << error;
+      ASSERT_EQ(graph.nodes.size(), 1u);
+      EXPECT_EQ(graph.nodes[0].nodedef, "ND_geompropvalue_float");
+      EXPECT_EQ(graph.nodes[0].string_inputs.at("geomprop"), private_name);
+      EXPECT_FLOAT_EQ(graph.nodes[0].fallback_inputs.at("out"), 0.5f);
+      ShaderGraph lowered;
+      EXPECT_TRUE(materialx::lower(graph, &lowered));
+    }
+    descriptor("mx_public_graph_sha256", string(64, 'G'));
+    {
+      materialx::Graph graph;
+      string error;
+      EXPECT_FALSE(read(&graph, &error));
+      EXPECT_NE(error.find("Invalid private uniform String Float-consumer descriptor"),
+                string::npos)
+          << error;
+    }
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_usdtransform2d_literal_texcoord)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

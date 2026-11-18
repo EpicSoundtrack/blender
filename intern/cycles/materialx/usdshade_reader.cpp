@@ -2362,7 +2362,8 @@ bool read_uniform_filename_text(const pxr::UsdShadeInput &input,
                                 string *value,
                                 std::unordered_set<string> *active,
                                 const int depth,
-                                string *error_message);
+                                string *error_message,
+                                bool require_static = false);
 
 bool read_string_value_input(const pxr::UsdShadeInput &input,
                              const string &consumer_nodedef,
@@ -2485,10 +2486,11 @@ bool read_uniform_filename_text(const pxr::UsdShadeInput &input,
                                 string *value,
                                 std::unordered_set<string> *active,
                                 const int depth,
-                                string *error_message)
+                                string *error_message,
+                                const bool require_static)
 {
   if (!input || input.GetTypeName() != type || depth > 32 ||
-      
+      (require_static && input.GetAttr().GetNumTimeSamples() != 0) ||
       composed_connection_count(input.GetAttr()) > 1 ||
       (composed_connection_count(input.GetAttr()) != 0 && !input.HasConnectedSource())) {
     set_error(error_message, "Uniform filename/note input has invalid type, connection, time samples, or depth");
@@ -2510,6 +2512,7 @@ bool read_uniform_filename_text(const pxr::UsdShadeInput &input,
   if (!connected_shader(input, nullptr, &source, error_message, "out", &interface_literal)) return false;
   if (interface_literal) {
     if (interface_literal.GetTypeName() != type ||
+        (require_static && interface_literal.GetNumTimeSamples() != 0) ||
         composed_connection_count(interface_literal) != 0) {
       set_error(error_message, "Uniform filename/note interface is not a typed literal"); return false;
     }
@@ -2532,13 +2535,110 @@ bool read_uniform_filename_text(const pxr::UsdShadeInput &input,
       source.GetOutput(pxr::TfToken("out")).GetTypeName()!=type) {
     set_error(error_message,"Uniform filename/note producer must have exact constant/dot signature"); return done(false);
   }
+  if (require_static && (source.GetIdAttr().GetNumTimeSamples() != 0 ||
+      source.GetOutput(pxr::TfToken("out")).GetAttr().GetNumTimeSamples() != 0 ||
+      composed_connection_count(source.GetOutput(pxr::TfToken("out")).GetAttr()) != 0)) {
+    set_error(error_message,"Uniform note producer requires static ID and output");return done(false);
+  }
   if (dot) {
     string note;
     if (!read_uniform_filename_text(source.GetInput(pxr::TfToken("note")),pxr::SdfValueTypeNames->String,
-                                    true,&note,active,depth+1,error_message)) return done(false);
+                                    true,&note,active,depth+1,error_message,require_static)) return done(false);
   }
   return done(read_uniform_filename_text(source.GetInput(pxr::TfToken(dot ? "in" : "value")),type,
-                                         allow_empty,value,active,depth+1,error_message));
+                                         allow_empty,value,active,depth+1,error_message,require_static));
+}
+
+
+/* Batch 29: ported verbatim from candidate next-uniform-string-native-v1 (host 65dd8b6c). */
+/* Descriptor-only Float-consumer admission. Public String connection remains intact.
+ * Python's canonical/private verifier proves exact descriptor derivation; this
+ * boundary independently validates typed ownership and static selector closure. */
+bool read_projected_uniform_float_name(const pxr::UsdShadeShader &consumer,
+                                       string *value,
+                                       bool *handled,
+                                       string *error_message)
+{
+  const char *keys[] = {"mx_private_uniform_geomprop", "mx_public_uniform_source",
+                        "mx_public_graph_sha256", "mx_projection_descriptor_sha256",
+                        "mx_public_uniform_consumer"};
+  *handled = false;
+  for (const char *key : keys) {
+    *handled |= bool(consumer.GetInput(pxr::TfToken(key)));
+  }
+  if (!*handled) return true;
+  auto fail = [&]() {
+    set_error(error_message, "Invalid private uniform String Float-consumer descriptor");
+    return false;
+  };
+  string fields[5];
+  for (int i = 0; i < 5; ++i) {
+    const auto field = consumer.GetInput(pxr::TfToken(keys[i]));
+    if (!field || field.GetTypeName() != pxr::SdfValueTypeNames->String ||
+        field.GetAttr().GetNumTimeSamples() != 0 ||
+        composed_connection_count(field.GetAttr()) != 0 || !field.Get(&fields[i]) ||
+        fields[i].empty()) return fail();
+  }
+  auto hex = [](const string &text, const size_t length) {
+    if (text.size() != length) return false;
+    for (const char c : text) if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+    return true;
+  };
+  if (fields[0].rfind("__mx_usf_", 0) != 0 || !hex(fields[0].substr(9), 40) ||
+      !hex(fields[2], 64) || !hex(fields[3], 64) ||
+      fields[4] != consumer.GetPath().GetString()) return fail();
+  const auto input = consumer.GetInput(pxr::TfToken("geomprop"));
+  const auto out = consumer.GetOutput(pxr::TfToken("out"));
+  if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->String ||
+      input.GetAttr().GetNumTimeSamples() != 0 ||
+      composed_connection_count(input.GetAttr()) != 1 ||
+      !out || out.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+      out.GetAttr().GetNumTimeSamples() != 0 || composed_connection_count(out.GetAttr()) != 0 ||
+      consumer.GetIdAttr().GetNumTimeSamples() != 0 ||
+      composed_connection_count(consumer.GetIdAttr()) != 0) return fail();
+  const bool consumer_default = bool(consumer.GetInput(pxr::TfToken("default")));
+  if (!shader_has_exact_signature(consumer,
+      consumer_default ? std::initializer_list<const char *>{"geomprop", "default",
+          keys[0], keys[1], keys[2], keys[3], keys[4]} :
+          std::initializer_list<const char *>{"geomprop", keys[0], keys[1], keys[2], keys[3], keys[4]},
+      {"out"}, error_message)) return false;
+  pxr::UsdShadeShader producer;
+  if (!connected_shader(input, nullptr, &producer, error_message, "out")) return false;
+  pxr::TfToken id;
+  if (!producer.GetShaderId(&id)) return fail();
+  const string nid = id.GetString();
+  const bool geomprop = nid == "ND_geompropvalueuniform_string";
+  if (!geomprop && nid != "ND_UsdPrimvarReader_string") return fail();
+  const auto producer_out = producer.GetOutput(pxr::TfToken("out"));
+  if (!producer_out || producer_out.GetTypeName() != pxr::SdfValueTypeNames->String ||
+      producer_out.GetAttr().GetNumTimeSamples() != 0 ||
+      composed_connection_count(producer_out.GetAttr()) != 0 ||
+      producer.GetIdAttr().GetNumTimeSamples() != 0 ||
+      composed_connection_count(producer.GetIdAttr()) != 0 ||
+      fields[1] != producer_out.GetAttr().GetPath().GetString()) return fail();
+  /* Initial exact source contract uses a direct producer output. Do not silently
+   * admit animated container/interface routes without their own validation. */
+  pxr::SdfPathVector direct_connections;
+  input.GetAttr().GetConnections(&direct_connections);
+  if (direct_connections.size() != 1 || direct_connections.front() != producer_out.GetAttr().GetPath()) return fail();
+  const char *query_name = geomprop ? "geomprop" : "varname";
+  const char *default_name = geomprop ? "default" : "fallback";
+  const auto query = producer.GetInput(pxr::TfToken(query_name));
+  const auto fallback = producer.GetInput(pxr::TfToken(default_name));
+  if (!shader_has_exact_signature(producer,
+      query ? (fallback ? std::initializer_list<const char *>{query_name, default_name} :
+                           std::initializer_list<const char *>{query_name}) :
+              (fallback ? std::initializer_list<const char *>{default_name} :
+                           std::initializer_list<const char *>{}),
+      {"out"}, error_message)) return false;
+  std::unordered_set<string> active{producer.GetPath().GetString()};
+  string query_text, fallback_text;
+  if ((query && !read_uniform_filename_text(query, pxr::SdfValueTypeNames->String, true,
+                      &query_text, &active, 0, error_message, true)) ||
+      (fallback && !read_uniform_filename_text(fallback, pxr::SdfValueTypeNames->String, true,
+                      &fallback_text, &active, 0, error_message, true))) return false;
+  *value = fields[0];
+  return true;
 }
 
 bool read_filename_value_input(const pxr::UsdShadeInput &input,
@@ -21493,12 +21593,14 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   else if (nodedef == geompropvalue_float_id) {
     string value;
     bool linked_fallback = false;
-    if (!read_string_value_input(source.GetInput(pxr::TfToken("geomprop")),
-                                 nodedef,
-                                 "geomprop",
-                                 false,
-                                 &value,
-                                 error_message) ||
+    bool projected_uniform = false;
+    if (!read_projected_uniform_float_name(source, &value, &projected_uniform, error_message) ||
+        (!projected_uniform && !read_string_value_input(source.GetInput(pxr::TfToken("geomprop")),
+                                                        nodedef,
+                                                        "geomprop",
+                                                        false,
+                                                        &value,
+                                                        error_message)) ||
         !read_connected_attribute_fallback(source, nodedef, "default", Type::Float, graph, &node,
                                            depth, &linked_fallback, error_message) ||
         (!linked_fallback &&
