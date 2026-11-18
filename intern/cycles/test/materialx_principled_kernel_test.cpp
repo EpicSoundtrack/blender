@@ -15,6 +15,7 @@
 #include "kernel/svm/closure.h"
 #include "kernel/svm/materialx_closure.h"
 #include "kernel/svm/attribute.h"
+#include "kernel/svm/materialx_noise.h"
 #include "scene/constant_fold.h"
 #include "scene/scene.h"
 #include "scene/shader.tables"  // Actual production LUTs; never synthetic zero tables.
@@ -1727,6 +1728,142 @@ TEST(materialx_glass_kernel, stock_glass_setup_stays_isotropic)
       EXPECT_EQ(bsdf.alpha_y, materialx ? 0.28f : 0.18f);
     }
   }
+}
+
+
+/* Batch 27 (GPU qualification b27x): ND_fractal*_vector2/vector4/color4 V0 contracts,
+ * whose lacunarity is linked to a vertex float primvar holding 1.9 everywhere, lost
+ * batch-21 parity once Track B4 restored the stock triangle_interpolate. The stock
+ * barycentric sum rounds an equal-corner float to a neighbouring value at some (u, v),
+ * so lacunarity varied per pixel by an ulp. MaterialX attribute reads must return the
+ * corner value exactly (the batch-21 behaviour) and the fractals must then match the
+ * batch-21 formulation, i.e. the kernel evaluated with the literal input value. */
+TEST_F(materialx_principled_kernel, constant_float_primvar_reads_exactly_for_linked_fractal_inputs)
+{
+  auto bits = [](float v) { return std::bit_cast<uint>(v); };
+  packed_uint3 vindex[1];
+  vindex[0].x = 0u;
+  vindex[0].y = 1u;
+  vindex[0].z = 2u;
+  /* Lacunarity (b6/j9/x7 V0), L/K lacunarities, a large scalar and a pivot. */
+  const float constants[] = {1.9f, 2.37f, 1.73f, 0.625f, 65536.0f, -65535.0f};
+  float values[3 * std::size(constants)];
+  for (size_t k = 0; k < std::size(constants); k++) {
+    values[3 * k + 0] = values[3 * k + 1] = values[3 * k + 2] = constants[k];
+  }
+  globals.tri_vindex.data = vindex;
+  globals.tri_vindex.width = 1;
+  globals.attributes_float.data = values;
+  globals.attributes_float.width = int(std::size(values));
+  ThreadKernelGlobalsCPU kg(globals, nullptr, profiler, 0);
+
+  ShaderData sd{};
+  sd.object = OBJECT_NONE;
+  sd.type = PRIMITIVE_TRIANGLE;
+  sd.prim = 0;
+  sd.du.dx = 0.0625f;
+  sd.du.dy = 0.03125f;
+  sd.dv.dx = 0.015625f;
+  sd.dv.dy = 0.125f;
+  SVMNodeAttr node{};
+  node.attr = ATTR_STD_NUM;
+
+  int stock_rounded = 0;
+  int fractal_changed_by_stock = 0;
+  for (size_t k = 0; k < std::size(constants); k++) {
+    for (const AttributeElement element : {ATTR_ELEMENT_VERTEX, ATTR_ELEMENT_CORNER}) {
+      AttributeDescriptor desc;
+      desc.element = element;
+      desc.type = NODE_ATTR_FLOAT;
+      /* Corner data is indexed prim * 3 + corner, vertex data by tri_vindex. */
+      desc.offset = int(3 * k);
+      const float c = constants[k];
+      for (int i = 0; i <= 64; i++) {
+        for (int j = 0; i + j <= 64; j++) {
+          sd.u = float(i) * (1.0f / 64.0f) + float(j % 7) * 1.0e-3f;
+          sd.v = float(j) * (1.0f / 64.0f) + float(i % 5) * 7.0e-4f;
+          if (sd.u + sd.v > 1.0f) {
+            continue;
+          }
+          const float stock = svm_node_attr_surface_eval<float3>(
+                                  &kg, &sd, node, NODE_ATTR_OUTPUT_FLOAT, desc)
+                                  .x;
+          const float exact = svm_node_attr_surface_eval<float3>(
+                                  &kg, &sd, node, NODE_ATTR_OUTPUT_FLOAT, desc, true)
+                                  .x;
+          const dual3 stock_dual = svm_node_attr_surface_eval<dual3>(
+              &kg, &sd, node, NODE_ATTR_OUTPUT_FLOAT, desc);
+          const dual3 exact_dual = svm_node_attr_surface_eval<dual3>(
+              &kg, &sd, node, NODE_ATTR_OUTPUT_FLOAT, desc, true);
+          ASSERT_EQ(bits(exact), bits(c)) << "u " << sd.u << " v " << sd.v << " c " << c;
+          ASSERT_EQ(bits(exact_dual.val.x), bits(c));
+          /* Derivatives stay the stock barycentric ones. */
+          EXPECT_EQ(bits(exact_dual.dx.x), bits(stock_dual.dx.x));
+          EXPECT_EQ(bits(exact_dual.dy.x), bits(stock_dual.dy.x));
+          if (bits(stock) == bits(c)) {
+            continue;
+          }
+          stock_rounded++;
+          if (k > 2) {
+            continue;
+          }
+          /* The linked lacunarity feeds the MaterialX fractals as in V0: octaves 2,
+           * diminish 0.5, position nzx_p of the b6/j9 V0 cases. */
+          const float3 p = make_float3(3.302f, 4.871f, -2.208f);
+          const float2 p2 = make_float2(p.x, p.y);
+          const float3 w_offset = make_float3(19.0f, 193.0f, 17.0f);
+          const float reference = mtlx_fractal_noise_float(p, 1.0f, 0.5f, c);
+          const float3 reference_v2 = mtlx_fbm_vector2_float3(p, 1.0f, 0.5f, c);
+          const float3 reference_v3 = mtlx_fbm_float3(p, 1.0f, 0.5f, c);
+          const float reference_w = mtlx_fractal_noise_float(p + w_offset, 1.0f, 0.5f, c);
+          const float3 reference_2d = mtlx_fbm_vector2_float3(p2, 1.0f, 0.5f, c);
+          EXPECT_EQ(bits(mtlx_fractal_noise_float(p, 1.0f, 0.5f, exact)), bits(reference));
+          const float3 v2 = mtlx_fbm_vector2_float3(p, 1.0f, 0.5f, exact);
+          EXPECT_EQ(bits(v2.x), bits(reference_v2.x));
+          EXPECT_EQ(bits(v2.y), bits(reference_v2.y));
+          const float3 v3 = mtlx_fbm_float3(p, 1.0f, 0.5f, exact);
+          EXPECT_EQ(bits(v3.x), bits(reference_v3.x));
+          EXPECT_EQ(bits(v3.y), bits(reference_v3.y));
+          EXPECT_EQ(bits(v3.z), bits(reference_v3.z));
+          EXPECT_EQ(bits(mtlx_fractal_noise_float(p + w_offset, 1.0f, 0.5f, exact)),
+                    bits(reference_w));
+          const float3 v2d = mtlx_fbm_vector2_float3(p2, 1.0f, 0.5f, exact);
+          EXPECT_EQ(bits(v2d.x), bits(reference_2d.x));
+          EXPECT_EQ(bits(v2d.y), bits(reference_2d.y));
+          const float3 drifted = mtlx_fbm_vector2_float3(p, 1.0f, 0.5f, stock);
+          if (bits(drifted.x) != bits(reference_v2.x) || bits(drifted.y) != bits(reference_v2.y))
+          {
+            fractal_changed_by_stock++;
+          }
+        }
+      }
+    }
+  }
+  /* The grid must exercise the regression class: some stock reads round, and a
+   * rounded lacunarity changes the fractal (what the GPU lane measured). */
+  EXPECT_GT(stock_rounded, 0);
+  EXPECT_GT(fractal_changed_by_stock, 0);
+
+  /* Unequal corners, zero and non-finite values keep the stock interpolation. */
+  const float varying[] = {1.9f, 2.0f, 2.5f, 0.0f, 0.0f, 0.0f};
+  globals.attributes_float.data = varying;
+  globals.attributes_float.width = int(std::size(varying));
+  ThreadKernelGlobalsCPU kg2(globals, nullptr, profiler, 0);
+  sd.u = 0.3f;
+  sd.v = 0.2f;
+  for (const int offset : {0, 3}) {
+    AttributeDescriptor desc;
+    desc.element = ATTR_ELEMENT_VERTEX;
+    desc.type = NODE_ATTR_FLOAT;
+    desc.offset = offset;
+    EXPECT_EQ(bits(svm_node_attr_surface_eval<float3>(
+                       &kg2, &sd, node, NODE_ATTR_OUTPUT_FLOAT, desc, true)
+                       .x),
+              bits(svm_node_attr_surface_eval<float3>(&kg2, &sd, node, NODE_ATTR_OUTPUT_FLOAT, desc)
+                       .x));
+  }
+  globals.attributes_float = {};
+  globals.tri_vindex = {};
 }
 
 CCL_NAMESPACE_END

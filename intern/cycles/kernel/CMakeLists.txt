@@ -101,6 +101,7 @@ set(SRC_KERNEL_SVM_HEADERS
   svm/sky.h
   svm/tex_coord.h
   svm/fractal_noise.h
+  svm/materialx_attribute.h
   svm/materialx_blackbody.h
   svm/materialx_cellnoise.h
   svm/materialx_closure.h

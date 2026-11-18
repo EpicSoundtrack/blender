@@ -11,6 +11,7 @@
 #include "kernel/geom/primitive.h"
 #include "kernel/geom/volume.h"
 
+#include "kernel/svm/materialx_attribute.h"
 #include "kernel/svm/node_types.h"
 #include "kernel/svm/util.h"
 
@@ -126,7 +127,9 @@ svm_node_attr_surface_eval(KernelGlobals kg,
 
   /* Surface attribute fetch with output type conversion. */
   if (desc.type == NODE_ATTR_FLOAT) {
-    FloatType f = primitive_surface_attribute<FloatType>(kg, sd, desc);
+    FloatType f = materialx_exact ?
+                      materialx_surface_attribute_float<FloatType>(kg, sd, desc) :
+                      primitive_surface_attribute<FloatType>(kg, sd, desc);
     if (type == NODE_ATTR_OUTPUT_FLOAT_ALPHA) {
       return make_float3(FloatType(1.0f));
     }
