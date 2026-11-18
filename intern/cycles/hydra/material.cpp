@@ -1357,7 +1357,9 @@ void HdCyclesMaterial::UpdateParameters(NodeDesc &nodeDesc,
     /* Find the input to write the parameter value to. */
     const SocketType *input = nullptr;
     for (const SocketType &socket : nodeDesc.node->type->inputs) {
-      if (string_iequals(socket.name.string(), inputName)) {
+      if (string_iequals(socket.name.string(), inputName) ||
+          (nodeDesc.match_socket_ui_name && socket.ui_name == inputName))
+      {
         input = &socket;
         break;
       }
@@ -4716,6 +4718,7 @@ bool HdCyclesMaterial::PopulateShaderGraphInternal(
       }
 
       ustring cyclesType(nodeTypeId);
+      nodeDesc.match_socket_ui_name = !nodeTypeId.starts_with("ND_");
       if (nodeTypeId.starts_with("cycles_") || nodeTypeId.starts_with("cycles:")) {
         /* Native Cycles note embedded in USDShade. */
         cyclesType = nodeTypeId.substr(strlen("cycles_"));

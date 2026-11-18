@@ -4999,4 +4999,32 @@ TEST(HdCyclesMaterialXMapping, rejects_noise2d_wrong_and_extra_inputs_atomically
   material.Finalize(&session);
 }
 
+TEST(HdCyclesMaterialXMapping, stock_cycles_node_parameters_match_socket_ui_names)
+{
+  /* Upstream behavior for native cycles_* USD nodes: parameters authored with the socket UI
+   * name ("Base Color") or the identifier ("roughness") both reach the socket. */
+  const HdContainerDataSourceHandle parameters = HdRetainedContainerDataSource::New(
+      TfToken("Base Color"), vector3_parameter(pxr::GfVec3f(0.1f, 0.2f, 0.3f)),
+      TfToken("roughness"), float_parameter(0.25f));
+  const HdMaterialNetworkSchema network(
+      HdMaterialNetworkSchema::Builder()
+          .SetNodes(HdRetainedContainerDataSource::New(
+              TfToken("Principled"), node("cycles_principled_bsdf", parameters)))
+          .Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/StockCyclesUiName"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+  }
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->get_base_color(), make_float3(0.1f, 0.2f, 0.3f));
+  EXPECT_EQ(principled->get_roughness(), 0.25f);
+
+  material.Finalize(&session);
+}
+
 HDCYCLES_NAMESPACE_CLOSE_SCOPE
