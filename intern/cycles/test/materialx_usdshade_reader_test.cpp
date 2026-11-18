@@ -11238,6 +11238,100 @@ TEST(materialx_usdshade_reader, reads_and_lowers_place2d_linked_controls_and_ord
   EXPECT_TRUE(is_srt && is_trs && srt_or_zero);
 }
 
+/* Batch 29 (port of the candidate ND_UsdTransform2d SDK decomposition): the
+ * MaterialX ND_UsdTransform2d NodeDef is IMP_UsdTransform2d, i.e.
+ * rotate2d(in / scale, rotation) - translation, with linked or defaulted inputs. */
+TEST(materialx_usdshade_reader, reads_and_lowers_nd_usdtransform2d_linked_and_default_inputs)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/NdUsdTransform"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  pxr::UsdShadeShader transform = shader(
+      "Transform", "ND_UsdTransform2d", pxr::SdfValueTypeNames->Float2);
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_transform"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(transform.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+  const auto read = [&](materialx::Graph *graph, string *error) {
+    vector<materialx::Link> outputs;
+    const vector<materialx::SelectedOutput> selected = {
+        {transform.GetPath().GetString(), "ND_UsdTransform2d", "out", materialx::Type::Vector2}};
+    return materialx::resolve_manifest_outputs(material, "mtlx", selected, graph, &outputs, error);
+  };
+  const auto find = [](const materialx::Graph &graph, const char *nodedef) -> const materialx::Node * {
+    for (const materialx::Node &node : graph.nodes) {
+      if (node.nodedef == nodedef) {
+        return &node;
+      }
+    }
+    return nullptr;
+  };
+
+  /* All four inputs omitted: in=(0,0), scale=(1,1), rotation=0, translation=(0,0). */
+  {
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(read(&graph, &error)) << error;
+    const materialx::Node *divide = find(graph, "ND_divide_vector2");
+    const materialx::Node *rotate = find(graph, "ND_rotate2d_vector2");
+    const materialx::Node *subtract = find(graph, "ND_subtract_vector2");
+    ASSERT_TRUE(divide && rotate && subtract);
+    EXPECT_EQ(divide->vector2_inputs.at("in1"), zero_float2());
+    EXPECT_EQ(divide->vector2_inputs.at("in2"), make_float2(1.0f, 1.0f));
+    EXPECT_FLOAT_EQ(rotate->inputs.at("amount"), 0.0f);
+    EXPECT_EQ(subtract->vector2_inputs.at("in2"), zero_float2());
+    ShaderGraph lowered;
+    EXPECT_TRUE(materialx::lower(graph, &lowered));
+  }
+
+  pxr::UsdShadeShader scale = shader("Scale", "ND_geompropvalue_vector2", pxr::SdfValueTypeNames->Float2);
+  scale.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set(string("pd_scale"));
+  scale.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(2.0f));
+  pxr::UsdShadeShader angle = shader("Angle", "ND_geompropvalue_float", pxr::SdfValueTypeNames->Float);
+  angle.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set(string("pd_rotation"));
+  angle.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(30.0f);
+  ASSERT_TRUE(transform.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(scale.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(transform.CreateInput(pxr::TfToken("rotation"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(angle.ConnectableAPI(), pxr::TfToken("out")));
+  transform.CreateInput(pxr::TfToken("translation"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(0.25f, -0.5f));
+  {
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(read(&graph, &error)) << error;
+    const materialx::Node *divide = find(graph, "ND_divide_vector2");
+    const materialx::Node *rotate = find(graph, "ND_rotate2d_vector2");
+    const materialx::Node *subtract = find(graph, "ND_subtract_vector2");
+    ASSERT_TRUE(divide && rotate && subtract);
+    EXPECT_TRUE(divide->links.count("in2"));
+    EXPECT_TRUE(rotate->links.count("amount"));
+    EXPECT_EQ(subtract->links.at("in1").source_node, rotate->name);
+    EXPECT_EQ(subtract->vector2_inputs.at("in2"), make_float2(0.25f, -0.5f));
+    ShaderGraph lowered;
+    EXPECT_TRUE(materialx::lower(graph, &lowered));
+  }
+
+  transform.CreateInput(pxr::TfToken("pivot"), pxr::SdfValueTypeNames->Float2).Set(pxr::GfVec2f(0.5f));
+  {
+    materialx::Graph graph;
+    graph.nodes.push_back({"sentinel", "unsupported"});
+    string error;
+    EXPECT_FALSE(read(&graph, &error));
+    EXPECT_NE(error.find("has no declared input 'pivot'"), string::npos) << error;
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_usdtransform2d_literal_texcoord)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

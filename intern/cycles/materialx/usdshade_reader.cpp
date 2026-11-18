@@ -19508,6 +19508,80 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
       return finish(false);
     }
   }
+  else if (nodedef == usd_transform2d_id) {
+    /* Exact SDK IMP_UsdTransform2d -> place2d, pivot=0, operationorder=0:
+     * clockwise_rotate(in / scale, rotation) - translation. Keep the raw
+     * UsdTransform2d shader alias on its existing branch below. */
+    for (const auto &input : source.GetInputs()) {
+      const string name = input.GetBaseName().GetString();
+      if (name != "in" && name != "scale" && name != "rotation" && name != "translation") {
+        set_error(error_message, nodedef + " has no declared input '" + name + "'");
+        return finish(false);
+      }
+    }
+    if (source.GetOutputs().size() != 1 ||
+        source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+      set_error(error_message, nodedef + " requires vector2 output 'out'");
+      return finish(false);
+    }
+    const auto vector_operand = [&](const char *name, const char *destination,
+                                     const float2 &sdk_default, Node *consumer) -> bool {
+      const auto input = source.GetInput(pxr::TfToken(name));
+      if (!input) {consumer->vector2_inputs[destination] = sdk_default;return true;}
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Float2) {
+        set_error(error_message, nodedef + " requires vector2 input '" + name + "'");
+        return false;
+      }
+      if (composed_connection_count(input.GetAttr()) != 0) {
+        Link link;
+        if (!read_vector2_output(input, graph, &link, active_shaders, depth + 1, error_message)) return false;
+        consumer->links[destination] = link;return true;
+      }
+      if (!input.GetAttr().HasAuthoredValueOpinion() && input.GetAttr().GetNumTimeSamples() == 0) {
+        consumer->vector2_inputs[destination] = sdk_default;return true;
+      }
+      pxr::GfVec2f value;
+      if (!input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1])) {
+        set_error(error_message, nodedef + " requires finite literal or connected vector2 '" + name + "'");
+        return false;
+      }
+      consumer->vector2_inputs[destination] = make_float2(value[0], value[1]);return true;
+    };
+    Node divide;
+    divide.name = unique_node_name(*graph, node.name + ".sdk_divide", path + ".sdk_divide");
+    divide.nodedef = "ND_divide_vector2";divide.outputs["out"] = Type::Vector2;
+    if (!vector_operand("in", "in1", make_float2(0, 0), &divide) ||
+        !vector_operand("scale", "in2", make_float2(1, 1), &divide)) return finish(false);
+    Node rotate;
+    rotate.name = unique_node_name(*graph, node.name + ".sdk_rotate", path + ".sdk_rotate");
+    rotate.nodedef = rotate2d_vector2_id;rotate.outputs["out"] = Type::Vector2;
+    rotate.links["in"] = {divide.name, "out", Type::Vector2};
+    const auto angle = source.GetInput(pxr::TfToken("rotation"));
+    if (angle && angle.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+      set_error(error_message, nodedef + " requires float input 'rotation'");return finish(false);
+    }
+    if (angle && composed_connection_count(angle.GetAttr()) != 0) {
+      std::unordered_set<string> active_float;
+      std::unordered_map<string, string> emitted_float;
+      Link link;
+      if (!read_float_output(angle, graph, &link, &active_float, &emitted_float,
+                             depth + 1, error_message)) return finish(false);
+      rotate.links["amount"] = link;
+    }
+    else {
+      float value = 0;
+      if (angle && (angle.GetAttr().HasAuthoredValueOpinion() || angle.GetAttr().GetNumTimeSamples() != 0) &&
+          (!angle.Get(&value) || !std::isfinite(value))) {
+        set_error(error_message, nodedef + " requires finite literal or connected float 'rotation'");
+        return finish(false);
+      }
+      rotate.inputs["amount"] = value;
+    }
+    node.nodedef = "ND_subtract_vector2";
+    node.links["in1"] = {rotate.name, "out", Type::Vector2};
+    if (!vector_operand("translation", "in2", make_float2(0, 0), &node)) return finish(false);
+    graph->nodes.push_back(std::move(divide));graph->nodes.push_back(std::move(rotate));
+  }
   else if (nodedef == place2d_vector2_id || nodedef == usd_transform2d_id ||
            nodedef == usd_transform2d_shader_id) {
     const bool usd_transform = nodedef == usd_transform2d_id || nodedef == usd_transform2d_shader_id;
