@@ -24121,19 +24121,55 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   else if (nodedef == geompropvalue_vector3_id) {
     const pxr::UsdShadeInput geomprop = source.GetInput(pxr::TfToken("geomprop"));
     string value;
+    /* Batch 30 (b29x vector3 seven-predicate 1/3/4/5): the name may be a
+     * uniform ND_constant_string link (read_string_value_input, as the other
+     * attribute readers) and 'default' may be linked (the Batch 29 linked
+     * attribute fallback); an empty name names no primvar, so the result is the
+     * literal 'default'. */
+    if (geomprop && geomprop.GetTypeName() == pxr::SdfValueTypeNames->String &&
+        composed_connection_count(geomprop.GetAttr()) == 0 &&
+        geomprop.GetAttr().GetNumTimeSamples() == 0 && attribute_reader_name_is_empty(geomprop))
+    {
+      Node fallback_only;
+      const pxr::UsdShadeInput fallback = source.GetInput(pxr::TfToken("default"));
+      if (!fallback || composed_connection_count(fallback.GetAttr()) != 0 ||
+          !read_literal_fallback_input(
+              source, nodedef, "default", Type::Vector3, &fallback_only, error_message) ||
+          !fallback_only.fallback_vector3_inputs.contains("out"))
+      {
+        set_error(error_message,
+                  "ND_geompropvalue_vector3 with an empty geomprop requires a literal 'default'");
+        return finish(false);
+      }
+      node.nodedef = constant_vector3_id;
+      node.vector3_inputs["value"] = fallback_only.fallback_vector3_inputs.at("out");
+    }
+    else {
+    bool linked_fallback = false;
     if (!geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
-        geomprop.HasConnectedSource() || !geomprop.Get(&value)) {
+        !read_string_value_input(geomprop, nodedef, "geomprop", true, &value, error_message))
+    {
       set_error(error_message, "ND_geompropvalue_vector3 requires a literal geomprop");
       return finish(false);
     }
-    if (!read_literal_fallback_input(source, nodedef, "default", Type::Vector3, &node, error_message)) {
+    if (!read_connected_attribute_fallback(source, nodedef, "default", Type::Vector3, graph, &node,
+                                           depth, &linked_fallback, error_message) ||
+        (!linked_fallback &&
+         !read_literal_fallback_input(source, nodedef, "default", Type::Vector3, &node, error_message)))
+    {
       return finish(false);
     }
+    if (linked_fallback) {
+      node.string_inputs["geomprop"] = value;
+    }
+    else {
     if (value != "Nworld" && node.fallback_vector3_inputs.find("out") == node.fallback_vector3_inputs.end()) {
       set_error(error_message, "ND_geompropvalue_vector3 requires literal geomprop 'Nworld' unless a fallback is authored");
       return finish(false);
     }
     node.string_inputs["geomprop"] = value;
+    }
+    }
   }
   else if (nodedef == normal_vector3_id || nodedef == position_vector3_id) {
     /* Geometric-source observation: space="world" is a bare GeometryNode;

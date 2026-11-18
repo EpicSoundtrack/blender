@@ -5977,7 +5977,7 @@ bool is_linked_attribute_fallback(const Node &node)
          node.nodedef == usd_primvar_reader_vector4_id ||
          node.nodedef == geompropvalue_float_id || node.nodedef == geompropvalue_vector2_id ||
          node.nodedef == geompropvalue_color3_id || node.nodedef == geompropvalue_color4_id ||
-         node.nodedef == geompropvalue_vector4_id;
+         node.nodedef == geompropvalue_vector3_id || node.nodedef == geompropvalue_vector4_id;
 }
 
 void set_attribute_fallback(const Node &node, const Type type, AttributeNode *attribute)
@@ -8610,6 +8610,7 @@ bool validate(const Graph &source,
                             node.nodedef == geompropvalue_vector2_id ||
                             node.nodedef == geompropvalue_color3_id ||
                             node.nodedef == geompropvalue_color4_id ||
+                            node.nodedef == geompropvalue_vector3_id ||
                             node.nodedef == geompropvalue_vector4_id;
       const Type type = primary_output_type(node);
       const auto output = node.outputs.find("out");
@@ -15944,6 +15945,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
                             node.nodedef == geompropvalue_vector2_id ||
                             node.nodedef == geompropvalue_color3_id ||
                             node.nodedef == geompropvalue_color4_id ||
+                            node.nodedef == geompropvalue_vector3_id ||
                             node.nodedef == geompropvalue_vector4_id;
       for (int i = 0; i < 2; i++) {
         AttributeNode *attribute = graph->create_node<AttributeNode>();

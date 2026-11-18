@@ -11593,6 +11593,94 @@ TEST(materialx_usdshade_reader, reads_and_lowers_integer_result_predicate_with_l
   EXPECT_EQ(select->input("Value1")->link->parent->name.string(), node->name + ".condition");
 }
 
+/* Batch 30 (b29x vector3 seven-predicate 1/3/4/5): ND_geompropvalue_vector3 reads
+ * a uniform ND_constant_string name, a linked 'default' (lowered as the Batch 29
+ * linked attribute fallback), and an empty name as its literal 'default'. */
+TEST(materialx_usdshade_reader, reads_and_lowers_geompropvalue_vector3_linked_name_default_and_empty)
+{
+  for (int variant = 0; variant < 3; variant++) {
+    SCOPED_TRACE(variant);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/Vector3Reader"));
+    const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+      pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+          stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+      result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      result.CreateOutput(pxr::TfToken("out"), type);
+      return result;
+    };
+    const pxr::SdfValueTypeName vector3 = pxr::SdfValueTypeNames->Float3;
+    pxr::UsdShadeShader reader = shader("Reader", "ND_geompropvalue_vector3", vector3);
+    pxr::UsdShadeInput name = reader.CreateInput(pxr::TfToken("geomprop"),
+                                                 pxr::SdfValueTypeNames->String);
+    pxr::UsdShadeInput fallback = reader.CreateInput(pxr::TfToken("default"), vector3);
+    fallback.Set(pxr::GfVec3f(0.5f, 0.4f, 0.3f));
+    if (variant == 0) {
+      pxr::UsdShadeShader uniform = shader("Name", "ND_constant_string",
+                                           pxr::SdfValueTypeNames->String);
+      uniform.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->String)
+          .Set(string("burley_color_vector"));
+      name.Set(string("wrong_literal_name"));
+      ASSERT_TRUE(name.ConnectToSource(uniform.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else if (variant == 1) {
+      name.Set(string("absent_attribute"));
+      pxr::UsdShadeShader constant = shader("Fallback", "ND_constant_vector3", vector3);
+      constant.CreateInput(pxr::TfToken("value"), vector3).Set(pxr::GfVec3f(1.0f, 2.0f, 3.0f));
+      ASSERT_TRUE(fallback.ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    else {
+      name.Set(string(""));
+    }
+    pxr::UsdShadeShader surface = shader(
+        "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_reader"), vector3)
+                    .ConnectToSource(reader.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    materialx::Graph graph;
+    vector<materialx::Link> outputs;
+    string error;
+    const vector<materialx::SelectedOutput> selected = {
+        {reader.GetPath().GetString(), "ND_geompropvalue_vector3", "out", materialx::Type::Vector3}};
+    ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs,
+                                                    &error))
+        << error;
+    const materialx::Node *node = nullptr;
+    for (const materialx::Node &candidate : graph.nodes) {
+      if (candidate.nodedef == "ND_geompropvalue_vector3" ||
+          (variant == 2 && candidate.nodedef == "ND_constant_vector3"))
+      {
+        node = &candidate;
+      }
+    }
+    ASSERT_NE(node, nullptr);
+    if (variant == 0) {
+      EXPECT_EQ(node->string_inputs.at("geomprop"), "burley_color_vector");
+      EXPECT_TRUE(node->fallback_vector3_inputs.count("out"));
+    }
+    else if (variant == 1) {
+      EXPECT_EQ(node->string_inputs.at("geomprop"), "absent_attribute");
+      ASSERT_TRUE(node->links.count("fallback"));
+      EXPECT_TRUE(node->fallback_vector3_inputs.empty());
+    }
+    else {
+      EXPECT_EQ(node->nodedef, "ND_constant_vector3");
+      EXPECT_FLOAT_EQ(node->vector3_inputs.at("value").y, 0.4f);
+    }
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered));
+    if (variant == 1) {
+      bool result = false;
+      for (ShaderNode *lowered_node : lowered.nodes) {
+        result |= lowered_node->name == node->name + ".fallback_result";
+      }
+      EXPECT_TRUE(result);
+    }
+  }
+}
+
 /* Batch 30: an authored empty attribute name names no primvar, so the
  * Boolean/Integer reader's result is its literal fallback. */
 TEST(materialx_usdshade_reader, reads_empty_named_boolean_and_integer_readers_as_fallback)
