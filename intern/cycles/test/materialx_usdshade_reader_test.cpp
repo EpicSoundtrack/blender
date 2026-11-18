@@ -26703,11 +26703,11 @@ TEST(materialx_usdshade_reader, reads_and_lowers_generic_surface_closure_composi
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  DiffuseBsdfNode *native_bsdf = nullptr;
+  MaterialXDiffuseBsdfNode *native_bsdf = nullptr;
   EmissionNode *native_edf = nullptr;
   MixClosureNode *opacity_mix = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    native_bsdf = node->name == "Diffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_bsdf;
+    native_bsdf = node->name == "Diffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_bsdf;
     native_edf = node->name == "Light" ? dynamic_cast<EmissionNode *>(node) : native_edf;
     opacity_mix = node->name == "Surface.opacity" ? dynamic_cast<MixClosureNode *>(node) : opacity_mix;
   }
@@ -26782,12 +26782,12 @@ TEST(materialx_usdshade_reader, reads_recursive_generic_surface_bsdf_closure_com
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
   MixClosureNode *native_mix = nullptr;
-  DiffuseBsdfNode *native_red = nullptr;
-  DiffuseBsdfNode *native_blue = nullptr;
+  MaterialXDiffuseBsdfNode *native_red = nullptr;
+  MaterialXDiffuseBsdfNode *native_blue = nullptr;
   for (ShaderNode *node : lowered.nodes) {
     native_mix = node->name == "MixedDiffuse" ? dynamic_cast<MixClosureNode *>(node) : native_mix;
-    native_red = node->name == "RedDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_red;
-    native_blue = node->name == "BlueDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_blue;
+    native_red = node->name == "RedDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_red;
+    native_blue = node->name == "BlueDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_blue;
   }
   ASSERT_NE(native_mix, nullptr);
   ASSERT_NE(native_red, nullptr);
@@ -26852,12 +26852,12 @@ TEST(materialx_usdshade_reader, reads_and_lowers_mix_surfaceshader_terminal)
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
   MixClosureNode *native_mix = nullptr;
-  DiffuseBsdfNode *native_red = nullptr;
-  DiffuseBsdfNode *native_blue = nullptr;
+  MaterialXDiffuseBsdfNode *native_red = nullptr;
+  MaterialXDiffuseBsdfNode *native_blue = nullptr;
   for (ShaderNode *node : lowered.nodes) {
     native_mix = node->name == "MixSurface" ? dynamic_cast<MixClosureNode *>(node) : native_mix;
-    native_red = node->name == "RedDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_red;
-    native_blue = node->name == "BlueDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_blue;
+    native_red = node->name == "RedDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_red;
+    native_blue = node->name == "BlueDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_blue;
   }
   ASSERT_NE(native_mix, nullptr);
   ASSERT_NE(native_red, nullptr);
@@ -27152,14 +27152,14 @@ TEST(materialx_usdshade_reader, reads_lama_leaf_mix_add_and_emission_closures)
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  DiffuseBsdfNode *native_diffuse = nullptr;
+  MaterialXDiffuseBsdfNode *native_diffuse = nullptr;
   MixClosureNode *native_mix = nullptr;
   AddClosureNode *native_add = nullptr;
   EmissionNode *native_emission = nullptr;
   MixClosureNode *native_edf_mix = nullptr;
   AddClosureNode *native_edf_add = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    native_diffuse = node->name == "Diffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_diffuse;
+    native_diffuse = node->name == "Diffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_diffuse;
     native_mix = node->name == "Mix" ? dynamic_cast<MixClosureNode *>(node) : native_mix;
     native_add = node->name == "Add" ? dynamic_cast<AddClosureNode *>(node) : native_add;
     native_emission = node->name == "Emission" ? dynamic_cast<EmissionNode *>(node) : native_emission;
@@ -32144,9 +32144,9 @@ TEST(materialx_usdshade_reader, burley_full_reader_defaults_and_invalid_values)
     ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
     ShaderGraph lowered;
     ASSERT_TRUE(materialx::lower(source, &lowered));
-    DiffuseBsdfNode *native = nullptr;
+    MaterialXDiffuseBsdfNode *native = nullptr;
     for (ShaderNode *node : lowered.nodes) {
-      if (node->name == "Closure") { native = dynamic_cast<DiffuseBsdfNode *>(node); }
+      if (node->name == "Closure") { native = dynamic_cast<MaterialXDiffuseBsdfNode *>(node); }
     }
     ASSERT_NE(native, nullptr);
     EXPECT_EQ(native->get_method(), CLOSURE_BSDF_BURLEY_ID);
@@ -32249,11 +32249,11 @@ TEST(materialx_usdshade_reader, burley_full_reader_four_links)
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  DiffuseBsdfNode *sss = nullptr;
+  MaterialXDiffuseBsdfNode *sss = nullptr;
   ShaderNode *value = nullptr;
   ShaderNode *color = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    sss = node->name == "Closure" ? dynamic_cast<DiffuseBsdfNode *>(node) : sss;
+    sss = node->name == "Closure" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : sss;
     value = node->name == "Weight" ? node : value;
     color = node->name == "Albedo" ? node : color;
   }
@@ -43366,11 +43366,11 @@ TEST(materialx_usdshade_reader, multiply_bsdfc_non_uniform_tint_lowers_per_chann
       ShaderGraph lowered;
       ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
 
-      std::array<DiffuseBsdfNode *, 3> channels = {nullptr, nullptr, nullptr};
+      std::array<MaterialXDiffuseBsdfNode *, 3> channels = {nullptr, nullptr, nullptr};
       for (ShaderNode *node : lowered.nodes) {
         for (int c = 0; c < 3; c++) {
           if (node->name == "Multiply.channel" + std::to_string(c)) {
-            channels[size_t(c)] = dynamic_cast<DiffuseBsdfNode *>(node);
+            channels[size_t(c)] = dynamic_cast<MaterialXDiffuseBsdfNode *>(node);
           }
         }
       }
@@ -43378,7 +43378,7 @@ TEST(materialx_usdshade_reader, multiply_bsdfc_non_uniform_tint_lowers_per_chann
       const float color[3] = {0.5f, 0.6f, 0.7f};
       for (int c = 0; c < 3; c++) {
         SCOPED_TRACE(c);
-        DiffuseBsdfNode *channel = channels[size_t(c)];
+        MaterialXDiffuseBsdfNode *channel = channels[size_t(c)];
         ASSERT_NE(channel, nullptr);
         /* Colour masked to channel c, roughness and method unchanged. */
         const float3 masked = channel->get_color();
@@ -43537,7 +43537,7 @@ TEST(materialx_usdshade_reader, batch3_oren_nayar_energy_compensation_lowers_to_
   ASSERT_TRUE(materialx::validate(source));
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  DiffuseBsdfNode *diffuse = batch3_find<DiffuseBsdfNode>(lowered, "Closure");
+  MaterialXDiffuseBsdfNode *diffuse = batch3_find<MaterialXDiffuseBsdfNode>(lowered, "Closure");
   ASSERT_NE(diffuse, nullptr);
   EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.5f);
   EXPECT_FLOAT_EQ(diffuse->get_color().y, 0.8f);

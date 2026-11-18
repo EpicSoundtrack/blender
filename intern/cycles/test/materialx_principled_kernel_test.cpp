@@ -13,6 +13,7 @@
 #  include <pxr/usd/usdShade/shader.h>
 #endif
 #include "kernel/svm/closure.h"
+#include "kernel/svm/materialx_closure.h"
 #include "kernel/svm/attribute.h"
 #include "scene/constant_fold.h"
 #include "scene/scene.h"
@@ -694,7 +695,7 @@ TEST_F(materialx_principled_kernel, burley_full_actual_svm_and_angular_oracle)
   for (float roughness : {0.0f, 0.25f, 0.75f, 1.0f, 2.0f}) {
     for (float weight : {0.0f, 0.5f, 2.0f}) {
       ShaderGraph graph;
-      DiffuseBsdfNode *node = graph.create_node<DiffuseBsdfNode>();
+      MaterialXDiffuseBsdfNode *node = graph.create_node<MaterialXDiffuseBsdfNode>();
       node->set_method(CLOSURE_BSDF_BURLEY_ID);
       node->set_color(make_float3(0.2f, 0.4f, 0.8f));
       node->set_closure_weight(weight);
@@ -703,9 +704,9 @@ TEST_F(materialx_principled_kernel, burley_full_actual_svm_and_angular_oracle)
       const std::vector<uint> words = compiler.capture(node);
       const int header_offset = 1 + sizeof(SVMNodeClosureSetWeight) / sizeof(uint);
       const int data_offset = header_offset + 1 + sizeof(SVMNodeClosureBsdf) / sizeof(uint);
-      ASSERT_EQ(words.size(), data_offset + sizeof(SVMNodeDiffuseBsdfData) / sizeof(uint));
+      ASSERT_EQ(words.size(), data_offset + sizeof(SVMNodeMaterialXDiffuseBsdfData) / sizeof(uint));
       ASSERT_EQ(words.at(0), uint(NODE_CLOSURE_SET_WEIGHT));
-      ASSERT_EQ(words.at(header_offset), uint(NODE_CLOSURE_BSDF));
+      ASSERT_EQ(words.at(header_offset), uint(NODE_MATERIALX_CLOSURE_BSDF));
       SVMNodeClosureBsdf header;
       memcpy(&header, words.data() + header_offset + 1, sizeof(header));
       globals.svm_nodes.data = words.data();
@@ -719,11 +720,11 @@ TEST_F(materialx_principled_kernel, burley_full_actual_svm_and_angular_oracle)
       sd.wi = make_float3(0.8660254f, 0.0f, 0.5f);
       sd.num_closure_left = MAX_CLOSURE;
       std::array<float, SVM_STACK_SIZE> stack{};
-      const int end = svm_node_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
+      const int end = svm_node_materialx_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
           &kg, &sd, stack.data(), rgb_to_spectrum(node->get_color()), header,
-          PATH_RAY_VISIBILITY_CAMERA, 0, data_offset);
+          data_offset);
       EXPECT_EQ(end, int(words.size()));
-      EXPECT_EQ(svm_node_closure_bsdf_skip(data_offset, header.closure_type), int(words.size()));
+      EXPECT_EQ(svm_node_materialx_closure_bsdf_skip(data_offset, header.closure_type), int(words.size()));
       if (weight == 0.0f) {
         EXPECT_EQ(sd.num_closure, 0);
         continue;
@@ -765,7 +766,7 @@ TEST_F(materialx_principled_kernel, burley_full_default_diffuse_and_allocator_gu
   for (bool burley : {false, true}) {
     for (float roughness : {0.0f, 0.75f}) {
       ShaderGraph graph;
-      DiffuseBsdfNode *node = graph.create_node<DiffuseBsdfNode>();
+      MaterialXDiffuseBsdfNode *node = graph.create_node<MaterialXDiffuseBsdfNode>();
       EXPECT_EQ(node->get_method(), CLOSURE_BSDF_DIFFUSE_ID);
       EXPECT_FLOAT_EQ(node->get_closure_weight(), 1.0f);
       if (burley) { node->set_method(CLOSURE_BSDF_BURLEY_ID); }
@@ -777,7 +778,7 @@ TEST_F(materialx_principled_kernel, burley_full_default_diffuse_and_allocator_gu
         const std::vector<uint> words = compiler.capture(node);
         const int header_offset = 1 + sizeof(SVMNodeClosureSetWeight) / sizeof(uint);
         const int data_offset = header_offset + 1 + sizeof(SVMNodeClosureBsdf) / sizeof(uint);
-        ASSERT_EQ(words.size(), data_offset + sizeof(SVMNodeDiffuseBsdfData) / sizeof(uint));
+        ASSERT_EQ(words.size(), data_offset + sizeof(SVMNodeMaterialXDiffuseBsdfData) / sizeof(uint));
         SVMNodeClosureBsdf header;
         memcpy(&header, words.data() + header_offset + 1, sizeof(header));
         EXPECT_EQ(header.closure_type, burley ? CLOSURE_BSDF_BURLEY_ID : CLOSURE_BSDF_DIFFUSE_ID);
@@ -795,19 +796,19 @@ TEST_F(materialx_principled_kernel, burley_full_default_diffuse_and_allocator_gu
           if (gate == 2) { actual_header.mix_weight_offset = 0; }
           int end;
           if (gate == 0) {
-            end = svm_node_closure_bsdf<0, SHADER_TYPE_SURFACE>(
+            end = svm_node_materialx_closure_bsdf<0, SHADER_TYPE_SURFACE>(
                 &kg, &sd, stack.data(), rgb_to_spectrum(node->get_color()), actual_header,
-                PATH_RAY_VISIBILITY_CAMERA, 0, data_offset);
+                data_offset);
           }
           else if (gate == 1) {
-            end = svm_node_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_VOLUME>(
+            end = svm_node_materialx_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_VOLUME>(
                 &kg, &sd, stack.data(), rgb_to_spectrum(node->get_color()), actual_header,
-                PATH_RAY_VISIBILITY_CAMERA, 0, data_offset);
+                data_offset);
           }
           else {
-            end = svm_node_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
+            end = svm_node_materialx_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
                 &kg, &sd, stack.data(), rgb_to_spectrum(node->get_color()), actual_header,
-                PATH_RAY_VISIBILITY_CAMERA, 0, data_offset);
+                data_offset);
           }
           EXPECT_EQ(end, int(words.size()));
           if (gate != 3 || weight == 0.0f) {

@@ -2638,11 +2638,6 @@ NODE_DEFINE(DiffuseBsdfNode)
   SOCKET_IN_NORMAL(normal, "Normal", zero_float3(), SocketType::LINK_NORMAL);
   SOCKET_IN_FLOAT(surface_mix_weight, "SurfaceMixWeight", 0.0f, SocketType::SVM_INTERNAL);
   SOCKET_IN_FLOAT(roughness, "Roughness", 0.0f);
-  SOCKET_IN_FLOAT(closure_weight, "ClosureWeight", 1.0f);
-  static NodeEnum method_enum;
-  method_enum.insert("oren_nayar", CLOSURE_BSDF_DIFFUSE_ID);
-  method_enum.insert("burley", CLOSURE_BSDF_BURLEY_ID);
-  SOCKET_ENUM(method, "Method", method_enum, CLOSURE_BSDF_DIFFUSE_ID);
 
   SOCKET_OUT_CLOSURE(BSDF, "BSDF");
 
@@ -2656,17 +2651,14 @@ DiffuseBsdfNode::DiffuseBsdfNode() : BsdfNode(get_node_type())
 
 void DiffuseBsdfNode::compile(SVMCompiler &compiler)
 {
-  closure = method;
   BsdfNode::compile(compiler,
                     SVMNodeDiffuseBsdfData{.color = compiler.input_float3("Color"),
                                            .roughness = compiler.input_float("Roughness"),
-                                           .closure_weight = compiler.input_float("ClosureWeight"),
-                                           .normal = compiler.input_float3("Normal")});
+                                           .normal_offset = compiler.input_link("Normal")});
 }
 
 void DiffuseBsdfNode::compile(OSLCompiler &compiler)
 {
-  compiler.parameter(this, "method");
   compiler.add(this, "node_diffuse_bsdf");
 }
 
@@ -8158,6 +8150,88 @@ void MaterialXNormalMapNode::compile(SVMCompiler &compiler)
 void MaterialXNormalMapNode::compile(OSLCompiler &compiler)
 {
   compiler.add(this, "node_materialx_normal_map");
+}
+
+/* MaterialX closures: the stock closure color weight (NODE_CLOSURE_WEIGHT or
+ * NODE_CLOSURE_SET_WEIGHT, as BsdfNode::compile emits it) followed by
+ * NODE_MATERIALX_CLOSURE_BSDF and its MaterialX-only data. */
+template<typename T>
+static void materialx_closure_compile(BsdfNode *node,
+                                      SVMCompiler &compiler,
+                                      const char *weight_name,
+                                      const float3 weight,
+                                      const ClosureType closure,
+                                      const T &data)
+{
+  if (node->input(weight_name)->link) {
+    compiler.add_node(node,
+                      NODE_CLOSURE_WEIGHT,
+                      SVMNodeClosureWeight{
+                          .weight_offset = compiler.input_link(weight_name),
+                      });
+  }
+  else {
+    compiler.add_node(node,
+                      NODE_CLOSURE_SET_WEIGHT,
+                      SVMNodeClosureSetWeight{
+                          .rgb = weight,
+                      });
+  }
+  compiler.add_node(node,
+                    NODE_MATERIALX_CLOSURE_BSDF,
+                    SVMNodeClosureBsdf{
+                        .closure_type = closure,
+                        .mix_weight_offset = compiler.closure_mix_weight_offset(),
+                    });
+  compiler.add_node_data(data);
+}
+
+/* MaterialX Diffuse BSDF */
+
+NODE_DEFINE(MaterialXDiffuseBsdfNode)
+{
+  NodeType *type = NodeType::add("materialx_diffuse_bsdf", create, NodeType::SHADER);
+
+  SOCKET_IN_COLOR(color, "Color", make_float3(0.8f, 0.8f, 0.8f));
+  SOCKET_IN_NORMAL(normal, "Normal", zero_float3(), SocketType::LINK_NORMAL);
+  SOCKET_IN_FLOAT(surface_mix_weight, "SurfaceMixWeight", 0.0f, SocketType::SVM_INTERNAL);
+  SOCKET_IN_FLOAT(roughness, "Roughness", 0.0f);
+  SOCKET_IN_FLOAT(closure_weight, "ClosureWeight", 1.0f);
+  static NodeEnum method_enum;
+  method_enum.insert("oren_nayar", CLOSURE_BSDF_DIFFUSE_ID);
+  method_enum.insert("burley", CLOSURE_BSDF_BURLEY_ID);
+  SOCKET_ENUM(method, "Method", method_enum, CLOSURE_BSDF_DIFFUSE_ID);
+
+  SOCKET_OUT_CLOSURE(BSDF, "BSDF");
+
+  return type;
+}
+
+MaterialXDiffuseBsdfNode::MaterialXDiffuseBsdfNode() : BsdfNode(get_node_type())
+{
+  closure = CLOSURE_BSDF_DIFFUSE_ID;
+}
+
+void MaterialXDiffuseBsdfNode::compile(SVMCompiler &compiler)
+{
+  closure = method;
+  materialx_closure_compile(this,
+                            compiler,
+                            "Color",
+                            color,
+                            closure,
+                            SVMNodeMaterialXDiffuseBsdfData{
+                                .color = compiler.input_float3("Color"),
+                                .roughness = compiler.input_float("Roughness"),
+                                .closure_weight = compiler.input_float("ClosureWeight"),
+                                .normal = compiler.input_float3("Normal"),
+                            });
+}
+
+void MaterialXDiffuseBsdfNode::compile(OSLCompiler &compiler)
+{
+  compiler.parameter(this, "method");
+  compiler.add(this, "node_materialx_diffuse_bsdf");
 }
 
 /* MaterialX Blackbody */

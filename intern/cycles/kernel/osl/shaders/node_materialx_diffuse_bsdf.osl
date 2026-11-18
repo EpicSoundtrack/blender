@@ -1,0 +1,23 @@
+/* SPDX-FileCopyrightText: 2011-2022 Blender Foundation
+ *
+ * SPDX-License-Identifier: Apache-2.0 */
+
+#include "stdcycles.h"
+
+/* MaterialX diffuse leaves: Oren-Nayar or the unclamped Burley diffuse, scaled by the
+ * MaterialX closure weight. The stock node_diffuse_bsdf is unchanged. */
+
+shader node_materialx_diffuse_bsdf(color Color = 0.8,
+                                   float Roughness = 0.0,
+                                   float ClosureWeight = 1.0,
+                                   string method = "oren_nayar",
+                                   normal Normal = N,
+                                   output closure color BSDF = 0)
+{
+  if (method == "burley")
+    BSDF = ClosureWeight * materialx_burley_diffuse_bsdf(Normal, Color, Roughness);
+  else if (Roughness < 1e-5)
+    BSDF = ClosureWeight * Color * diffuse(Normal);
+  else
+    BSDF = ClosureWeight * oren_nayar_diffuse_bsdf(Normal, clamp(Color, 0.0, 1.0), Roughness);
+}

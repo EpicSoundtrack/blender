@@ -59,6 +59,7 @@
 #include "kernel/svm/map_range.h"
 #include "kernel/svm/materialx_blackbody.h"
 #include "kernel/svm/materialx_cellnoise.h"
+#include "kernel/svm/materialx_closure.h"
 #include "kernel/svm/materialx_heighttonormal.h"
 #include "kernel/svm/materialx_math.h"
 #include "kernel/svm/materialx_noise.h"
@@ -536,6 +537,14 @@ ccl_device void svm_eval_nodes(KernelGlobals kg,
       IF_NOT_KERNEL_NODES_FEATURE(VOLUME)
       {
         svm_node_materialx_math_derivative(stack, svm_node_get<SVMNodeMath>(kg, &offset));
+      }
+      break;
+      SVM_CASE(NODE_MATERIALX_CLOSURE_BSDF)
+      {
+        const ccl_global SVMNodeClosureBsdf &bsdf_node = svm_node_get<SVMNodeClosureBsdf>(kg,
+                                                                                          &offset);
+        offset = svm_node_materialx_closure_bsdf<node_feature_mask, type>(
+            kg, sd, stack, closure_weight, bsdf_node, offset);
       }
       break;
       SVM_CASE(NODE_MATERIALX_NOISE)

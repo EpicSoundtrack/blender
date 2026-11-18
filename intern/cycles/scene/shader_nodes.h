@@ -537,9 +537,6 @@ class DiffuseBsdfNode : public BsdfNode {
   }
 
   NODE_SOCKET_API(float, roughness)
-  NODE_SOCKET_API(float, closure_weight)
-  NODE_SOCKET_API(ClosureType, method)
-  ClosureType get_closure_type() override { return method; }
 };
 
 /* Disney principled BRDF */
@@ -1863,6 +1860,30 @@ class MaterialXNormalMapNode : public ShaderNode {
   {
     return NODE_MATERIALX_NORMAL_MAP;
   }
+};
+
+/* MaterialX diffuse leaves (oren_nayar_diffuse_bsdf, burley_diffuse_bsdf, lama diffuse):
+ * the stock Diffuse closure plus a scalar closure weight (MaterialX weight, also the
+ * per-channel ND_multiply_bsdfC tint) and the unclamped Burley diffuse. */
+class MaterialXDiffuseBsdfNode : public BsdfNode {
+ public:
+  SHADER_NODE_CLASS(MaterialXDiffuseBsdfNode)
+  bool is_linear_operation() override
+  {
+    return true;
+  }
+  ShaderNodeType shader_node_type() const override
+  {
+    return NODE_MATERIALX_CLOSURE_BSDF;
+  }
+  ClosureType get_closure_type() override
+  {
+    return method;
+  }
+
+  NODE_SOCKET_API(float, roughness)
+  NODE_SOCKET_API(float, closure_weight)
+  NODE_SOCKET_API(ClosureType, method)
 };
 
 /* MaterialX blackbody: mx_blackbody (MaterialX pbrlib) instead of Blender's model. */

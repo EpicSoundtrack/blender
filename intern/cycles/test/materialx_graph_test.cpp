@@ -835,9 +835,18 @@ TEST(materialx_graph, connected_fractal_heighttonormal_keeps_height_and_uv_deriv
 TEST(materialx_graph, stock_bsdf_hidden_materialx_sockets_default_to_stock)
 {
   ShaderGraph graph;
-  const DiffuseBsdfNode *diffuse = graph.create_node<DiffuseBsdfNode>();
+  /* Track B6/B7 (batch 24): the diffuse sockets live on the MaterialX-only node;
+   * stock Diffuse has only the upstream sockets and the stock SVM opcode. */
+  DiffuseBsdfNode *stock_diffuse = graph.create_node<DiffuseBsdfNode>();
+  EXPECT_EQ(stock_diffuse->type->find_input(ustring("closure_weight")), nullptr);
+  EXPECT_EQ(stock_diffuse->type->find_input(ustring("method")), nullptr);
+  EXPECT_EQ(stock_diffuse->shader_node_type(), NODE_CLOSURE_BSDF);
+  EXPECT_EQ(stock_diffuse->get_closure_type(), CLOSURE_BSDF_DIFFUSE_ID);
+  const MaterialXDiffuseBsdfNode *diffuse = graph.create_node<MaterialXDiffuseBsdfNode>();
   EXPECT_EQ(diffuse->get_method(), CLOSURE_BSDF_DIFFUSE_ID);
   EXPECT_EQ(diffuse->get_closure_weight(), 1.0f);
+  EXPECT_EQ(diffuse->shader_node_type(), NODE_MATERIALX_CLOSURE_BSDF);
+  EXPECT_GT(int(NODE_MATERIALX_CLOSURE_BSDF), int(NODE_NONE));
   const MetallicBsdfNode *metallic = graph.create_node<MetallicBsdfNode>();
   EXPECT_EQ(metallic->get_tint(), one_float3());
   EXPECT_LT(metallic->get_alpha_x(), 0.0f);
@@ -12444,7 +12453,7 @@ TEST(materialx_graph, lowers_generic_surface_bsdf_edf_and_opacity_as_closure_com
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{albedo, roughness, bsdf, edf, opacity, surface}}, &graph));
 
-  DiffuseBsdfNode *native_bsdf = nullptr;
+  MaterialXDiffuseBsdfNode *native_bsdf = nullptr;
   EmissionNode *native_edf = nullptr;
   TransparentBsdfNode *transparent = nullptr;
   AddClosureNode *add = nullptr;
@@ -12453,7 +12462,7 @@ TEST(materialx_graph, lowers_generic_surface_bsdf_edf_and_opacity_as_closure_com
   ColorNode *albedo_value = nullptr;
   ValueNode *roughness_value = nullptr;
   for (ShaderNode *node : graph.nodes) {
-    native_bsdf = node->name == "Diffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_bsdf;
+    native_bsdf = node->name == "Diffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_bsdf;
     native_edf = node->name == "Light" ? dynamic_cast<EmissionNode *>(node) : native_edf;
     transparent = node->name == "Surface.transparent" ? dynamic_cast<TransparentBsdfNode *>(node) : transparent;
     add = node->name == "Surface.add" ? dynamic_cast<AddClosureNode *>(node) : add;
@@ -12531,13 +12540,13 @@ TEST(materialx_graph, lowers_generic_surface_recursive_bsdf_closure_composition)
                                &graph));
 
   MixClosureNode *native_mix = nullptr;
-  DiffuseBsdfNode *native_red = nullptr;
-  DiffuseBsdfNode *native_blue = nullptr;
+  MaterialXDiffuseBsdfNode *native_red = nullptr;
+  MaterialXDiffuseBsdfNode *native_blue = nullptr;
   ValueNode *native_mix_amount = nullptr;
   for (ShaderNode *node : graph.nodes) {
     native_mix = node->name == "MixedDiffuse" ? dynamic_cast<MixClosureNode *>(node) : native_mix;
-    native_red = node->name == "RedDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_red;
-    native_blue = node->name == "BlueDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_blue;
+    native_red = node->name == "RedDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_red;
+    native_blue = node->name == "BlueDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_blue;
     native_mix_amount = node->name == "MixAmount" ? dynamic_cast<ValueNode *>(node) :
                                                     native_mix_amount;
   }
@@ -12580,9 +12589,9 @@ TEST(materialx_graph, lowers_dot_surfaceshader_as_identity_passthrough)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{albedo, bsdf, dot}}, &graph));
 
-  DiffuseBsdfNode *native_bsdf = nullptr;
+  MaterialXDiffuseBsdfNode *native_bsdf = nullptr;
   for (ShaderNode *node : graph.nodes) {
-    native_bsdf = node->name == "Diffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_bsdf;
+    native_bsdf = node->name == "Diffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_bsdf;
     EXPECT_NE(node->name, "DotSurface");
   }
   ASSERT_NE(native_bsdf, nullptr);
@@ -12597,7 +12606,7 @@ TEST(materialx_graph, lowers_dot_surfaceshader_as_identity_passthrough)
   ShaderGraph consumed_graph;
   ASSERT_TRUE(materialx::lower({{albedo, bsdf, dot, surface}}, &consumed_graph));
   for (ShaderNode *node : consumed_graph.nodes) {
-    native_bsdf = node->name == "Diffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_bsdf;
+    native_bsdf = node->name == "Diffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_bsdf;
     EXPECT_NE(node->name, "DotSurface");
   }
   ASSERT_NE(native_bsdf, nullptr);
@@ -12642,12 +12651,12 @@ TEST(materialx_graph, lowers_mix_surfaceshader_unit_opacity_surfaces)
   ASSERT_TRUE(materialx::lower({{red_bsdf, blue_bsdf, bg_surface, fg_surface, mix}}, &graph));
 
   MixClosureNode *native_mix = nullptr;
-  DiffuseBsdfNode *native_red = nullptr;
-  DiffuseBsdfNode *native_blue = nullptr;
+  MaterialXDiffuseBsdfNode *native_red = nullptr;
+  MaterialXDiffuseBsdfNode *native_blue = nullptr;
   for (ShaderNode *node : graph.nodes) {
     native_mix = node->name == "SurfaceMix" ? dynamic_cast<MixClosureNode *>(node) : native_mix;
-    native_red = node->name == "RedDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_red;
-    native_blue = node->name == "BlueDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : native_blue;
+    native_red = node->name == "RedDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_red;
+    native_blue = node->name == "BlueDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : native_blue;
   }
   ASSERT_NE(native_mix, nullptr);
   ASSERT_NE(native_red, nullptr);
@@ -12842,15 +12851,15 @@ TEST(materialx_graph, lowers_lama_surface_front_back_and_presence)
   MixClosureNode *presence = nullptr;
   GeometryNode *geometry = nullptr;
   TransparentBsdfNode *transparent = nullptr;
-  DiffuseBsdfNode *front_native = nullptr;
-  DiffuseBsdfNode *back_native = nullptr;
+  MaterialXDiffuseBsdfNode *front_native = nullptr;
+  MaterialXDiffuseBsdfNode *back_native = nullptr;
   for (ShaderNode *node : graph.nodes) {
     side = node->name == "LamaSurface.side" ? dynamic_cast<MixClosureNode *>(node) : side;
     presence = node->name == "LamaSurface" ? dynamic_cast<MixClosureNode *>(node) : presence;
     geometry = node->name == "LamaSurface.geometry" ? dynamic_cast<GeometryNode *>(node) : geometry;
     transparent = node->name == "LamaSurface.transparent" ? dynamic_cast<TransparentBsdfNode *>(node) : transparent;
-    front_native = node->name == "FrontDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : front_native;
-    back_native = node->name == "BackDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(node) : back_native;
+    front_native = node->name == "FrontDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : front_native;
+    back_native = node->name == "BackDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : back_native;
   }
   ASSERT_NE(side, nullptr);
   ASSERT_NE(presence, nullptr);
@@ -20576,9 +20585,9 @@ TEST(materialx_graph, lowers_oren_nayar_diffuse_bsdf_folding_weight_into_color)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{node}}, &graph));
 
-  DiffuseBsdfNode *diffuse = nullptr;
+  MaterialXDiffuseBsdfNode *diffuse = nullptr;
   for (ShaderNode *n : graph.nodes) {
-    diffuse = n->name == "OrenNayar" ? dynamic_cast<DiffuseBsdfNode *>(n) : diffuse;
+    diffuse = n->name == "OrenNayar" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(n) : diffuse;
   }
   ASSERT_NE(diffuse, nullptr);
   EXPECT_FLOAT_EQ(diffuse->get_color().x, 0.2f);
@@ -20601,9 +20610,9 @@ TEST(materialx_graph, lowers_oren_nayar_diffuse_bsdf_energy_compensation_exactly
   ASSERT_TRUE(materialx::validate({{node}}));
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{node}}, &graph));
-  DiffuseBsdfNode *diffuse = nullptr;
+  MaterialXDiffuseBsdfNode *diffuse = nullptr;
   for (ShaderNode *n : graph.nodes) {
-    diffuse = n->name == "OrenNayar" ? dynamic_cast<DiffuseBsdfNode *>(n) : diffuse;
+    diffuse = n->name == "OrenNayar" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(n) : diffuse;
   }
   ASSERT_NE(diffuse, nullptr);
   EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.5f);
@@ -20822,9 +20831,9 @@ TEST(materialx_graph, burley_full_nondefault_literals)
 
     ShaderGraph graph;
     ASSERT_TRUE(materialx::lower({{node}}, &graph)) << weight;
-    DiffuseBsdfNode *sss = nullptr;
+    MaterialXDiffuseBsdfNode *sss = nullptr;
     for (ShaderNode *n : graph.nodes) {
-      sss = n->name == "Subsurface" ? dynamic_cast<DiffuseBsdfNode *>(n) : sss;
+      sss = n->name == "Subsurface" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(n) : sss;
     }
     ASSERT_NE(sss, nullptr);
     EXPECT_FLOAT_EQ(sss->get_color().x, 0.5f) << weight;
@@ -22252,9 +22261,9 @@ TEST(materialx_graph, lowers_lama_diffuse_literal_energy_compensation_zero)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{node}}, &graph));
 
-  DiffuseBsdfNode *diffuse = nullptr;
+  MaterialXDiffuseBsdfNode *diffuse = nullptr;
   for (ShaderNode *n : graph.nodes) {
-    diffuse = n->name == "LamaDiffuse" ? dynamic_cast<DiffuseBsdfNode *>(n) : diffuse;
+    diffuse = n->name == "LamaDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(n) : diffuse;
   }
   ASSERT_NE(diffuse, nullptr);
   EXPECT_FLOAT_EQ(diffuse->get_color().x, 0.4f);

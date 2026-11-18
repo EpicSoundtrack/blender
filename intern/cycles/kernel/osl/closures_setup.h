@@ -174,7 +174,9 @@ ccl_device void osl_closure_materialx_burley_diffuse_bsdf_setup(
 
   bsdf->N = safe_normalize_fallback(closure->N, sd->N);
 
-  sd->flag |= bsdf_burley_setup(bsdf, closure->roughness, false);
+  sd->flag |= bsdf_burley_setup(bsdf, closure->roughness);
+  /* MaterialX burley_diffuse_bsdf does not clamp roughness. */
+  bsdf->roughness = closure->roughness;
 }
 
 ccl_device void osl_closure_translucent_setup(KernelGlobals kg,

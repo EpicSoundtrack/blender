@@ -529,23 +529,15 @@ ccl_device
 
       break;
     }
-    case CLOSURE_BSDF_DIFFUSE_ID:
-    case CLOSURE_BSDF_BURLEY_ID: {
+    case CLOSURE_BSDF_DIFFUSE_ID: {
       const ccl_global SVMNodeDiffuseBsdfData &bsdf_data = svm_node_get<SVMNodeDiffuseBsdfData>(
           kg, &offset);
-      float3 N = stack_load(stack, bsdf_data.normal);
+      float3 N = stack_load_float3_default(stack, bsdf_data.normal_offset, sd->N);
       N = safe_normalize_fallback(N, sd->N);
 
-      const Spectrum weight = closure_weight * stack_load(stack, bsdf_data.closure_weight) * mix_weight;
+      const Spectrum weight = closure_weight * mix_weight;
       const float roughness = stack_load(stack, bsdf_data.roughness);
-      if (type == CLOSURE_BSDF_BURLEY_ID) {
-        ccl_private BurleyBsdf *bsdf = (ccl_private BurleyBsdf *)bsdf_alloc(sd, sizeof(BurleyBsdf), weight);
-        if (bsdf) {
-          bsdf->N = N;
-          sd->flag |= bsdf_burley_setup(bsdf, roughness, false);
-        }
-      }
-      else if (diffuse_roughness_is_almost_zero(roughness)) {
+      if (diffuse_roughness_is_almost_zero(roughness)) {
         bsdf_diffuse_setup(sd, N, weight);
       }
       else {

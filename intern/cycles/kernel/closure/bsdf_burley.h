@@ -36,12 +36,10 @@ ccl_device Spectrum bsdf_burley_get_intensity(const float roughness,
   return make_spectrum(M_1_PI_F * NdotL * mix(1.0f, F90, fl) * mix(1.0f, F90, fv));
 }
 
-ccl_device int bsdf_burley_setup(ccl_private BurleyBsdf *bsdf,
-                                 const float roughness,
-                                 const bool clamp_roughness = true)
+ccl_device int bsdf_burley_setup(ccl_private BurleyBsdf *bsdf, const float roughness)
 {
   bsdf->type = CLOSURE_BSDF_BURLEY_ID;
-  bsdf->roughness = clamp_roughness ? saturatef(roughness) : roughness;
+  bsdf->roughness = saturatef(roughness);
   return SD_BSDF | SD_BSDF_HAS_EVAL;
 }
 

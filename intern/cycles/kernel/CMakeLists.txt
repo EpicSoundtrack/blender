@@ -103,6 +103,7 @@ set(SRC_KERNEL_SVM_HEADERS
   svm/fractal_noise.h
   svm/materialx_blackbody.h
   svm/materialx_cellnoise.h
+  svm/materialx_closure.h
   svm/materialx_heighttonormal.h
   svm/materialx_math.h
   svm/materialx_noise.h

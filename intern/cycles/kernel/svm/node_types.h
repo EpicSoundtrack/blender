@@ -111,6 +111,16 @@ struct SVMNodeMaterialXHeightToNormal {
 static_assert(alignof(SVMNodeMaterialXHeightToNormal) <= alignof(uint));
 static_assert(sizeof(SVMNodeMaterialXHeightToNormal) % sizeof(uint) == 0);
 
+/* NODE_MATERIALX_CLOSURE_BSDF data for CLOSURE_BSDF_DIFFUSE_ID and CLOSURE_BSDF_BURLEY_ID. */
+struct SVMNodeMaterialXDiffuseBsdfData {
+  SVMInputFloat3 color;
+  SVMInputFloat roughness;
+  SVMInputFloat closure_weight;
+  SVMInputFloat3 normal;
+};
+static_assert(alignof(SVMNodeMaterialXDiffuseBsdfData) <= alignof(uint));
+static_assert(sizeof(SVMNodeMaterialXDiffuseBsdfData) % sizeof(uint) == 0);
+
 /* NODE_MATERIALX_NOISE */
 struct SVMNodeMaterialXNoise {
   uint dimensions;
@@ -1081,8 +1091,8 @@ static_assert(sizeof(SVMNodeSimpleBsdfData) % sizeof(uint) == 0);
 struct SVMNodeDiffuseBsdfData {
   SVMInputFloat3 color;
   SVMInputFloat roughness;
-  SVMInputFloat closure_weight;
-  SVMInputFloat3 normal;
+  SVMStackOffset normal_offset;
+  uint8_t _pad[3];
 };
 static_assert(alignof(SVMNodeDiffuseBsdfData) <= alignof(uint));
 static_assert(sizeof(SVMNodeDiffuseBsdfData) % sizeof(uint) == 0);

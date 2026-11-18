@@ -1508,9 +1508,9 @@ bool finite_float3(const float3 &value)
  * where e_c masks one channel: the masked clone's channel c equals L(color)'s
  * channel c exactly (including Oren-Nayar's albedo-dependent multiscatter,
  * which is computed per channel) and its other channels are zero. Each clone
- * carries tint_c on DiffuseBsdfNode's independent, unclamped ClosureWeight
+ * carries tint_c on MaterialXDiffuseBsdfNode's independent, unclamped ClosureWeight
  * socket, so the colour parameter itself is never rescaled. Admitted only for
- * leaves lowered to DiffuseBsdfNode (oren_nayar / burley). */
+ * leaves lowered to MaterialXDiffuseBsdfNode (oren_nayar / burley). */
 bool multiply_bsdfc_is_per_channel(const Node &node)
 {
   if (node.nodedef != "ND_multiply_bsdfC") {
@@ -13874,7 +13874,7 @@ bool validate(const Graph &source,
                             unordered_set<string>{"weight", "roughness", "energyCompensation"} :
                             unordered_set<string>{"weight", "roughness"};
         allowed_color3 = {"color"};
-        /* energy_compensation: Cycles' DiffuseBsdfNode with roughness > 0
+        /* energy_compensation: Cycles' MaterialXDiffuseBsdfNode with roughness > 0
          * lowers to CLOSURE_BSDF_OREN_NAYAR_ID (kernel/closure/
          * bsdf_oren_nayar.h), which is Fujii's improved Oren-Nayar plus the
          * OpenPBR energy-preserving multi-scatter term. That is term for term
@@ -16651,7 +16651,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
      * above) purely to keep that chain's nesting depth under MSVC's internal
      * block-nesting limit (C1061). */
     if (node.nodedef == burley_diffuse_bsdf_id) {
-      DiffuseBsdfNode *diffuse = graph->create_node<DiffuseBsdfNode>();
+      MaterialXDiffuseBsdfNode *diffuse = graph->create_node<MaterialXDiffuseBsdfNode>();
       diffuse->name = node.name;
       diffuse->set_method(CLOSURE_BSDF_BURLEY_ID);
       if (!node.links.contains("color")) {
@@ -24715,7 +24715,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           lowered = glass;
         }
         else {
-          DiffuseBsdfNode *diffuse = graph->create_node<DiffuseBsdfNode>();
+          MaterialXDiffuseBsdfNode *diffuse = graph->create_node<MaterialXDiffuseBsdfNode>();
           if (const auto input = node.color3_inputs.find("color"); input != node.color3_inputs.end()) {
             diffuse->set_color(input->second);
           }
@@ -25066,7 +25066,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           lowered = hair;
         }
         else if (node.nodedef == oren_nayar_diffuse_bsdf_id || node.nodedef == lama_diffuse_id) {
-          DiffuseBsdfNode *diffuse = graph->create_node<DiffuseBsdfNode>();
+          MaterialXDiffuseBsdfNode *diffuse = graph->create_node<MaterialXDiffuseBsdfNode>();
           if (!node.links.contains("color")) {
             const float3 color = node.color3_inputs.contains("color") ?
                                      node.color3_inputs.at("color") :
@@ -32223,7 +32223,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     }
     ShaderNode *mix = lowered_nodes.at(node.name);
     ShaderOutput *leaf_output = lowered_output(node.links.at("in1"), nodes_by_name, lowered_nodes);
-    DiffuseBsdfNode *leaf = leaf_output ? dynamic_cast<DiffuseBsdfNode *>(leaf_output->parent) :
+    MaterialXDiffuseBsdfNode *leaf = leaf_output ? dynamic_cast<MaterialXDiffuseBsdfNode *>(leaf_output->parent) :
                                           nullptr;
     if (leaf == nullptr || leaf->input("ClosureWeight")->link != nullptr ||
         leaf->get_closure_weight() != 1.0f)
@@ -32258,7 +32258,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     static const char *channel_names[3] = {"Red", "Green", "Blue"};
     ShaderOutput *sum = nullptr;
     for (int c = 0; c < 3; c++) {
-      DiffuseBsdfNode *clone = static_cast<DiffuseBsdfNode *>(leaf->clone(graph));
+      MaterialXDiffuseBsdfNode *clone = static_cast<MaterialXDiffuseBsdfNode *>(leaf->clone(graph));
       clone->name = node.name + ".channel" + std::to_string(c);
       for (ShaderInput *input : leaf->inputs) {
         if (input->link != nullptr && input->name() != "Color") {
