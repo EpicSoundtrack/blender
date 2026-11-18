@@ -11109,6 +11109,135 @@ TEST(materialx_usdshade_reader, reads_usdtransform2d_as_place2d_lowering)
   EXPECT_TRUE(found_place);
 }
 
+/* Batch 29 (port of candidate WindowsPlace2dV5c-v1): MaterialX ND_place2d_vector2 with its
+ * spec-typed integer operationorder, SDK defaults for unauthored inputs, and linked
+ * texcoord/pivot/scale/offset/rotate/operationorder controls. */
+namespace {
+struct Place2dFixture {
+  pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  pxr::UsdShadeMaterial material;
+  pxr::UsdShadeShader place;
+  Place2dFixture()
+  {
+    material = pxr::UsdShadeMaterial::Define(stage, pxr::SdfPath("/Looks/Place2d"));
+    place = shader("Place", "ND_place2d_vector2", pxr::SdfValueTypeNames->Float2);
+    pxr::UsdShadeShader surface = shader(
+        "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    surface.CreateInput(pxr::TfToken("unused_place"), pxr::SdfValueTypeNames->Float2)
+        .ConnectToSource(place.ConnectableAPI(), pxr::TfToken("out"));
+    material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+        .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out"));
+  }
+  pxr::UsdShadeShader shader(const char *name, const char *id, const pxr::SdfValueTypeName &type)
+  {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  }
+  bool read(materialx::Graph *graph, string *error)
+  {
+    vector<materialx::Link> outputs;
+    const vector<materialx::SelectedOutput> selected = {
+        {place.GetPath().GetString(), "ND_place2d_vector2", "out", materialx::Type::Vector2}};
+    return materialx::resolve_manifest_outputs(material, "mtlx", selected, graph, &outputs, error);
+  }
+};
+}  // namespace
+
+TEST(materialx_usdshade_reader, reads_place2d_sdk_defaults_and_integer_operationorder)
+{
+  Place2dFixture fixture;
+  {
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(fixture.read(&graph, &error)) << error;
+    const materialx::Node &place = graph.nodes.back();
+    EXPECT_EQ(place.vector2_inputs.at("texcoord"), zero_float2());
+    EXPECT_EQ(place.vector2_inputs.at("pivot"), zero_float2());
+    EXPECT_EQ(place.vector2_inputs.at("scale"), make_float2(1.0f, 1.0f));
+    EXPECT_EQ(place.vector2_inputs.at("offset"), zero_float2());
+    EXPECT_FLOAT_EQ(place.inputs.at("rotate"), 0.0f);
+    EXPECT_FLOAT_EQ(place.inputs.at("operationorder"), 0.0f);
+    ShaderGraph lowered;
+    EXPECT_TRUE(materialx::lower(graph, &lowered));
+  }
+  pxr::UsdShadeInput order = fixture.place.CreateInput(pxr::TfToken("operationorder"),
+                                                       pxr::SdfValueTypeNames->Int);
+  order.Set(1);
+  {
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(fixture.read(&graph, &error)) << error;
+    EXPECT_FLOAT_EQ(graph.nodes.back().inputs.at("operationorder"), 1.0f);
+    ShaderGraph lowered;
+    EXPECT_TRUE(materialx::lower(graph, &lowered));
+  }
+  order.Set(2);
+  {
+    materialx::Graph graph;
+    string error;
+    EXPECT_FALSE(fixture.read(&graph, &error));
+    EXPECT_NE(error.find("requires integer operationorder 0 or 1"), string::npos) << error;
+  }
+}
+
+TEST(materialx_usdshade_reader, reads_and_lowers_place2d_linked_controls_and_order)
+{
+  Place2dFixture fixture;
+  const auto geomprop = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type,
+                            const char *primvar, const pxr::VtValue &fallback) {
+    pxr::UsdShadeShader result = fixture.shader(name, id, type);
+    result.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String).Set(string(primvar));
+    result.CreateInput(pxr::TfToken("default"), type).Set(fallback);
+    return result;
+  };
+  pxr::UsdShadeShader uv = geomprop("UV", "ND_geompropvalue_vector2", pxr::SdfValueTypeNames->Float2,
+                                    "st", pxr::VtValue(pxr::GfVec2f(0.0f)));
+  pxr::UsdShadeShader offset = geomprop("Offset", "ND_geompropvalue_vector2",
+                                        pxr::SdfValueTypeNames->Float2, "pd_offset",
+                                        pxr::VtValue(pxr::GfVec2f(0.1f, -0.2f)));
+  pxr::UsdShadeShader angle = geomprop("Angle", "ND_geompropvalue_float",
+                                       pxr::SdfValueTypeNames->Float, "pd_rotate",
+                                       pxr::VtValue(90.0f));
+  pxr::UsdShadeShader order = geomprop("Order", "ND_geompropvalue_integer",
+                                       pxr::SdfValueTypeNames->Int, "pd_operationorder",
+                                       pxr::VtValue(1));
+  ASSERT_TRUE(fixture.place.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(fixture.place.CreateInput(pxr::TfToken("offset"), pxr::SdfValueTypeNames->Float2)
+                  .ConnectToSource(offset.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(fixture.place.CreateInput(pxr::TfToken("rotate"), pxr::SdfValueTypeNames->Float)
+                  .ConnectToSource(angle.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(fixture.place.CreateInput(pxr::TfToken("operationorder"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(order.ConnectableAPI(), pxr::TfToken("out")));
+  fixture.place.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float2)
+      .Set(pxr::GfVec2f(2.0f, 4.0f));
+
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(fixture.read(&graph, &error)) << error;
+  const materialx::Node &place = graph.nodes.back();
+  EXPECT_EQ(place.nodedef, "ND_place2d_vector2");
+  for (const char *name : {"texcoord", "offset", "rotate", "operationorder"}) {
+    EXPECT_TRUE(place.links.count(name)) << name;
+  }
+  EXPECT_FALSE(place.inputs.count("rotate"));
+  EXPECT_FALSE(place.inputs.count("operationorder"));
+  EXPECT_EQ(place.vector2_inputs.at("scale"), make_float2(2.0f, 4.0f));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  bool is_srt = false, is_trs = false, srt_or_zero = false;
+  for (ShaderNode *node : lowered.nodes) {
+    is_srt |= node->name == "Place.order.is_srt";
+    is_trs |= node->name == "Place.order.is_trs";
+    srt_or_zero |= node->name == "Place.order.srt_or_zero";
+  }
+  EXPECT_TRUE(is_srt && is_trs && srt_or_zero);
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_usdtransform2d_literal_texcoord)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

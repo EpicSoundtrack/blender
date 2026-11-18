@@ -19511,8 +19511,21 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   else if (nodedef == place2d_vector2_id || nodedef == usd_transform2d_id ||
            nodedef == usd_transform2d_shader_id) {
     const bool usd_transform = nodedef == usd_transform2d_id || nodedef == usd_transform2d_shader_id;
+    const auto place2d_default = [&](const pxr::UsdShadeInput &input,
+                                     const pxr::SdfValueTypeName &type) {
+      return !usd_transform &&
+             (!input || (input.GetTypeName() == type &&
+                         !input.GetAttr().HasAuthoredValueOpinion() &&
+                         input.GetAttr().GetNumTimeSamples() == 0 &&
+                         composed_connection_count(input.GetAttr()) == 0));
+    };
     const char *coordinate_name = usd_transform ? "in" : "texcoord";
-    if (!read_vector2_operand(source,
+    if (place2d_default(source.GetInput(pxr::TfToken(coordinate_name)),
+                        pxr::SdfValueTypeNames->Float2))
+    {
+      node.vector2_inputs["texcoord"] = make_float2(0.0f, 0.0f);
+    }
+    else if (!read_vector2_operand(source,
                               nodedef,
                               coordinate_name,
                               graph,
@@ -19537,10 +19550,23 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     for (const char *name : {"scale", offset_input_name}) {
       const char *stored_name = string(name) == "translation" ? "offset" : name;
       const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
-      pxr::GfVec2f value;
-      if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
-          input.HasConnectedSource() || !input.Get(&value) || !std::isfinite(value[0]) ||
-          !std::isfinite(value[1])) {
+      if (!usd_transform) {
+        if (place2d_default(input, pxr::SdfValueTypeNames->Float2)) {
+          const float value = string(name) == "scale" ? 1.0f : 0.0f;
+          node.vector2_inputs[name] = make_float2(value, value);
+        }
+        else if (!read_vector2_operand(source, nodedef, name, graph, &node,
+                                       active_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+        continue;
+      }
+      pxr::GfVec2f value(string(name) == "scale" ? 1.0f : 0.0f);
+      if (!place2d_default(input, pxr::SdfValueTypeNames->Float2) &&
+          (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
+           input.HasConnectedSource() ||
+           (!usd_transform && composed_connection_count(input.GetAttr()) != 0) ||
+           !input.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]))) {
         set_error(error_message, nodedef + " requires literal finite vector2 input '" + name + "'");
         return finish(false);
       }
@@ -19548,19 +19574,20 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     }
     if (!usd_transform) {
       const pxr::UsdShadeInput pivot = source.GetInput(pxr::TfToken("pivot"));
-      pxr::GfVec2f pivot_value;
-      if (!pivot || pivot.GetTypeName() != pxr::SdfValueTypeNames->Float2 ||
-          pivot.HasConnectedSource() || !pivot.Get(&pivot_value) || !std::isfinite(pivot_value[0]) ||
-          !std::isfinite(pivot_value[1])) {
-        set_error(error_message, nodedef + " requires literal finite vector2 input 'pivot'");
+      if (place2d_default(pivot, pxr::SdfValueTypeNames->Float2)) {
+        node.vector2_inputs["pivot"] = make_float2(0.0f, 0.0f);
+      }
+      else if (!read_vector2_operand(source, nodedef, "pivot", graph, &node,
+                                     active_shaders, depth + 1, error_message)) {
         return finish(false);
       }
-      node.vector2_inputs["pivot"] = make_float2(pivot_value[0], pivot_value[1]);
     }
     else {
       node.vector2_inputs["pivot"] = make_float2(0.0f, 0.0f);
     }
-    if (node.vector2_inputs["scale"].x == 0.0f || node.vector2_inputs["scale"].y == 0.0f) {
+    const auto literal_scale = node.vector2_inputs.find("scale");
+    if (literal_scale != node.vector2_inputs.end() &&
+        (literal_scale->second.x == 0.0f || literal_scale->second.y == 0.0f)) {
       set_error(error_message, nodedef + " requires nonzero scale");
       return finish(false);
     }
@@ -19568,13 +19595,75 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
     for (const char *name : {rotate_input_name, "operationorder"}) {
       const bool installed_operationorder = string(name) == "operationorder" && usd_transform;
       const pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(name));
+      const auto place2d_type = string(name) == "operationorder" ?
+                                   pxr::SdfValueTypeNames->Int : pxr::SdfValueTypeNames->Float;
+      if (place2d_default(input, place2d_type)) {
+        node.inputs[name] = 0.0f;
+        continue;
+      }
+      /* Batch 29: a Float-typed literal operationorder keeps the pre-port float-selector
+       * route below; the integer (MaterialX-typed) form uses the SDK integer arm. */
+      const bool legacy_float_order = string(name) == "operationorder" && input &&
+                                      input.GetTypeName() == pxr::SdfValueTypeNames->Float;
+      if (!usd_transform && string(name) == "operationorder" && !legacy_float_order) {
+        if (input && composed_connection_count(input.GetAttr()) != 0) {
+          pxr::UsdShadeShader order_source;
+          pxr::UsdAttribute interface_literal;
+          if (!connected_shader(input, nullptr, &order_source, error_message,
+                                "out", &interface_literal)) {
+            return finish(false);
+          }
+          pxr::TfToken order_id;
+          if (!order_source || !order_source.GetShaderId(&order_id) ||
+              order_id.GetString() != constant_integer_id) {
+            std::unordered_set<string> active_integer_shaders;
+            std::unordered_map<string, string> emitted_integer_shaders;
+            Link link;
+            if (!read_integer_output(input, graph, &link, &active_integer_shaders,
+                                     &emitted_integer_shaders, depth + 1, error_message)) {
+              return finish(false);
+            }
+            node.links["operationorder"] = link;
+            continue;
+          }
+        }
+        int operationorder;
+        if (!read_integer_b_constant_arm(input, nodedef, name, &operationorder, error_message)) {
+          return finish(false);
+        }
+        if (operationorder != 0 && operationorder != 1) {
+          set_error(error_message, nodedef + " requires integer operationorder 0 or 1");
+          return finish(false);
+        }
+        /* SDK SRT/TRS is integer-valued; the existing lowerer uses a float selector. */
+        node.inputs["operationorder"] = static_cast<float>(operationorder);
+        continue;
+      }
+      if (!usd_transform && string(name) == "rotate" && input &&
+          composed_connection_count(input.GetAttr()) != 0) {
+        if (input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+          set_error(error_message, nodedef + " requires float input 'rotate'");
+          return finish(false);
+        }
+        std::unordered_set<string> active_float_shaders;
+        std::unordered_map<string, string> emitted_float_shaders;
+        Link link;
+        if (!read_float_output(input, graph, &link, &active_float_shaders,
+                               &emitted_float_shaders, depth + 1, error_message)) {
+          return finish(false);
+        }
+        node.links["rotate"] = link;
+        continue;
+      }
       float value;
       if (installed_operationorder && !input) {
         node.inputs["operationorder"] = 0.0f;
         continue;
       }
       if (!input || input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          input.HasConnectedSource() || !input.Get(&value) || !std::isfinite(value)) {
+          input.HasConnectedSource() ||
+          (!usd_transform && composed_connection_count(input.GetAttr()) != 0) ||
+          !input.Get(&value) || !std::isfinite(value)) {
         set_error(error_message, nodedef + " requires literal finite float input '" + name + "'");
         return finish(false);
       }
