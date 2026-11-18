@@ -3714,6 +3714,18 @@ bool read_literal_fallback_input(const pxr::UsdShadeShader &source,
   }
 }
 
+/* Batch 30: an attribute-reader name that names no primvar -- unvalued (the
+ * NodeDef default "") or an authored literal "" (geomprop-boolean-empty-name,
+ * integer sdk_materialized_empty_default). The reader's result is its fallback. */
+bool attribute_reader_name_is_empty(const pxr::UsdShadeInput &name_input)
+{
+  if (!name_input.GetAttr().HasAuthoredValueOpinion()) {
+    return true;
+  }
+  string name;
+  return name_input.Get(&name) && name.empty();
+}
+
 bool read_attribute_reader_name_input(const pxr::UsdShadeShader &source,
                                       const string &nodedef,
                                       const char *canonical_name,
@@ -8660,7 +8672,7 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
     if (name_input && name_input.GetTypeName() == pxr::SdfValueTypeNames->String &&
         composed_connection_count(name_input.GetAttr()) == 0 &&
         name_input.GetAttr().GetNumTimeSamples() == 0 &&
-        !name_input.GetAttr().HasAuthoredValueOpinion() &&
+        attribute_reader_name_is_empty(name_input) &&
         source_shader.GetOutput(pxr::TfToken("out")) &&
         source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() == pxr::SdfValueTypeNames->Bool)
     {
@@ -9001,6 +9013,35 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
   if (nodedef == geompropvalue_integer_id || nodedef == usd_primvar_reader_integer_id) {
     const char *input_name = nodedef == geompropvalue_integer_id ? "geomprop" : "varname";
     const char *fallback_name = nodedef == geompropvalue_integer_id ? "default" : "fallback";
+    const pxr::UsdShadeInput name_input = source_shader.GetInput(pxr::TfToken(input_name));
+    if (name_input && name_input.GetTypeName() == pxr::SdfValueTypeNames->String &&
+        composed_connection_count(name_input.GetAttr()) == 0 &&
+        name_input.GetAttr().GetNumTimeSamples() == 0 &&
+        attribute_reader_name_is_empty(name_input) &&
+        source_shader.GetOutput(pxr::TfToken("out")) &&
+        source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() == pxr::SdfValueTypeNames->Int)
+    {
+      /* Batch 30: no primvar is named, so the result is the literal fallback
+       * (as the Boolean reader above). */
+      Node fallback_only;
+      if (!read_literal_fallback_input(
+              source_shader, nodedef, fallback_name, Type::Integer, &fallback_only, error_message))
+      {
+        return finish(false);
+      }
+      Node constant;
+      constant.name = unique_node_name(
+          *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
+      constant.nodedef = constant_integer_id;
+      constant.int_inputs["value"] = fallback_only.fallback_int_inputs.contains("out") ?
+                                         fallback_only.fallback_int_inputs.at("out") :
+                                         0;
+      constant.outputs["out"] = Type::Integer;
+      *result = {constant.name, "out", Type::Integer};
+      emitted_shaders->emplace(shader_path, constant.name);
+      graph->nodes.push_back(std::move(constant));
+      return finish(true);
+    }
     string value;
     Node attribute;
     if (!read_string_value_input(source_shader.GetInput(pxr::TfToken(input_name)),
@@ -9200,7 +9241,8 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
       }
     }
     else if (is_integer_predicate_conditional(nodedef)) {
-      if (!read_integer_predicate_operands(source_shader, nodedef, &conditional, error_message)) {
+      if (!read_integer_predicate_operands(
+              source_shader, nodedef, graph, &conditional, depth, error_message)) {
         return finish(false);
       }
     }
@@ -17579,12 +17621,37 @@ bool read_integer_predicate_operands(const pxr::UsdShadeShader &shader,
         producer = pxr::UsdShadeShader(sources[0].source.GetPrim());
         producer.GetShaderId(&producer_id);
       }
-      const pxr::UsdShadeInput geomprop = producer ? producer.GetInput(pxr::TfToken("geomprop")) :
-                                                     pxr::UsdShadeInput();
-      if (sources.size() != 1 || producer_id.GetString() != "ND_geompropvalue_integer" ||
+      /* Batch 30: the projection (native_cycles_i21_projection
+       * _integer_reader_ports / _integer_uniform_geomprop_name) also attests
+       * ND_UsdPrimvarReader_integer ("varname") and a name connected to an
+       * exact literal ND_constant_string "value". */
+      const bool primvar_reader = producer_id.GetString() == "ND_UsdPrimvarReader_integer";
+      const pxr::UsdShadeInput geomprop =
+          producer ? producer.GetInput(pxr::TfToken(primvar_reader ? "varname" : "geomprop")) :
+                     pxr::UsdShadeInput();
+      pxr::UsdShadeInput name_value = geomprop;
+      if (geomprop && geomprop.HasConnectedSource()) {
+        const auto name_sources = geomprop.GetConnectedSources();
+        pxr::UsdShadeShader name_producer;
+        pxr::TfToken name_producer_id;
+        if (name_sources.size() == 1 && name_sources[0].sourceName == pxr::TfToken("out")) {
+          name_producer = pxr::UsdShadeShader(name_sources[0].source.GetPrim());
+          name_producer.GetShaderId(&name_producer_id);
+        }
+        name_value = name_producer_id.GetString() == "ND_constant_string" ?
+                         name_producer.GetInput(pxr::TfToken("value")) :
+                         pxr::UsdShadeInput();
+        if (name_value && name_value.HasConnectedSource()) {
+          name_value = pxr::UsdShadeInput();
+        }
+      }
+      if (sources.size() != 1 ||
+          (producer_id.GetString() != "ND_geompropvalue_integer" && !primvar_reader) ||
           !geomprop || geomprop.GetTypeName() != pxr::SdfValueTypeNames->String ||
-          geomprop.HasConnectedSource() || geomprop.GetAttr().GetNumTimeSamples() != 0 ||
-          !geomprop.Get(&original) || original.empty() ||
+          geomprop.GetAttr().GetNumTimeSamples() != 0 || !name_value ||
+          name_value.GetTypeName() != pxr::SdfValueTypeNames->String ||
+          name_value.GetAttr().GetNumTimeSamples() != 0 ||
+          !name_value.Get(&original) || original.empty() ||
           !read_descriptor(alias_key, &alias) || !read_descriptor(original_key, &declared_original) ||
           declared_original != original || alias.rfind("__mx_private_i32_words_", 0) != 0)
       {

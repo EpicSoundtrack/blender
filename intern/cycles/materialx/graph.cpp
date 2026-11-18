@@ -3322,6 +3322,15 @@ bool integer_predicate_accepts_runtime_condition(const Type output_type)
          output_type == Type::Vector3 || output_type == Type::Vector4;
 }
 
+/* Batch 30: an Integer-output integer predicate (ND_if*_integerI etc.) with a
+ * connected or private-word predicate operand. Its literal Integer arms are
+ * selected at shader evaluation on the ".float" route (in2 + condition *
+ * (in1 - in2), exact for |arm| < 2^24 since condition is exactly 0 or 1). */
+bool integer_predicate_accepts_runtime_integer_result(const Type output_type)
+{
+  return output_type == Type::Integer;
+}
+
 /* Batch 13: number of integer predicate operands carried as the add-on's
  * private exact Int32 word attribute ("mx_private_words_value1/2"). */
 size_t integer_predicate_private_words(const Node &node)
@@ -7416,7 +7425,8 @@ bool validate(const Graph &source,
             /* Batch 13: exact private Int32 word attribute (see the reader). */
             const auto original = node.string_inputs.find(string("mx_public_geomprop_") + name);
             return literal == node.int_inputs.end() && link == node.links.end() &&
-                   integer_predicate_accepts_runtime_condition(output_type) &&
+                   (integer_predicate_accepts_runtime_condition(output_type) ||
+                    integer_predicate_accepts_runtime_integer_result(output_type)) &&
                    words->second.rfind("__mx_private_i32_words_", 0) == 0 &&
                    original != node.string_inputs.end() && !original->second.empty();
           }
@@ -7432,7 +7442,8 @@ bool validate(const Graph &source,
              * bound against ND_constant_integer, t2v2-20261114) compares at shader
              * evaluation; only value-arm outputs mixed by the condition accept it. */
             return literal == node.int_inputs.end() &&
-                   integer_predicate_accepts_runtime_condition(output_type) &&
+                   (integer_predicate_accepts_runtime_condition(output_type) ||
+                    integer_predicate_accepts_runtime_integer_result(output_type)) &&
                    validate_link(link->second, Type::Integer, *nodes_by_name);
           }
           return literal != node.int_inputs.end();
@@ -16312,8 +16323,27 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     }
     if (is_integer_predicate_conditional(node.nodedef)) {
       const Type output_type = integer_predicate_conditional_output_type(node.nodedef);
-      /* Boolean/Integer/Matrix outputs fold statically: validate() admits
-       * only literal predicate operands for them. */
+      const bool runtime_integer_result =
+          integer_predicate_accepts_runtime_integer_result(output_type) &&
+          (node.links.contains("value1") || node.links.contains("value2") ||
+           integer_predicate_private_words(node) != 0);
+      if (runtime_integer_result) {
+        /* Batch 30: see integer_predicate_accepts_runtime_integer_result(). The
+         * connect pass wires "<name>.condition" into Value1. */
+        const float in1 = float(node.int_inputs.at("in1"));
+        const float in2 = float(node.int_inputs.at("in2"));
+        MathNode *select = graph->create_node<MathNode>();
+        select->name = node.name + ".float";
+        select->set_math_type(NODE_MATH_MULTIPLY_ADD);
+        select->set_use_clamp(false);
+        select->set_value2(in1 - in2);
+        select->set_value3(in2);
+        lowered_nodes.emplace(select->name, select);
+        lowered_nodes.emplace(node.name, select);
+        continue;
+      }
+      /* Boolean/Integer/Matrix outputs otherwise fold statically: validate()
+       * admits only literal predicate operands for them. */
       const float static_condition =
           integer_predicate_accepts_runtime_condition(output_type) ?
               0.0f :
@@ -26782,6 +26812,13 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       const Type output_type = is_integer_predicate_conditional(node.nodedef) ?
                                    integer_predicate_conditional_output_type(node.nodedef) :
                                    boolean_predicate_conditional_output_type(node.nodedef);
+      if (output_type == Type::Integer && is_integer_predicate_conditional(node.nodedef) &&
+          (node.links.contains("value1") || node.links.contains("value2") ||
+           integer_predicate_private_words(node) != 0))
+      {
+        graph->connect(condition, lowered_nodes.at(node.name + ".float")->input("Value1"));
+        continue;
+      }
       if (output_type == Type::Boolean || output_type == Type::Integer) {
         continue;
       }

@@ -26078,8 +26078,29 @@ TEST(materialx_graph, integer_predicate_conditional_connected_operands_compare_a
     EXPECT_EQ(materialx_round_test_scalar(result->output("Value")), test.expected);
   }
 
-  /* Statically folded outputs keep requiring literal predicate operands. */
-  for (const char *nodedef : {"ND_ifequal_integerI", "ND_ifequal_booleanI"}) {
+  /* Batch 30: an Integer-output predicate selects its literal arms at runtime. */
+  {
+    materialx::Node k1{"K1", "ND_constant_integer"};
+    k1.int_inputs["value"] = 3;
+    k1.outputs["out"] = materialx::Type::Integer;
+    materialx::Node conditional{"Cond", "ND_ifequal_integerI"};
+    conditional.links["value1"] = {"K1", "out", materialx::Type::Integer};
+    conditional.int_inputs["value2"] = 3;
+    conditional.int_inputs["in1"] = 5;
+    conditional.int_inputs["in2"] = -2;
+    conditional.outputs["out"] = materialx::Type::Integer;
+    const materialx::Graph source{{k1, conditional}};
+    ASSERT_TRUE(materialx::validate(source));
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+    ShaderNode *result = materialx_divide_named_node(graph, "Cond.float");
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(materialx_round_test_scalar(result->output("Value")), 5.0f);
+  }
+
+  /* Boolean-output predicates keep requiring literal predicate operands. */
+  for (const char *nodedef : {"ND_ifequal_booleanI"}) {
     SCOPED_TRACE(nodedef);
     materialx::Node k1{"K1", "ND_constant_integer"};
     k1.int_inputs["value"] = 3;

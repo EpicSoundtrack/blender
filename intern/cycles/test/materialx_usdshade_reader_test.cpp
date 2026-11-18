@@ -11526,6 +11526,131 @@ TEST(materialx_usdshade_reader, lowers_extract_color4_rgb_off_linked_attribute_f
   EXPECT_EQ(rgb_separates, 3);
 }
 
+/* Batch 30 (b29x geomprop/primvar integer packets): an Integer-output integer
+ * predicate whose predicate operand is a connected integer reader selects its
+ * literal arms at shader evaluation on the ".float" route. */
+TEST(materialx_usdshade_reader, reads_and_lowers_integer_result_predicate_with_linked_operand)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/IntegerResultPredicate"));
+  const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  };
+  const pxr::SdfValueTypeName integer = pxr::SdfValueTypeNames->Int;
+  pxr::UsdShadeShader reader = shader("Reader", "ND_geompropvalue_integer", integer);
+  reader.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+      .Set(string("conditional_value1"));
+  reader.CreateInput(pxr::TfToken("default"), integer).Set(0);
+  pxr::UsdShadeShader predicate = shader("Match", "ND_ifequal_integerI", integer);
+  ASSERT_TRUE(predicate.CreateInput(pxr::TfToken("value1"), integer)
+                  .ConnectToSource(reader.ConnectableAPI(), pxr::TfToken("out")));
+  predicate.CreateInput(pxr::TfToken("value2"), integer).Set(7);
+  predicate.CreateInput(pxr::TfToken("in1"), integer).Set(5);
+  predicate.CreateInput(pxr::TfToken("in2"), integer).Set(-3);
+  pxr::UsdShadeShader surface = shader(
+      "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_integer"), integer)
+                  .ConnectToSource(predicate.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                  .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph graph;
+  vector<materialx::Link> outputs;
+  string error;
+  const vector<materialx::SelectedOutput> selected = {
+      {predicate.GetPath().GetString(), "ND_ifequal_integerI", "out", materialx::Type::Integer}};
+  ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs,
+                                                  &error))
+      << error;
+  const materialx::Node *node = nullptr;
+  for (const materialx::Node &candidate : graph.nodes) {
+    if (candidate.nodedef == "ND_ifequal_integerI") {
+      node = &candidate;
+    }
+  }
+  ASSERT_NE(node, nullptr);
+  ASSERT_TRUE(node->links.count("value1"));
+  EXPECT_EQ(node->int_inputs.at("value2"), 7);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered));
+  MathNode *select = nullptr;
+  for (ShaderNode *lowered_node : lowered.nodes) {
+    if (lowered_node->name == node->name + ".float") {
+      select = dynamic_cast<MathNode *>(lowered_node);
+    }
+  }
+  ASSERT_NE(select, nullptr);
+  EXPECT_EQ(select->get_math_type(), NODE_MATH_MULTIPLY_ADD);
+  EXPECT_FLOAT_EQ(select->get_value2(), 8.0f);
+  EXPECT_FLOAT_EQ(select->get_value3(), -3.0f);
+  ASSERT_NE(select->input("Value1")->link, nullptr);
+  EXPECT_EQ(select->input("Value1")->link->parent->name.string(), node->name + ".condition");
+}
+
+/* Batch 30: an authored empty attribute name names no primvar, so the
+ * Boolean/Integer reader's result is its literal fallback. */
+TEST(materialx_usdshade_reader, reads_empty_named_boolean_and_integer_readers_as_fallback)
+{
+  struct Case {
+    const char *nodedef;
+    const char *name_input;
+    const char *fallback_input;
+    pxr::SdfValueTypeName type;
+    pxr::VtValue fallback;
+    const char *constant;
+    materialx::Type output;
+    int expected;
+  };
+  const vector<Case> cases = {
+      {"ND_geompropvalue_boolean", "geomprop", "default", pxr::SdfValueTypeNames->Bool,
+       pxr::VtValue(true), "ND_constant_boolean", materialx::Type::Boolean, 1},
+      {"ND_geompropvalue_integer", "geomprop", "default", pxr::SdfValueTypeNames->Int,
+       pxr::VtValue(-11), "ND_constant_integer", materialx::Type::Integer, -11},
+      {"ND_UsdPrimvarReader_integer", "varname", "fallback", pxr::SdfValueTypeNames->Int,
+       pxr::VtValue(4), "ND_constant_integer", materialx::Type::Integer, 4},
+  };
+  for (const Case &c : cases) {
+    SCOPED_TRACE(c.nodedef);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/EmptyName"));
+    pxr::UsdShadeShader reader = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken("Reader")));
+    reader.CreateIdAttr(pxr::VtValue(pxr::TfToken(c.nodedef)));
+    reader.CreateOutput(pxr::TfToken("out"), c.type);
+    reader.CreateInput(pxr::TfToken(c.name_input), pxr::SdfValueTypeNames->String)
+        .Set(string(""));
+    reader.CreateInput(pxr::TfToken(c.fallback_input), c.type).Set(c.fallback);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken("OpenPBR")));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_reader"), c.type)
+                    .ConnectToSource(reader.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    materialx::Graph graph;
+    vector<materialx::Link> outputs;
+    string error;
+    const vector<materialx::SelectedOutput> selected = {
+        {reader.GetPath().GetString(), c.nodedef, "out", c.output}};
+    ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs,
+                                                    &error))
+        << error;
+    ASSERT_EQ(graph.nodes.size(), 1u);
+    EXPECT_EQ(graph.nodes[0].nodedef, c.constant);
+    EXPECT_EQ(graph.nodes[0].int_inputs.at("value"), c.expected);
+    ShaderGraph lowered;
+    EXPECT_TRUE(materialx::lower(graph, &lowered));
+  }
+}
+
 /* Batch 29 (port of candidate read_projected_uniform_float_name): the add-on's
  * uniform String -> Float projection keeps the public String connection and adds a
  * private descriptor naming the derived float attribute on the consumer. */
