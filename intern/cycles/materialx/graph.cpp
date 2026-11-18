@@ -1468,6 +1468,10 @@ bool is_bsdf_combinator(const string &nodedef)
 constexpr const char *generic_surface_id = "ND_surface";
 constexpr const char *mix_surfaceshader_id = "ND_mix_surfaceshader";
 constexpr const char *lama_surface_id = "ND_lama_surface";
+/* Two-sided ND_surfacematerial (links surfaceshader/backsurfaceshader); the
+ * reader emits this IR node only when backsurfaceshader is connected. The
+ * single-sided wrapper is unwrapped by the reader and never reaches here. */
+constexpr const char *surface_material_id = "ND_surfacematerial";
 /* MaterialX stdlib_defs.mtlx declares ND_dot_surfaceshader as an
  * organization-only identity wrapper: surfaceshader input "in", uniform string
  * "note", surfaceshader output "out" with defaultinput="in"; the genosl,
@@ -1669,7 +1673,7 @@ const char *generic_surface_closure_output_name(const Node &source)
     return "Emission";
   }
   if (source.nodedef == generic_surface_id || source.nodedef == mix_surfaceshader_id ||
-      source.nodedef == lama_surface_id) {
+      source.nodedef == lama_surface_id || source.nodedef == surface_material_id) {
     return "Closure";
   }
   if (source.nodedef == mix_bsdf_id || source.nodedef == mix_edf_id ||
@@ -12790,6 +12794,30 @@ bool validate(const Graph &source,
           (has_mix_value && !std::isfinite(node.inputs.at("mix"))) ||
           node.links.size() != size_t(2 + (mix != node.links.end())) ||
           node.inputs.size() != size_t(has_mix_value) || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty() ||
+          node.outputs.size() != 1)
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == surface_material_id) {
+      const auto output = node.outputs.find("out");
+      const auto front = node.links.find("surfaceshader");
+      const auto back = node.links.find("backsurfaceshader");
+      if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
+          front == node.links.end() || back == node.links.end() ||
+          !validate_link(front->second, Type::SurfaceShader, *nodes_by_name) ||
+          !validate_link(back->second, Type::SurfaceShader, *nodes_by_name) ||
+          !surface_shader_mix_has_unit_opacity(*nodes_by_name->at(front->second.source_node),
+                                               *nodes_by_name) ||
+          !surface_shader_mix_has_unit_opacity(*nodes_by_name->at(back->second.source_node),
+                                               *nodes_by_name) ||
+          node.links.size() != 2 || !node.inputs.empty() || !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
@@ -24777,6 +24805,16 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         }
         lowered = mix;
       }
+      else if (node.nodedef == surface_material_id) {
+        /* Two-sided surfacematerial: Backfacing selects backsurfaceshader. */
+        GeometryNode *geometry = graph->create_node<GeometryNode>();
+        geometry->name = node.name + ".geometry";
+        lowered_nodes.emplace(geometry->name, geometry);
+        MixClosureNode *side = graph->create_node<MixClosureNode>();
+        side->name = node.name;
+        lowered = side;
+        preserve_lowered_name = true;
+      }
       else if (node.nodedef == lama_surface_id) {
         if (node.links.contains("materialBack")) {
           GeometryNode *geometry = graph->create_node<GeometryNode>();
@@ -31474,6 +31512,37 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       }
       if (!surface_shader_node_has_surface_shader_consumer(source, node.name)) {
         graph->connect(mix->output("Closure"), graph->output()->input("Surface"));
+      }
+      continue;
+    }
+
+    if (node.nodedef == surface_material_id) {
+      ShaderNode *side = lowered_nodes.at(node.name);
+      ShaderNode *geometry = lowered_nodes.at(node.name + ".geometry");
+      /* Same operand unwrapping as mix_surfaceshader above: a unit-opacity
+       * ND_surface with only bsdf or only edf contributes that closure. */
+      const auto surface_shader_closure = [&](const Link &link) -> ShaderOutput * {
+        const Node &operand = *nodes_by_name.at(link.source_node);
+        if (operand.nodedef == generic_surface_id && !operand.links.contains("opacity") &&
+            !operand.inputs.contains("opacity"))
+        {
+          const auto bsdf = operand.links.find("bsdf");
+          const auto edf = operand.links.find("edf");
+          if ((bsdf != operand.links.end()) != (edf != operand.links.end())) {
+            return lowered_output(bsdf != operand.links.end() ? bsdf->second : edf->second,
+                                  nodes_by_name,
+                                  lowered_nodes);
+          }
+        }
+        return lowered_output(link, nodes_by_name, lowered_nodes);
+      };
+      graph->connect(surface_shader_closure(node.links.at("surfaceshader")),
+                     side->input("Closure1"));
+      graph->connect(surface_shader_closure(node.links.at("backsurfaceshader")),
+                     side->input("Closure2"));
+      graph->connect(geometry->output("Backfacing"), side->input("Fac"));
+      if (!surface_shader_node_has_surface_shader_consumer(source, node.name)) {
+        graph->connect(side->output("Closure"), graph->output()->input("Surface"));
       }
       continue;
     }

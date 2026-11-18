@@ -1225,9 +1225,9 @@ constexpr const char *mix_volumeshader_id = "ND_mix_volumeshader";
  * wrapper for surfaceshader/backsurfaceshader/displacementshader inputs. This
  * compiler already stores surface and displacement terminals directly, so a
  * surfacematerial found at the material surface output is unwrapped to those
- * slots rather than lowered as a fabricated material-valued node. The optional
- * backsurfaceshader input remains an explicit boundary: Cycles ShaderGraph has
- * one Surface output here and no importer-level backface material slot. */
+ * slots rather than lowered as a fabricated material-valued node. A connected
+ * backsurfaceshader is lowered as a backface closure split; see
+ * read_two_sided_surface_material(). */
 constexpr const char *surface_material_id = "ND_surfacematerial";
 /* MaterialX 1.39 pbrlib/pbrlib_defs.mtlx declares ND_light as a lightshader
  * constructor over an EDF plus literal intensity/exposure. The reader only
@@ -30148,6 +30148,139 @@ bool thin_walled_invariant_bsdf(const Graph &graph, const string &node_name, con
   return false;
 }
 
+/** ND_surfacematerial displacementshader input (shared by the single- and
+ *  two-sided surfacematerial paths of read_usdshade_graph()). */
+bool read_surface_material_displacement(const pxr::UsdShadeShader &surface_material,
+                                        Graph *parsed,
+                                        std::unordered_map<string, string> *emitted_float_shaders,
+                                        string *error_message)
+{
+  const pxr::UsdShadeInput displacement = surface_material.GetInput(
+      pxr::TfToken("displacementshader"));
+  if (!displacement || !displacement.HasConnectedSource()) {
+    return true;
+  }
+  pxr::UsdShadeShader displacement_source;
+  bool null_displacement_default = false;
+  if (!connected_shader_eliding_identity_dot(displacement,
+                                             dot_displacementshader_id,
+                                             &displacement_source,
+                                             error_message,
+                                             &null_displacement_default))
+  {
+    return false;
+  }
+  DisplacementValue displacement_value;
+  if (null_displacement_default) {
+    /* SDK null displacementshader default: zero vector offset. */
+    displacement_value.is_vector3 = true;
+  }
+  std::unordered_set<string> active_displacement_shaders;
+  if (!null_displacement_default && !read_displacement_shader(displacement_source,
+                                                              parsed,
+                                                              &displacement_value,
+                                                              emitted_float_shaders,
+                                                              &active_displacement_shaders,
+                                                              error_message))
+  {
+    return false;
+  }
+  parsed->displacement_is_vector3 = displacement_value.is_vector3;
+  if (displacement_value.is_vector3) {
+    parsed->displacement_vector3 = displacement_value.vector;
+  }
+  else {
+    parsed->displacement = displacement_value.scalar;
+  }
+  parsed->displacement_scale = displacement_value.scale;
+  parsed->has_displacement = true;
+  return true;
+}
+
+/** Two-sided ND_surfacematerial (MaterialX 1.39 stdlib_defs.mtlx): a connected
+ *  backsurfaceshader shades back-facing geometry and surfaceshader shades
+ *  front-facing geometry. Lowered as one IR node (nodedef ND_surfacematerial,
+ *  links surfaceshader/backsurfaceshader) that graph.cpp turns into
+ *  MixClosure(Fac = Geometry.Backfacing, Closure1 = front, Closure2 = back), the
+ *  same backface split ND_lama_surface materialBack uses. Both operands go
+ *  through the ND_mix_surfaceshader operand reader, so the admitted surface
+ *  models and the unit-opacity restriction are exactly mix_surfaceshader's;
+ *  anything else (e.g. OpenPBR operands) stays an explicit refusal. */
+bool read_two_sided_surface_material(const pxr::UsdShadeShader &surface_material,
+                                     Graph *parsed,
+                                     string *error_message)
+{
+  const pxr::UsdShadeInput front = surface_material.GetInput(pxr::TfToken("surfaceshader"));
+  const pxr::UsdShadeInput back = surface_material.GetInput(pxr::TfToken("backsurfaceshader"));
+  for (const pxr::UsdShadeInput &material_input : surface_material.GetInputs()) {
+    const string name = material_input.GetBaseName().GetString();
+    if (name != "surfaceshader" && name != "backsurfaceshader" && name != "displacementshader") {
+      set_error(error_message,
+                string(surface_material_id) + " has no direct Cycles equivalent: " + name);
+      return false;
+    }
+  }
+  if (!front || !front.HasConnectedSource()) {
+    /* MaterialX: an unconnected surfaceshader is an empty front-face shader;
+     * that one-sided combination is not lowered here. */
+    set_error(error_message,
+              "ND_surfacematerial backsurfaceshader requires a connected 'surfaceshader' input");
+    return false;
+  }
+  if (front.GetConnectedSources().size() != 1 || back.GetConnectedSources().size() != 1) {
+    set_error(error_message,
+              "ND_surfacematerial surfaceshader/backsurfaceshader must each have exactly one "
+              "source");
+    return false;
+  }
+
+  std::unordered_map<string, string> emitted_float_shaders;
+  std::unordered_map<string, string> emitted_color4_shaders;
+  std::unordered_map<string, string> emitted_closure_shaders;
+  std::unordered_map<string, string> emitted_normalmap_shaders;
+  std::unordered_map<string, string> emitted_surface_shaders;
+  std::unordered_set<string> active_surface_shaders;
+  Link front_link;
+  Link back_link;
+  const std::pair<const pxr::UsdShadeInput *, Link *> operands[] = {{&front, &front_link},
+                                                                     {&back, &back_link}};
+  for (const auto &[input, link] : operands) {
+    if (!read_connected_unit_opacity_surface_shader(*input,
+                                                    parsed,
+                                                    link,
+                                                    &emitted_float_shaders,
+                                                    &emitted_color4_shaders,
+                                                    &emitted_closure_shaders,
+                                                    &emitted_normalmap_shaders,
+                                                    &emitted_surface_shaders,
+                                                    &active_surface_shaders,
+                                                    error_message))
+    {
+      if (error_message) {
+        *error_message = "ND_surfacematerial " + input->GetBaseName().GetString() + ": " +
+                         *error_message;
+      }
+      return false;
+    }
+  }
+  if (!read_surface_material_displacement(
+          surface_material, parsed, &emitted_float_shaders, error_message))
+  {
+    return false;
+  }
+
+  Node node;
+  node.name = unique_node_name(*parsed,
+                               surface_material.GetPrim().GetName().GetString(),
+                               surface_material.GetPath().GetString());
+  node.nodedef = surface_material_id;
+  node.outputs["out"] = Type::SurfaceShader;
+  node.links["surfaceshader"] = front_link;
+  node.links["backsurfaceshader"] = back_link;
+  parsed->nodes.push_back(std::move(node));
+  return true;
+}
+
 }  // namespace
 
 bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
@@ -30203,6 +30336,33 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
        * still an authored terminal, so the material is not "unbound". */
       surface_present = false;
       has_any_terminal = true;
+    }
+  }
+  if (surface_present) {
+    /* Two-sided ND_surfacematerial (connected backsurfaceshader): lowered by
+     * its own reader, so the single-surface model dispatch below is skipped. */
+    const auto sources = surface_output.GetConnectedSources();
+    pxr::UsdShadeShader surface_material;
+    std::unordered_set<string> active_endpoints;
+    if (sources.size() == 1 && resolve_connected_shader(sources[0].source,
+                                                        sources[0].sourceName,
+                                                        sources[0].sourceType,
+                                                        surface_material_id,
+                                                        surface_output.GetTypeName(),
+                                                        &surface_material,
+                                                        &active_endpoints,
+                                                        0,
+                                                        nullptr))
+    {
+      const pxr::UsdShadeInput back = surface_material.GetInput(
+          pxr::TfToken("backsurfaceshader"));
+      if (back && back.HasConnectedSource()) {
+        if (!read_two_sided_surface_material(surface_material, &parsed, error_message)) {
+          return false;
+        }
+        surface_present = false;
+        has_any_terminal = true;
+      }
     }
   }
 
@@ -30273,50 +30433,10 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                   "ND_surfacematerial 'surfaceshader' input must match the material surface terminal type");
         return false;
       }
-      const pxr::UsdShadeInput back = surface_material.GetInput(pxr::TfToken("backsurfaceshader"));
-      if (back && back.HasConnectedSource()) {
-        set_error(error_message,
-                  "ND_surfacematerial backsurfaceshader has no direct Cycles equivalent in this "
-                  "reader (single Surface output only)");
+      if (!read_surface_material_displacement(
+              surface_material, &parsed, &emitted_float_shaders, error_message))
+      {
         return false;
-      }
-      const pxr::UsdShadeInput displacement = surface_material.GetInput(
-          pxr::TfToken("displacementshader"));
-      if (displacement && displacement.HasConnectedSource()) {
-        pxr::UsdShadeShader displacement_source;
-        bool null_displacement_default = false;
-        if (!connected_shader_eliding_identity_dot(displacement,
-                                                   dot_displacementshader_id,
-                                                   &displacement_source,
-                                                   error_message,
-                                                   &null_displacement_default))
-        {
-          return false;
-        }
-        DisplacementValue displacement_value;
-        if (null_displacement_default) {
-          /* SDK null displacementshader default: zero vector offset. */
-          displacement_value.is_vector3 = true;
-        }
-        std::unordered_set<string> active_displacement_shaders;
-        if (!null_displacement_default && !read_displacement_shader(displacement_source,
-                                      &parsed,
-                                      &displacement_value,
-                                      &emitted_float_shaders,
-                                      &active_displacement_shaders,
-                                      error_message))
-        {
-          return false;
-        }
-        parsed.displacement_is_vector3 = displacement_value.is_vector3;
-        if (displacement_value.is_vector3) {
-          parsed.displacement_vector3 = displacement_value.vector;
-        }
-        else {
-          parsed.displacement = displacement_value.scalar;
-        }
-        parsed.displacement_scale = displacement_value.scale;
-        parsed.has_displacement = true;
       }
       for (const pxr::UsdShadeInput &material_input : surface_material.GetInputs()) {
         const string name = material_input.GetBaseName().GetString();

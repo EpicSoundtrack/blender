@@ -28959,11 +28959,12 @@ TEST(materialx_usdshade_reader, unwraps_materialx_surfacematerial_surface_and_di
   EXPECT_NE(lowered.output()->input("Displacement")->link, nullptr);
 }
 
-TEST(materialx_usdshade_reader, rejects_surfacematerial_back_surface_boundary)
+TEST(materialx_usdshade_reader, rejects_surfacematerial_back_surface_with_unmixable_operands)
 {
-  /* ND_surfacematerial's backsurfaceshader is real, but this reader lowers to
-   * one Cycles ShaderGraph Surface output and has no importer-level backface
-   * material binding. Reject it explicitly instead of silently dropping it. */
+  /* A connected backsurfaceshader is lowered as a Backfacing closure split
+   * whose operands use the ND_mix_surfaceshader operand reader. OpenPBR is
+   * not a mixable operand there, so this two-sided OpenPBR material is still
+   * refused explicitly (naming the operand) instead of dropping the back. */
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
   const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
@@ -28996,10 +28997,152 @@ TEST(materialx_usdshade_reader, rejects_surfacematerial_back_surface_boundary)
   materialx::Graph source;
   string error;
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
-  EXPECT_NE(error.find("ND_surfacematerial backsurfaceshader has no direct Cycles equivalent"),
-            string::npos)
-      << error;
+  EXPECT_NE(error.find("ND_surfacematerial surfaceshader: "), string::npos) << error;
+  EXPECT_NE(error.find("ND_open_pbr_surface_surfaceshader"), string::npos) << error;
   EXPECT_TRUE(source.nodes.empty());
+}
+
+namespace {
+
+/* Two-sided ND_surfacematerial fixture: front/back ND_surface each over one
+ * ND_oren_nayar_diffuse_bsdf (red front, blue back). */
+struct TwoSidedSurfaceMaterial {
+  pxr::UsdStageRefPtr stage;
+  pxr::UsdShadeMaterial material;
+  pxr::UsdShadeShader surface_material;
+  pxr::UsdShadeShader front_surface;
+  pxr::UsdShadeShader back_surface;
+};
+
+TwoSidedSurfaceMaterial make_two_sided_surface_material()
+{
+  TwoSidedSurfaceMaterial f;
+  f.stage = pxr::UsdStage::CreateInMemory();
+  f.material = pxr::UsdShadeMaterial::Define(f.stage, pxr::SdfPath("/Looks/TwoSided"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        f.stage, pxr::SdfPath(string("/Looks/TwoSided/") + name));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    return result;
+  };
+  pxr::UsdShadeShader red = shader("RedDiffuse", "ND_oren_nayar_diffuse_bsdf");
+  red.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 0.0f, 0.0f));
+  pxr::UsdShadeShader blue = shader("BlueDiffuse", "ND_oren_nayar_diffuse_bsdf");
+  blue.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 1.0f));
+  f.front_surface = shader("FrontSurface", "ND_surface");
+  f.front_surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+      .ConnectToSource(red.ConnectableAPI(), pxr::TfToken("out"));
+  f.back_surface = shader("BackSurface", "ND_surface");
+  f.back_surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
+      .ConnectToSource(blue.ConnectableAPI(), pxr::TfToken("out"));
+  f.surface_material = shader("SurfaceMaterial", "ND_surfacematerial");
+  f.surface_material.CreateInput(pxr::TfToken("surfaceshader"), pxr::SdfValueTypeNames->Token)
+      .ConnectToSource(f.front_surface.ConnectableAPI(), pxr::TfToken("out"));
+  f.surface_material
+      .CreateInput(pxr::TfToken("backsurfaceshader"), pxr::SdfValueTypeNames->Token)
+      .ConnectToSource(f.back_surface.ConnectableAPI(), pxr::TfToken("out"));
+  f.material.CreateSurfaceOutput().ConnectToSource(f.surface_material.ConnectableAPI(),
+                                                   pxr::TfToken("out"));
+  return f;
+}
+
+}  // namespace
+
+TEST(materialx_usdshade_reader, lowers_surfacematerial_back_surface_as_backfacing_split)
+{
+  /* MaterialX 1.39 ND_surfacematerial: backsurfaceshader shades back-facing
+   * geometry, surfaceshader front-facing. Cycles: MixClosure(Fac=Backfacing,
+   * Closure1=front, Closure2=back), as ND_lama_surface materialBack. */
+  TwoSidedSurfaceMaterial f = make_two_sided_surface_material();
+  pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
+      f.stage, pxr::SdfPath("/Looks/TwoSided/Displacement"));
+  displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_float")));
+  displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float)
+      .Set(0.125f);
+  displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(f.surface_material
+                  .CreateInput(pxr::TfToken("displacementshader"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(f.material, &source, &error)) << error;
+  ASSERT_EQ(source.nodes.size(), 5);
+  const materialx::Node &two_sided = source.nodes.back();
+  EXPECT_EQ(two_sided.nodedef, "ND_surfacematerial");
+  ASSERT_TRUE(two_sided.links.contains("surfaceshader"));
+  ASSERT_TRUE(two_sided.links.contains("backsurfaceshader"));
+  EXPECT_TRUE(source.has_displacement);
+  EXPECT_FLOAT_EQ(source.displacement.value, 0.125f);
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  MixClosureNode *side = nullptr;
+  GeometryNode *geometry = nullptr;
+  MaterialXDiffuseBsdfNode *red = nullptr;
+  MaterialXDiffuseBsdfNode *blue = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    side = node->name == "SurfaceMaterial" ? dynamic_cast<MixClosureNode *>(node) : side;
+    geometry = node->name == "SurfaceMaterial.geometry" ? dynamic_cast<GeometryNode *>(node) :
+                                                          geometry;
+    red = node->name == "RedDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : red;
+    blue = node->name == "BlueDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : blue;
+  }
+  ASSERT_NE(side, nullptr);
+  ASSERT_NE(geometry, nullptr);
+  ASSERT_NE(red, nullptr);
+  ASSERT_NE(blue, nullptr);
+  EXPECT_EQ(side->input("Fac")->link, geometry->output("Backfacing"));
+  EXPECT_EQ(side->input("Closure1")->link, red->output("BSDF"));
+  EXPECT_EQ(side->input("Closure2")->link, blue->output("BSDF"));
+  EXPECT_EQ(lowered.output()->input("Surface")->link, side->output("Closure"));
+  EXPECT_NE(lowered.output()->input("Displacement")->link, nullptr);
+}
+
+TEST(materialx_usdshade_reader, surfacematerial_back_surface_contract_refusals)
+{
+  {
+    /* Non-unit opacity on an operand: same restriction as mix_surfaceshader. */
+    TwoSidedSurfaceMaterial f = make_two_sided_surface_material();
+    f.back_surface.CreateInput(pxr::TfToken("opacity"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+    materialx::Graph source;
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(f.material, &source, &error));
+    EXPECT_NE(error.find("ND_surfacematerial backsurfaceshader: "), string::npos) << error;
+    EXPECT_TRUE(source.nodes.empty());
+  }
+  {
+    /* Back connected but front empty: not lowered (no silent one-sided). */
+    TwoSidedSurfaceMaterial f = make_two_sided_surface_material();
+    f.surface_material.GetInput(pxr::TfToken("surfaceshader")).ClearSources();
+    materialx::Graph source;
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(f.material, &source, &error));
+    EXPECT_NE(error.find("requires a connected 'surfaceshader'"), string::npos) << error;
+  }
+  {
+    /* Unknown surfacematerial input still fails closed. */
+    TwoSidedSurfaceMaterial f = make_two_sided_surface_material();
+    f.surface_material.CreateInput(pxr::TfToken("bogus"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    materialx::Graph source;
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(f.material, &source, &error));
+    EXPECT_NE(error.find("ND_surfacematerial has no direct Cycles equivalent: bogus"),
+              string::npos)
+        << error;
+  }
+  {
+    /* validate() rejects a two-sided IR node missing its back link. */
+    TwoSidedSurfaceMaterial f = make_two_sided_surface_material();
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(f.material, &source, &error)) << error;
+    source.nodes.back().links.erase("backsurfaceshader");
+    EXPECT_FALSE(materialx::validate(source));
+  }
 }
 
 TEST(materialx_usdshade_reader, unwraps_materialx_volumematerial_to_volume_terminal)
