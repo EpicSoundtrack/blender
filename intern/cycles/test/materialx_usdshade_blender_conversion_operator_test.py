@@ -46,6 +46,21 @@ require(cycles.ui.materialx_authority_status(material) == 'inactive',
         "MaterialX authoring panel did not report an inactive authority")
 
 
+class PanelContext:
+    engine = "CYCLES"
+
+    def __init__(self, material):
+        self.material = material
+
+
+def panel_visible(material):
+    return bool(bpy.types.CYCLES_MATERIAL_PT_materialx_authoring.poll(PanelContext(material)))
+
+
+require(not panel_visible(material),
+        "MaterialX authoring panel must not show on a material without MaterialX data")
+
+
 class CancelWindowManager:
     def __init__(self):
         self.calls = 0
@@ -193,6 +208,7 @@ require(material["materialx_authoring.cycles_native_authority"] is True,
         "Conversion did not enable native authority")
 require(cycles.ui.materialx_authority_status(material) == 'active',
         "MaterialX authoring panel did not report an active authority")
+require(panel_visible(material), "MaterialX authoring panel must show on an authority material")
 
 document_uuid = material["materialx_authoring.document_uuid"]
 uuid.UUID(document_uuid)
@@ -218,6 +234,8 @@ result = bpy.ops.cycles.materialx_disable_authority()
 require(result == {"FINISHED"}, "Disable authority operator did not finish")
 actual_keys = {key for key in material.keys() if key.startswith("materialx_authoring.")}
 require(not actual_keys, "Disable authority did not clear the authority contract")
+require(not panel_visible(material),
+        "MaterialX authoring panel must hide once the material carries no MaterialX data")
 require(bpy.data.texts.get(text_name) is source,
         "Disable authority should preserve the authored USDShade Text datablock")
 

@@ -31,6 +31,10 @@ MATERIALX_AUTHORITY_KEYS = (
 )
 
 
+def material_has_materialx_data(material):
+    return any(key.startswith("materialx_authoring.") for key in material.keys())
+
+
 def materialx_authority_status(material):
     if not material.get("materialx_authoring.cycles_native_authority", False):
         return 'inactive'
@@ -1991,8 +1995,10 @@ class CYCLES_MATERIAL_PT_materialx_authoring(CyclesButtonsPanel, Panel):
 
     @classmethod
     def poll(cls, context):
+        # Only materials that carry MaterialX authoring data; stock materials keep the upstream UI.
         mat = context.material
-        return mat and (not mat.grease_pencil) and CyclesButtonsPanel.poll(context)
+        return (mat and (not mat.grease_pencil) and CyclesButtonsPanel.poll(context) and
+                material_has_materialx_data(mat))
 
     def draw(self, context):
         material = context.material
