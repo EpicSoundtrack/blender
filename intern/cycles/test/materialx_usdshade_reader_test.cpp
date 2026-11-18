@@ -11332,6 +11332,106 @@ TEST(materialx_usdshade_reader, reads_and_lowers_nd_usdtransform2d_linked_and_de
   }
 }
 
+/* Batch 29 (port of the candidate connected attribute fallback): a geompropvalue
+ * 'default' or UsdPrimvarReader 'fallback' wired to a constant is a typed
+ * "fallback" link, selected where the attribute is absent by two constant-fallback
+ * readers (0 and 1) instead of a stock presence output. */
+TEST(materialx_usdshade_reader, reads_and_lowers_linked_attribute_reader_fallbacks)
+{
+  struct Case {
+    const char *nodedef;
+    const char *name_input;
+    const char *fallback_input;
+    const char *constant;
+    pxr::SdfValueTypeName type;
+    pxr::VtValue value;
+    materialx::Type output;
+  };
+  const vector<Case> cases = {
+      {"ND_geompropvalue_float", "geomprop", "default", "ND_constant_float",
+       pxr::SdfValueTypeNames->Float, pxr::VtValue(0.625f), materialx::Type::Float},
+      {"ND_geompropvalue_vector2", "geomprop", "default", "ND_constant_vector2",
+       pxr::SdfValueTypeNames->Float2, pxr::VtValue(pxr::GfVec2f(0.25f, -1.0f)),
+       materialx::Type::Vector2},
+      {"ND_geompropvalue_color3", "geomprop", "default", "ND_constant_color3",
+       pxr::SdfValueTypeNames->Color3f, pxr::VtValue(pxr::GfVec3f(0.1f, 0.2f, 0.3f)),
+       materialx::Type::Color3},
+      {"ND_geompropvalue_color4", "geomprop", "default", "ND_constant_color4",
+       pxr::SdfValueTypeNames->Color4f, pxr::VtValue(pxr::GfVec4f(0.1f, 0.2f, 0.3f, 0.4f)),
+       materialx::Type::Color4},
+      {"ND_geompropvalue_vector4", "geomprop", "default", "ND_constant_vector4",
+       pxr::SdfValueTypeNames->Float4, pxr::VtValue(pxr::GfVec4f(1.0f, 2.0f, 3.0f, 4.0f)),
+       materialx::Type::Vector4},
+      {"ND_UsdPrimvarReader_float", "varname", "fallback", "ND_constant_float",
+       pxr::SdfValueTypeNames->Float, pxr::VtValue(-2.5f), materialx::Type::Float},
+      {"ND_UsdPrimvarReader_vector2", "varname", "fallback", "ND_constant_vector2",
+       pxr::SdfValueTypeNames->Float2, pxr::VtValue(pxr::GfVec2f(0.5f)), materialx::Type::Vector2},
+      {"ND_UsdPrimvarReader_vector3", "varname", "fallback", "ND_constant_vector3",
+       pxr::SdfValueTypeNames->Float3, pxr::VtValue(pxr::GfVec3f(0.5f, 1.5f, 2.5f)),
+       materialx::Type::Vector3},
+      {"ND_UsdPrimvarReader_vector4", "varname", "fallback", "ND_constant_vector4",
+       pxr::SdfValueTypeNames->Float4, pxr::VtValue(pxr::GfVec4f(0.5f)), materialx::Type::Vector4},
+  };
+  for (const Case &c : cases) {
+    SCOPED_TRACE(c.nodedef);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/LinkedFallback"));
+    const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+      pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+          stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+      result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      result.CreateOutput(pxr::TfToken("out"), type);
+      return result;
+    };
+    pxr::UsdShadeShader constant = shader("Fallback", c.constant, c.type);
+    constant.CreateInput(pxr::TfToken("value"), c.type).Set(c.value);
+    pxr::UsdShadeShader reader = shader("Reader", c.nodedef, c.type);
+    reader.CreateInput(pxr::TfToken(c.name_input), pxr::SdfValueTypeNames->String)
+        .Set(string("materialx_absent_primvar"));
+    ASSERT_TRUE(reader.CreateInput(pxr::TfToken(c.fallback_input), c.type)
+                    .ConnectToSource(constant.ConnectableAPI(), pxr::TfToken("out")));
+    pxr::UsdShadeShader surface = shader(
+        "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("unused_reader"), c.type)
+                    .ConnectToSource(reader.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    vector<materialx::Link> outputs;
+    string error;
+    const vector<materialx::SelectedOutput> selected = {
+        {reader.GetPath().GetString(), c.nodedef, "out", c.output}};
+    ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &graph, &outputs,
+                                                    &error))
+        << error;
+    const materialx::Node *node = nullptr;
+    for (const materialx::Node &candidate : graph.nodes) {
+      if (candidate.nodedef == c.nodedef) {
+        node = &candidate;
+      }
+    }
+    ASSERT_NE(node, nullptr);
+    ASSERT_TRUE(node->links.count("fallback"));
+    EXPECT_EQ(node->links.at("fallback").type, c.output);
+    EXPECT_TRUE(node->fallback_inputs.empty() && node->fallback_vector2_inputs.empty() &&
+                node->fallback_vector3_inputs.empty() && node->fallback_color3_inputs.empty() &&
+                node->fallback_float4_inputs.empty() && node->fallback_vector4_inputs.empty());
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered));
+    bool zero = false, one = false, absent = false, result = false;
+    for (ShaderNode *lowered_node : lowered.nodes) {
+      zero |= lowered_node->name == node->name && dynamic_cast<AttributeNode *>(lowered_node);
+      one |= lowered_node->name == node->name + ".fallback_one";
+      absent |= lowered_node->name == node->name + ".fallback_absent";
+      result |= lowered_node->name == node->name + ".fallback_result";
+    }
+    EXPECT_TRUE(zero && one && absent && result);
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_usdtransform2d_literal_texcoord)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();

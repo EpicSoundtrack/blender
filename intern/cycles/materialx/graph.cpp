@@ -5955,6 +5955,22 @@ bool is_fallback_attribute_reader(const Node &node)
          node.nodedef == usd_primvar_reader_integer_id;
 }
 
+/* Batch 29 (port of candidate is_linked_attribute_fallback, geo2 GEO9/UV17): a
+ * named-attribute reader whose 'default'/'fallback' is a typed link. */
+bool is_linked_attribute_fallback(const Node &node)
+{
+  if (!node.links.contains("fallback")) {
+    return false;
+  }
+  return node.nodedef == usdprimvarreader_float_id ||
+         node.nodedef == usdprimvarreader_vector2_id ||
+         node.nodedef == usdprimvarreader_vector3_id ||
+         node.nodedef == usd_primvar_reader_vector4_id ||
+         node.nodedef == geompropvalue_float_id || node.nodedef == geompropvalue_vector2_id ||
+         node.nodedef == geompropvalue_color3_id || node.nodedef == geompropvalue_color4_id ||
+         node.nodedef == geompropvalue_vector4_id;
+}
+
 void set_attribute_fallback(const Node &node, const Type type, AttributeNode *attribute)
 {
   attribute->set_use_fallback(true);
@@ -8572,6 +8588,30 @@ bool validate(const Graph &source,
           !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.string_inputs.empty() ||
           !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (is_linked_attribute_fallback(node)) {
+      const bool geomprop = node.nodedef == geompropvalue_float_id ||
+                            node.nodedef == geompropvalue_vector2_id ||
+                            node.nodedef == geompropvalue_color3_id ||
+                            node.nodedef == geompropvalue_color4_id ||
+                            node.nodedef == geompropvalue_vector4_id;
+      const Type type = primary_output_type(node);
+      const auto output = node.outputs.find("out");
+      const auto name_value = node.string_inputs.find(geomprop ? "geomprop" : "varname");
+      if (node.links.size() != 1 || output == node.outputs.end() || node.outputs.size() != 1 ||
+          name_value == node.string_inputs.end() || name_value->second.empty() ||
+          node.string_inputs.size() != 1 ||
+          !validate_link(node.links.at("fallback"), type, *nodes_by_name) ||
+          !fallback_maps_are_empty(node) || !node.inputs.empty() || !node.int_inputs.empty() ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -14354,6 +14394,10 @@ ShaderOutput *lowered_output(const Link &link,
 {
   const Node &source = *nodes_by_name.at(link.source_node);
   ShaderNode *lowered = lowered_nodes.at(link.source_node);
+  if (is_linked_attribute_fallback(source)) {
+    return lowered_nodes.at(link.source_node + ".fallback_result")
+        ->output(primary_output_type(source) == Type::Float ? "Value" : "Vector");
+  }
   if ((source.nodedef == constant_float_id || source.nodedef == constant_color3_id ||
        source.nodedef == constant_color4_id) && source.links.contains("value")) {
     return lowered_output(source.links.at("value"), nodes_by_name, lowered_nodes);
@@ -14877,6 +14921,9 @@ ShaderOutput *lowered_color4_alpha_output(
     const unordered_map<string, ShaderNode *> &lowered_nodes)
 {
   const Node &source = *nodes_by_name.at(link.source_node);
+  if (is_linked_attribute_fallback(source) && primary_output_type(source) == Type::Color4) {
+    return lowered_nodes.at(link.source_node + ".fallback_result_w")->output("Value");
+  }
   if (source.nodedef == dot_color4_id) {
     if (source.links.contains("in")) {
       return lowered_color4_alpha_output(source.links.at("in"), nodes_by_name, lowered_nodes);
@@ -15004,6 +15051,9 @@ ShaderOutput *lowered_vector4_w_output(
     const unordered_map<string, ShaderNode *> &lowered_nodes)
 {
   const Node &source = *nodes_by_name.at(link.source_node);
+  if (is_linked_attribute_fallback(source) && primary_output_type(source) == Type::Vector4) {
+    return lowered_nodes.at(link.source_node + ".fallback_result_w")->output("Value");
+  }
   if (source.nodedef == dot_vector4_id && source.links.contains("in")) {
     return lowered_vector4_w_output(source.links.at("in"), nodes_by_name, lowered_nodes);
   }
@@ -15866,6 +15916,66 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       graph->connect(selected->output("Value"), result->input("Value2"));
       for (MathNode *math : {absent, selected, result}) {
         lowered_nodes.emplace(math->name, math);
+      }
+      continue;
+    }
+    if (is_linked_attribute_fallback(node)) {
+      /* Batch 29: per-point fallback select without a presence output, as the
+       * Batch 16 Boolean form: two readers of the same attribute with constant
+       * fallbacks 0 and 1 agree wherever it exists; their Alpha differs by
+       * exactly 1 where it is absent, so
+       *   out = A0 + absent * fallback
+       * is the attribute value when present and the linked fallback when not.
+       * (The private candidate used a stock AttributeNode "Exists" output; this
+       * lineage keeps stock files unchanged.) */
+      const Type type = primary_output_type(node);
+      const bool geomprop = node.nodedef == geompropvalue_float_id ||
+                            node.nodedef == geompropvalue_vector2_id ||
+                            node.nodedef == geompropvalue_color3_id ||
+                            node.nodedef == geompropvalue_color4_id ||
+                            node.nodedef == geompropvalue_vector4_id;
+      for (int i = 0; i < 2; i++) {
+        AttributeNode *attribute = graph->create_node<AttributeNode>();
+        attribute->set_use_materialx_exact(true);
+        attribute->name = i == 0 ? node.name : node.name + ".fallback_one";
+        attribute->set_attribute(ustring(node.string_inputs.at(geomprop ? "geomprop" : "varname")));
+        attribute->set_use_fallback(true);
+        attribute->set_fallback_color(make_float3(float(i)));
+        attribute->set_fallback_alpha(float(i));
+        lowered_nodes.emplace(attribute->name, attribute);
+      }
+      MathNode *absent = graph->create_node<MathNode>();
+      absent->name = node.name + ".fallback_absent";
+      absent->set_math_type(NODE_MATH_SUBTRACT);
+      lowered_nodes.emplace(absent->name, absent);
+      if (type == Type::Float) {
+        for (const auto &[suffix, math_type] : {std::pair{".fallback_selected", NODE_MATH_MULTIPLY},
+                                                std::pair{".fallback_result", NODE_MATH_ADD}}) {
+          MathNode *math = graph->create_node<MathNode>();
+          math->name = node.name + suffix;
+          math->set_math_type(math_type);
+          lowered_nodes.emplace(math->name, math);
+        }
+      }
+      else {
+        for (const auto &[suffix, math_type] :
+             {std::pair{".fallback_selected", NODE_VECTOR_MATH_MULTIPLY},
+              std::pair{".fallback_result", NODE_VECTOR_MATH_ADD}}) {
+          VectorMathNode *math = graph->create_node<VectorMathNode>();
+          math->name = node.name + suffix;
+          math->set_math_type(math_type);
+          lowered_nodes.emplace(math->name, math);
+        }
+        if (type == Type::Color4 || type == Type::Vector4) {
+          for (const auto &[suffix, math_type] :
+               {std::pair{".fallback_selected_w", NODE_MATH_MULTIPLY},
+                std::pair{".fallback_result_w", NODE_MATH_ADD}}) {
+            MathNode *math = graph->create_node<MathNode>();
+            math->name = node.name + suffix;
+            math->set_math_type(math_type);
+            lowered_nodes.emplace(math->name, math);
+          }
+        }
       }
       continue;
     }
@@ -27466,6 +27576,39 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       continue;
     }
 
+    if (is_linked_attribute_fallback(node)) {
+      const Type type = primary_output_type(node);
+      const auto at = [&](const char *suffix) { return lowered_nodes.at(node.name + suffix); };
+      ShaderNode *zero = lowered_nodes.at(node.name);
+      ShaderNode *one = at(".fallback_one");
+      graph->connect(one->output("Alpha"), at(".fallback_absent")->input("Value1"));
+      graph->connect(zero->output("Alpha"), at(".fallback_absent")->input("Value2"));
+      ShaderOutput *fallback = lowered_output(node.links.at("fallback"), nodes_by_name, lowered_nodes);
+      if (type == Type::Float) {
+        graph->connect(fallback, at(".fallback_selected")->input("Value1"));
+        graph->connect(at(".fallback_absent")->output("Value"), at(".fallback_selected")->input("Value2"));
+        graph->connect(zero->output("Fac"), at(".fallback_result")->input("Value1"));
+        graph->connect(at(".fallback_selected")->output("Value"), at(".fallback_result")->input("Value2"));
+        continue;
+      }
+      const bool color = type == Type::Color3 || type == Type::Color4;
+      graph->connect(fallback, at(".fallback_selected")->input("Vector1"));
+      graph->connect(at(".fallback_absent")->output("Value"), at(".fallback_selected")->input("Vector2"));
+      graph->connect(zero->output(color ? "Color" : "Vector"), at(".fallback_result")->input("Vector1"));
+      graph->connect(at(".fallback_selected")->output("Vector"), at(".fallback_result")->input("Vector2"));
+      if (type == Type::Color4 || type == Type::Vector4) {
+        graph->connect(type == Type::Color4 ?
+                           lowered_color4_alpha_output(node.links.at("fallback"), nodes_by_name,
+                                                       lowered_nodes) :
+                           lowered_vector4_w_output(node.links.at("fallback"), nodes_by_name,
+                                                    lowered_nodes),
+                       at(".fallback_selected_w")->input("Value1"));
+        graph->connect(at(".fallback_absent")->output("Value"), at(".fallback_selected_w")->input("Value2"));
+        graph->connect(zero->output("Alpha"), at(".fallback_result_w")->input("Value1"));
+        graph->connect(at(".fallback_selected_w")->output("Value"), at(".fallback_result_w")->input("Value2"));
+      }
+      continue;
+    }
     if ((node.nodedef == geompropvalue_boolean_id ||
          node.nodedef == usd_primvar_reader_boolean_id) &&
         node.links.contains("fallback"))

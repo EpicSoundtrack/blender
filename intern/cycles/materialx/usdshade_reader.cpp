@@ -3818,6 +3818,85 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
                          int depth,
                          string *error_message);
 
+/* Batch 29 (port of candidate read_attribute_fallback_operand, geo2 GEO9/UV17):
+ * a named-attribute fallback is a regular nonuniform MaterialX operand. A
+ * connected 'default'/'fallback' is carried as a typed "fallback" link that the
+ * lowering selects where the attribute is absent; every unconnected form keeps
+ * the existing literal path (read_literal_fallback_input and
+ * read_four_component_attribute_fallback_input are unchanged). Sets *handled
+ * when the connected form applied. */
+bool read_connected_attribute_fallback(const pxr::UsdShadeShader &source,
+                                       const string &nodedef,
+                                       const char *canonical_name,
+                                       const Type type,
+                                       Graph *graph,
+                                       Node *node,
+                                       int depth,
+                                       bool *handled,
+                                       string *error_message)
+{
+  *handled = false;
+  pxr::UsdShadeInput input = source.GetInput(pxr::TfToken(canonical_name));
+  if (!input && (type == Type::Color4 || type == Type::Vector4)) {
+    input = source.GetInput(pxr::TfToken("fallback"));
+  }
+  if (!input || !input.HasConnectedSource()) {
+    return true;
+  }
+  const pxr::SdfValueTypeName expected =
+      type == Type::Float ? pxr::SdfValueTypeNames->Float :
+      type == Type::Vector2 ? pxr::SdfValueTypeNames->Float2 :
+      type == Type::Color3 ? pxr::SdfValueTypeNames->Color3f :
+      type == Type::Color4 ? pxr::SdfValueTypeNames->Color4f :
+                             pxr::SdfValueTypeNames->Float4;
+  if (type == Type::Vector3 ? !is_usd_vector3_type(input.GetTypeName()) :
+                              input.GetTypeName() != expected) {
+    set_error(error_message, nodedef + " requires a correctly typed connected fallback");
+    return false;
+  }
+  std::unordered_set<string> active_shaders;
+  std::unordered_map<string, string> emitted_shaders;
+  std::unordered_map<string, string> emitted_color4_shaders;
+  Link link;
+  bool valid = false;
+  switch (type) {
+    case Type::Float:
+      valid = read_float_output(input, graph, &link, &active_shaders, &emitted_shaders,
+                                &emitted_color4_shaders, depth + 1, error_message);
+      break;
+    case Type::Vector2:
+      valid = read_vector2_output(input, graph, &link, &active_shaders, depth + 1, error_message);
+      break;
+    case Type::Vector3:
+      valid = read_vector3_output(input, graph, &link, &active_shaders, depth + 1, error_message);
+      break;
+    case Type::Color3:
+      valid = read_color_output(input, graph, &link, &active_shaders, &emitted_color4_shaders,
+                                depth + 1, error_message);
+      break;
+    case Type::Color4:
+      valid = read_color4_output(input, graph, &link, &active_shaders, &emitted_shaders,
+                                 depth + 1, error_message);
+      break;
+    case Type::Vector4:
+      valid = read_vector4_output(input, graph, &link, &active_shaders, &emitted_shaders,
+                                  depth + 1, error_message);
+      break;
+    default:
+      set_error(error_message, nodedef + " has no connected fallback form");
+      return false;
+  }
+  if (!valid || link.type != type) {
+    if (valid) {
+      set_error(error_message, nodedef + " connected fallback has wrong output type");
+    }
+    return false;
+  }
+  node->links["fallback"] = link;
+  *handled = true;
+  return true;
+}
+
 /** Task 6: matrix boundary. Both scoped to their literal `ND_constant_*`
  *  NodeDef only; Matrix44 additionally rejects any non-affine literal
  *  (last row not exactly {0, 0, 0, 1}) at this same read step. */
@@ -8252,11 +8331,16 @@ bool read_vector4_output(const pxr::UsdShadeInput &input,
     const char *fallback_name = nodedef == geompropvalue_vector4_id ? "default" : "fallback";
     string value;
     Node attribute;
+    bool linked_fallback = false;
     if (!read_attribute_reader_name_input(source_shader, nodedef, input_name, &value, error_message) ||
         !source_shader.GetOutput(pxr::TfToken("out")) ||
         source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float4 ||
-        !read_four_component_attribute_fallback_input(
-            source_shader, nodedef, fallback_name, Type::Vector4, &attribute, error_message))
+        !read_connected_attribute_fallback(source_shader, nodedef, fallback_name, Type::Vector4,
+                                           graph, &attribute, depth, &linked_fallback,
+                                           error_message) ||
+        (!linked_fallback &&
+         !read_four_component_attribute_fallback_input(
+             source_shader, nodedef, fallback_name, Type::Vector4, &attribute, error_message)))
     {
       return finish(false);
     }
@@ -12084,9 +12168,13 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
   if (nodedef == geompropvalue_color4_id) {
     string value;
     Node color;
+    bool linked_fallback = false;
     if (!read_attribute_reader_name_input(source_shader, nodedef, "geomprop", &value, error_message) ||
-        !read_four_component_attribute_fallback_input(
-            source_shader, nodedef, "default", Type::Color4, &color, error_message))
+        !read_connected_attribute_fallback(source_shader, nodedef, "default", Type::Color4, graph,
+                                           &color, depth, &linked_fallback, error_message) ||
+        (!linked_fallback &&
+         !read_four_component_attribute_fallback_input(
+             source_shader, nodedef, "default", Type::Color4, &color, error_message)))
     {
       return finish(false);
     }
@@ -14285,13 +14373,18 @@ bool read_color_output(const pxr::UsdShadeInput &input,
   if (nodedef == geompropvalue_color3_id) {
     string value;
     Node color;
+    bool linked_fallback = false;
     if (!read_string_value_input(source_shader.GetInput(pxr::TfToken("geomprop")),
                                  nodedef,
                                  "geomprop",
                                  true,
                                  &value,
                                  error_message) ||
-        !read_literal_fallback_input(source_shader, nodedef, "default", Type::Color3, &color, error_message))
+        !read_connected_attribute_fallback(source_shader, nodedef, "default", Type::Color3, graph,
+                                           &color, depth, &linked_fallback, error_message) ||
+        (!linked_fallback &&
+         !read_literal_fallback_input(source_shader, nodedef, "default", Type::Color3, &color,
+                                      error_message)))
     {
       return finish(false);
     }
@@ -19330,13 +19423,17 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   }
   else if (nodedef == geompropvalue_vector2_id) {
     string value;
+    bool linked_fallback = false;
     if (!read_string_value_input(source.GetInput(pxr::TfToken("geomprop")),
                                  nodedef,
                                  "geomprop",
                                  true,
                                  &value,
                                  error_message) ||
-        !read_literal_fallback_input(source, nodedef, "default", Type::Vector2, &node, error_message)) {
+        !read_connected_attribute_fallback(source, nodedef, "default", Type::Vector2, graph, &node,
+                                           depth, &linked_fallback, error_message) ||
+        (!linked_fallback &&
+         !read_literal_fallback_input(source, nodedef, "default", Type::Vector2, &node, error_message))) {
       return finish(false);
     }
     node.string_inputs["geomprop"] = value;
@@ -20365,13 +20462,17 @@ bool read_vector2_output(const pxr::UsdShadeInput &input,
   }
   else if (nodedef == usdprimvarreader_vector2_id) {
     string value;
+    bool linked_fallback = false;
     if (!read_string_value_input(source.GetInput(pxr::TfToken("varname")),
                                  nodedef,
                                  "varname",
                                  true,
                                  &value,
                                  error_message) ||
-        !read_literal_fallback_input(source, nodedef, "fallback", Type::Vector2, &node, error_message))
+        !read_connected_attribute_fallback(source, nodedef, "fallback", Type::Vector2, graph, &node,
+                                           depth, &linked_fallback, error_message) ||
+        (!linked_fallback &&
+         !read_literal_fallback_input(source, nodedef, "fallback", Type::Vector2, &node, error_message)))
     {
       return finish(false);
     }
@@ -21391,13 +21492,17 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   }
   else if (nodedef == geompropvalue_float_id) {
     string value;
+    bool linked_fallback = false;
     if (!read_string_value_input(source.GetInput(pxr::TfToken("geomprop")),
                                  nodedef,
                                  "geomprop",
                                  false,
                                  &value,
                                  error_message) ||
-        !read_literal_fallback_input(source, nodedef, "default", Type::Float, &node, error_message))
+        !read_connected_attribute_fallback(source, nodedef, "default", Type::Float, graph, &node,
+                                           depth, &linked_fallback, error_message) ||
+        (!linked_fallback &&
+         !read_literal_fallback_input(source, nodedef, "default", Type::Float, &node, error_message)))
     {
       return finish(false);
     }
@@ -22798,13 +22903,17 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   }
   else if (nodedef == usdprimvarreader_float_id) {
     string value;
+    bool linked_fallback = false;
     if (!read_string_value_input(source.GetInput(pxr::TfToken("varname")),
                                  nodedef,
                                  "varname",
                                  true,
                                  &value,
                                  error_message) ||
-        !read_literal_fallback_input(source, nodedef, "fallback", Type::Float, &node, error_message))
+        !read_connected_attribute_fallback(source, nodedef, "fallback", Type::Float, graph, &node,
+                                           depth, &linked_fallback, error_message) ||
+        (!linked_fallback &&
+         !read_literal_fallback_input(source, nodedef, "fallback", Type::Float, &node, error_message)))
     {
       return finish(false);
     }
@@ -24978,13 +25087,17 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
   }
   else if (nodedef == usdprimvarreader_vector3_id) {
     string value;
+    bool linked_fallback = false;
     if (!read_string_value_input(source.GetInput(pxr::TfToken("varname")),
                                  nodedef,
                                  "varname",
                                  true,
                                  &value,
                                  error_message) ||
-        !read_literal_fallback_input(source, nodedef, "fallback", Type::Vector3, &node, error_message))
+        !read_connected_attribute_fallback(source, nodedef, "fallback", Type::Vector3, graph, &node,
+                                           depth, &linked_fallback, error_message) ||
+        (!linked_fallback &&
+         !read_literal_fallback_input(source, nodedef, "fallback", Type::Vector3, &node, error_message)))
     {
       return finish(false);
     }
