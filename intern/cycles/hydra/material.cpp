@@ -1230,6 +1230,19 @@ bool MaterialXParameterHasValue(const HdMaterialNodeParameterContainerSchema &pa
   return parameters && parameters.Get(input_name) && parameters.Get(input_name).GetValue();
 }
 
+bool MaterialXNetworkHasNodeDef(HdMaterialNodeContainerSchema node_schemas)
+{
+  for (const TfToken &node_name : node_schemas.GetNames()) {
+    const HdMaterialNodeSchema node_schema = node_schemas.Get(node_name);
+    if (node_schema.GetNodeIdentifier() &&
+        node_schema.GetNodeIdentifier()->GetTypedValue(0.0f).GetString().starts_with("ND_"))
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool MaterialXNetworkHasCycle(HdMaterialNodeContainerSchema node_schemas)
 {
   enum class VisitState { Visiting, Done };
@@ -2287,7 +2300,9 @@ bool HdCyclesMaterial::PopulateShaderGraphInternal(
 {
   HdMaterialNodeContainerSchema node_schemas = network.GetNodes();
 
-  if (!MaterialXNetworkHasCycle(node_schemas)) {
+  /* Whole-network cycle rejection applies to MaterialX networks only; stock networks keep the
+   * upstream behavior (graph is built, ShaderGraph breaks cycles when finalizing). */
+  if (MaterialXNetworkHasNodeDef(node_schemas) && !MaterialXNetworkHasCycle(node_schemas)) {
     return false;
   }
 

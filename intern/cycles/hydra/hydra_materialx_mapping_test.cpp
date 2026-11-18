@@ -5027,4 +5027,34 @@ TEST(HdCyclesMaterialXMapping, stock_cycles_node_parameters_match_socket_ui_name
   material.Finalize(&session);
 }
 
+TEST(HdCyclesMaterialXMapping, stock_cyclic_network_is_built_not_rejected)
+{
+  /* Whole-network cycle rejection is MaterialX-only; a cyclic stock cycles_* network is built
+   * as upstream does (ShaderGraph breaks the cycle when finalizing). */
+  const HdContainerDataSourceHandle nodes = HdRetainedContainerDataSource::New(
+      TfToken("/Looks/Stock/A"),
+      node("cycles_math",
+           HdRetainedContainerDataSource::New(TfToken("value2"), float_parameter(1.0f)),
+           HdRetainedContainerDataSource::New(TfToken("value1"),
+                                              connection(TfToken("/Looks/Stock/B"), TfToken("Value")))),
+      TfToken("/Looks/Stock/B"),
+      node("cycles_math",
+           HdRetainedContainerDataSource::New(TfToken("value2"), float_parameter(2.0f)),
+           HdRetainedContainerDataSource::New(TfToken("value1"),
+                                              connection(TfToken("/Looks/Stock/A"), TfToken("Value")))));
+  const HdMaterialNetworkSchema network(HdMaterialNetworkSchema::Builder().SetNodes(nodes).Build());
+
+  HdCyclesSession session{SessionParams()};
+  HdCyclesMaterial material(SdfPath("/StockCyclicNetwork"));
+  HdCyclesMaterialTestAccess::Populate(&material, &session, network);
+
+  int math_count = 0;
+  for (ShaderNode *node : material.GetCyclesShader()->graph->nodes) {
+    math_count += dynamic_cast<MathNode *>(node) != nullptr;
+  }
+  EXPECT_EQ(math_count, 2) << "stock networks must not be rejected by the MaterialX cycle check";
+
+  material.Finalize(&session);
+}
+
 HDCYCLES_NAMESPACE_CLOSE_SCOPE
