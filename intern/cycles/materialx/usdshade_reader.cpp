@@ -30602,6 +30602,172 @@ bool read_standard_surface_inputs(
   return true;
 }
 
+/* The OpenPBR terminal's admitted input set (is_supported_open_pbr_input),
+ * shared by the material surface terminal and, since batch 36, by the
+ * unit-opacity surfaceshader operand reader (two-sided surfacematerial
+ * backsurfaceshader / mix_surfaceshader operands). */
+bool read_open_pbr_surface_inputs(const pxr::UsdShadeShader &surface,
+                                  Graph *graph,
+                                  Node *open_pbr,
+                                  bool *has_supported_input,
+                                  std::unordered_map<string, string> *emitted_float_shaders,
+                                  std::unordered_map<string, string> *emitted_color4_shaders,
+                                  std::unordered_map<string, string> *emitted_normalmap_shaders,
+                                  string *error_message)
+{
+  if (!read_color_terminal_input(
+          surface,
+          "base_color",
+          graph,
+          open_pbr,
+          has_supported_input,
+          emitted_float_shaders,
+          emitted_color4_shaders,
+          error_message) ||
+      !read_float_terminal_input(surface,
+                                 "base_weight",
+                                 graph,
+                                 open_pbr,
+                                 has_supported_input,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "base_diffuse_roughness",
+                                 graph,
+                                 open_pbr,
+                                 has_supported_input,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "base_metalness",
+                                 graph,
+                                 open_pbr,
+                                 has_supported_input,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "specular_ior",
+                                 graph,
+                                 open_pbr,
+                                 has_supported_input,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "specular_roughness",
+                                 graph,
+                                 open_pbr,
+                                 has_supported_input,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "geometry_opacity",
+                                 graph,
+                                 open_pbr,
+                                 has_supported_input,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 error_message) ||
+      !read_color_terminal_input(
+          surface,
+          "emission_color",
+          graph,
+          open_pbr,
+          has_supported_input,
+          emitted_float_shaders,
+          emitted_color4_shaders,
+          error_message) ||
+      !read_float_terminal_input(surface,
+                                 "emission_luminance",
+                                 graph,
+                                 open_pbr,
+                                 has_supported_input,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 error_message) ||
+      !read_normal_terminal_input(
+          surface,
+          "geometry_normal",
+          graph,
+          open_pbr,
+          has_supported_input,
+          emitted_normalmap_shaders,
+          error_message) ||
+      !read_normal_terminal_input(surface,
+                                  "geometry_coat_normal",
+                                  graph,
+                                  open_pbr,
+                                  has_supported_input,
+                                  emitted_normalmap_shaders,
+                                  error_message) ||
+      !read_float_terminal_input(surface,
+                                 "coat_weight",
+                                 graph,
+                                 open_pbr,
+                                 has_supported_input,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 error_message) ||
+      !read_color_terminal_input(
+          surface,
+          "coat_color",
+          graph,
+          open_pbr,
+          has_supported_input,
+          emitted_float_shaders,
+          emitted_color4_shaders,
+          error_message) ||
+      !read_float_terminal_input(surface,
+                                 "coat_roughness",
+                                 graph,
+                                 open_pbr,
+                                 has_supported_input,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "coat_ior",
+                                 graph,
+                                 open_pbr,
+                                 has_supported_input,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 error_message) ||
+      !read_float_terminal_input(surface,
+                                 "fuzz_weight",
+                                 graph,
+                                 open_pbr,
+                                 has_supported_input,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 error_message) ||
+      !read_color_terminal_input(
+          surface,
+          "fuzz_color",
+          graph,
+          open_pbr,
+          has_supported_input,
+          emitted_float_shaders,
+          emitted_color4_shaders,
+          error_message) ||
+      !read_float_terminal_input(surface,
+                                 "fuzz_roughness",
+                                 graph,
+                                 open_pbr,
+                                 has_supported_input,
+                                 emitted_float_shaders,
+                                 emitted_color4_shaders,
+                                 error_message))
+  {
+    return false;
+  }
+  return true;
+}
+
 bool read_connected_unit_opacity_surface_shader(
     const pxr::UsdShadeInput &input,
     Graph *graph,
@@ -30777,6 +30943,65 @@ bool read_connected_unit_opacity_surface_shader(
         set_error(error_message, string(mix_surfaceshader_id) + " has no direct Cycles equivalent: " + name);
         return finish(false);
       }
+    }
+  }
+  else if (nodedef == open_pbr_surface_id || nodedef_inherits_from(surface, open_pbr_surface_id)) {
+    /* Batch 36: OpenPBR as a unit-opacity operand (two-sided surfacematerial
+     * backsurfaceshader, mix_surfaceshader fg/bg). The front-path OpenPBR
+     * reader and input set are reused verbatim; graph.cpp lowers it to the
+     * same PrincipledBsdf whose BSDF output becomes the closure operand.
+     * Opacity semantics as for standard_surface above: geometry_opacity
+     * (open_pbr_surface.mtlx float, default 1.0) must be omitted, unvalued
+     * or an unconnected, non-time-sampled literal 1.0 -- a partially
+     * transparent OpenPBR would need its Alpha mix inside the operand. */
+    const pxr::UsdShadeInput opacity = surface.GetInput(pxr::TfToken("geometry_opacity"));
+    if (opacity && (opacity.GetAttr().HasAuthoredValueOpinion() ||
+                    composed_connection_count(opacity.GetAttr()) != 0))
+    {
+      float value = 0.0f;
+      if (opacity.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+          opacity.GetAttr().GetNumTimeSamples() != 0 ||
+          composed_connection_count(opacity.GetAttr()) != 0 || !opacity.Get(&value) ||
+          value != 1.0f)
+      {
+        set_error(error_message,
+                  "ND_mix_surfaceshader admits only omitted or literal 1.0 OpenPBR "
+                  "geometry_opacity");
+        return finish(false);
+      }
+    }
+    node.nodedef = open_pbr_surface_id;
+    bool has_supported_input = false;
+    if (!read_open_pbr_surface_inputs(surface,
+                                      graph,
+                                      &node,
+                                      &has_supported_input,
+                                      emitted_float_shaders,
+                                      emitted_color4_shaders,
+                                      emitted_normalmap_shaders,
+                                      error_message))
+    {
+      return finish(false);
+    }
+    for (const pxr::UsdShadeInput &surface_input : surface.GetInputs()) {
+      if (!is_supported_open_pbr_input(surface_input.GetBaseName().GetString()) &&
+          !is_unsupported_open_pbr_input_at_declared_default(surface_input))
+      {
+        set_error(error_message, "OpenPBR input has no direct Cycles equivalent: " +
+                                     surface_input.GetBaseName().GetString());
+        return finish(false);
+      }
+    }
+    if (!has_supported_input) {
+      set_error(error_message, "OpenPBR has no supported inputs");
+      return finish(false);
+    }
+    if (node.links.contains("geometry_opacity") ||
+        (node.inputs.contains("geometry_opacity") && node.inputs.at("geometry_opacity") != 1.0f))
+    {
+      set_error(error_message,
+                "ND_mix_surfaceshader admits only omitted or literal 1.0 OpenPBR geometry_opacity");
+      return finish(false);
     }
   }
   else {
@@ -31202,8 +31427,9 @@ bool read_surface_material_displacement(const pxr::UsdShadeShader &surface_mater
  *  MixClosure(Fac = Geometry.Backfacing, Closure1 = front, Closure2 = back), the
  *  same backface split ND_lama_surface materialBack uses. Both operands go
  *  through the ND_mix_surfaceshader operand reader, so the admitted surface
- *  models and the unit-opacity restriction are exactly mix_surfaceshader's;
- *  anything else (e.g. OpenPBR operands) stays an explicit refusal. */
+ *  models and the unit-opacity restriction are exactly mix_surfaceshader's
+ *  (batch 36: including unit-opacity OpenPBR); anything else stays an explicit
+ *  refusal. */
 bool read_two_sided_surface_material(const pxr::UsdShadeShader &surface_material,
                                      Graph *parsed,
                                      string *error_message)
@@ -31550,153 +31776,14 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
   open_pbr.nodedef = open_pbr_surface_id;
   open_pbr.outputs["out"] = Type::SurfaceShader;
 
-  if (!read_color_terminal_input(
-          surface,
-          "base_color",
-          &parsed,
-          &open_pbr,
-          &has_supported_input,
-          &emitted_float_shaders,
-          &emitted_color4_shaders,
-          error_message) ||
-      !read_float_terminal_input(surface,
-                                 "base_weight",
-                                 &parsed,
-                                 &open_pbr,
-                                 &has_supported_input,
-                                 &emitted_float_shaders,
-                                 &emitted_color4_shaders,
-                                 error_message) ||
-      !read_float_terminal_input(surface,
-                                 "base_diffuse_roughness",
-                                 &parsed,
-                                 &open_pbr,
-                                 &has_supported_input,
-                                 &emitted_float_shaders,
-                                 &emitted_color4_shaders,
-                                 error_message) ||
-      !read_float_terminal_input(surface,
-                                 "base_metalness",
-                                 &parsed,
-                                 &open_pbr,
-                                 &has_supported_input,
-                                 &emitted_float_shaders,
-                                 &emitted_color4_shaders,
-                                 error_message) ||
-      !read_float_terminal_input(surface,
-                                 "specular_ior",
-                                 &parsed,
-                                 &open_pbr,
-                                 &has_supported_input,
-                                 &emitted_float_shaders,
-                                 &emitted_color4_shaders,
-                                 error_message) ||
-      !read_float_terminal_input(surface,
-                                 "specular_roughness",
-                                 &parsed,
-                                 &open_pbr,
-                                 &has_supported_input,
-                                 &emitted_float_shaders,
-                                 &emitted_color4_shaders,
-                                 error_message) ||
-      !read_float_terminal_input(surface,
-                                 "geometry_opacity",
-                                 &parsed,
-                                 &open_pbr,
-                                 &has_supported_input,
-                                 &emitted_float_shaders,
-                                 &emitted_color4_shaders,
-                                 error_message) ||
-      !read_color_terminal_input(
-          surface,
-          "emission_color",
-          &parsed,
-          &open_pbr,
-          &has_supported_input,
-          &emitted_float_shaders,
-          &emitted_color4_shaders,
-          error_message) ||
-      !read_float_terminal_input(surface,
-                                 "emission_luminance",
-                                 &parsed,
-                                 &open_pbr,
-                                 &has_supported_input,
-                                 &emitted_float_shaders,
-                                 &emitted_color4_shaders,
-                                 error_message) ||
-      !read_normal_terminal_input(
-          surface,
-          "geometry_normal",
-          &parsed,
-          &open_pbr,
-          &has_supported_input,
-          &emitted_normalmap_shaders,
-          error_message) ||
-      !read_normal_terminal_input(surface,
-                                  "geometry_coat_normal",
-                                  &parsed,
-                                  &open_pbr,
-                                  &has_supported_input,
-                                  &emitted_normalmap_shaders,
-                                  error_message) ||
-      !read_float_terminal_input(surface,
-                                 "coat_weight",
-                                 &parsed,
-                                 &open_pbr,
-                                 &has_supported_input,
-                                 &emitted_float_shaders,
-                                 &emitted_color4_shaders,
-                                 error_message) ||
-      !read_color_terminal_input(
-          surface,
-          "coat_color",
-          &parsed,
-          &open_pbr,
-          &has_supported_input,
-          &emitted_float_shaders,
-          &emitted_color4_shaders,
-          error_message) ||
-      !read_float_terminal_input(surface,
-                                 "coat_roughness",
-                                 &parsed,
-                                 &open_pbr,
-                                 &has_supported_input,
-                                 &emitted_float_shaders,
-                                 &emitted_color4_shaders,
-                                 error_message) ||
-      !read_float_terminal_input(surface,
-                                 "coat_ior",
-                                 &parsed,
-                                 &open_pbr,
-                                 &has_supported_input,
-                                 &emitted_float_shaders,
-                                 &emitted_color4_shaders,
-                                 error_message) ||
-      !read_float_terminal_input(surface,
-                                 "fuzz_weight",
-                                 &parsed,
-                                 &open_pbr,
-                                 &has_supported_input,
-                                 &emitted_float_shaders,
-                                 &emitted_color4_shaders,
-                                 error_message) ||
-      !read_color_terminal_input(
-          surface,
-          "fuzz_color",
-          &parsed,
-          &open_pbr,
-          &has_supported_input,
-          &emitted_float_shaders,
-          &emitted_color4_shaders,
-          error_message) ||
-      !read_float_terminal_input(surface,
-                                 "fuzz_roughness",
-                                 &parsed,
-                                 &open_pbr,
-                                 &has_supported_input,
-                                 &emitted_float_shaders,
-                                 &emitted_color4_shaders,
-                                 error_message))
+  if (!read_open_pbr_surface_inputs(surface,
+                                    &parsed,
+                                    &open_pbr,
+                                    &has_supported_input,
+                                    &emitted_float_shaders,
+                                    &emitted_color4_shaders,
+                                    &emitted_normalmap_shaders,
+                                    error_message))
   {
     return false;
   }

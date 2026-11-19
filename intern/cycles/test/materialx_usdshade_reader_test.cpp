@@ -29895,9 +29895,11 @@ TEST(materialx_usdshade_reader, unwraps_materialx_surfacematerial_surface_and_di
 TEST(materialx_usdshade_reader, rejects_surfacematerial_back_surface_with_unmixable_operands)
 {
   /* A connected backsurfaceshader is lowered as a Backfacing closure split
-   * whose operands use the ND_mix_surfaceshader operand reader. OpenPBR is
-   * not a mixable operand there, so this two-sided OpenPBR material is still
-   * refused explicitly (naming the operand) instead of dropping the back. */
+   * whose operands use the ND_mix_surfaceshader operand reader. Batch 36:
+   * OpenPBR is a mixable operand only at unit geometry_opacity, so a
+   * partially transparent OpenPBR front is still refused explicitly (naming
+   * the operand) instead of dropping the back or its opacity. The unit-opacity
+   * case is two_sided_surfacematerial_admits_unit_opacity_open_pbr. */
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
   const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
@@ -29911,6 +29913,7 @@ TEST(materialx_usdshade_reader, rejects_surfacematerial_back_surface_with_unmixa
 
   front.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
   front.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  front.CreateInput(pxr::TfToken("geometry_opacity"), pxr::SdfValueTypeNames->Float).Set(0.5f);
   front.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
   back.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
   back.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(0.5f);
@@ -29931,7 +29934,7 @@ TEST(materialx_usdshade_reader, rejects_surfacematerial_back_surface_with_unmixa
   string error;
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
   EXPECT_NE(error.find("ND_surfacematerial surfaceshader: "), string::npos) << error;
-  EXPECT_NE(error.find("ND_open_pbr_surface_surfaceshader"), string::npos) << error;
+  EXPECT_NE(error.find("OpenPBR geometry_opacity"), string::npos) << error;
   EXPECT_TRUE(source.nodes.empty());
 }
 
@@ -49299,6 +49302,149 @@ TEST(materialx_usdshade_reader, hextilednormalmap_general_path_refusals)
   materialx::Graph sampled;
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &sampled, &error));
   EXPECT_NE(error.find("'strength'"), string::npos) << error;
+}
+
+/* Batch 36: a two-sided ND_surfacematerial with OpenPBR front and back
+ * (the retained next-surfacematerial-current585-v1 back-surface graph shape)
+ * lowers to MixClosure(Fac = Backfacing, Closure1 = front Principled,
+ * Closure2 = back Principled); a non-unit or linked back geometry_opacity and
+ * an unsupported non-default OpenPBR input stay refused. */
+TEST(materialx_usdshade_reader, two_sided_surfacematerial_admits_unit_opacity_open_pbr)
+{
+  for (const int variant : {0, 1, 2, 3, 4}) {
+    /* 0: retained shape; 1: back geometry_opacity = 1.0 literal (admitted);
+     * 2: back geometry_opacity = 0.5 (refused); 3: back geometry_opacity
+     * linked (refused); 4: back transmission_weight = 0.5 (refused). */
+    SCOPED_TRACE(variant);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/BackSurfaceMaterial"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage,
+                                         material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader front = shader("Front");
+    front.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    front.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    front.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader back = shader("Back");
+    back.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    back.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+    back.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    if (variant == 1 || variant == 2) {
+      back.CreateInput(pxr::TfToken("geometry_opacity"), pxr::SdfValueTypeNames->Float)
+          .Set(variant == 1 ? 1.0f : 0.5f);
+    }
+    if (variant == 3) {
+      pxr::UsdShadeShader value = shader("Opacity");
+      value.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+      value.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+      value.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+      ASSERT_TRUE(back.CreateInput(pxr::TfToken("geometry_opacity"), pxr::SdfValueTypeNames->Float)
+                      .ConnectToSource(value.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    if (variant == 4) {
+      back.CreateInput(pxr::TfToken("transmission_weight"), pxr::SdfValueTypeNames->Float)
+          .Set(0.5f);
+    }
+    pxr::UsdShadeShader surface_material = shader("SurfaceMaterial");
+    surface_material.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surfacematerial")));
+    ASSERT_TRUE(surface_material
+                    .CreateInput(pxr::TfToken("surfaceshader"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(front.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(surface_material
+                    .CreateInput(pxr::TfToken("backsurfaceshader"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(back.ConnectableAPI(), pxr::TfToken("out")));
+    surface_material.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(surface_material.ConnectableAPI(),
+                                                               pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    const bool read = materialx::read_usdshade_graph(material, &graph, &error);
+    if (variant >= 2) {
+      EXPECT_FALSE(read);
+      EXPECT_NE(error.find("ND_surfacematerial backsurfaceshader"), string::npos) << error;
+      EXPECT_TRUE(graph.nodes.empty());
+      continue;
+    }
+    ASSERT_TRUE(read) << error;
+    ASSERT_TRUE(materialx::validate(graph));
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    MixClosureNode *side = nullptr;
+    int principled = 0;
+    for (ShaderNode *node : lowered.nodes) {
+      principled += dynamic_cast<PrincipledBsdfNode *>(node) != nullptr;
+      if (node->name == "SurfaceMaterial") {
+        side = dynamic_cast<MixClosureNode *>(node);
+      }
+    }
+    EXPECT_EQ(principled, 2);
+    ASSERT_NE(side, nullptr);
+    ShaderInput *fac = side->input("Fac");
+    ASSERT_NE(fac->link, nullptr);
+    EXPECT_NE(dynamic_cast<GeometryNode *>(fac->link->parent), nullptr);
+    EXPECT_EQ(fac->link->name(), "Backfacing");
+    auto *front_bsdf = dynamic_cast<PrincipledBsdfNode *>(side->input("Closure1")->link->parent);
+    auto *back_bsdf = dynamic_cast<PrincipledBsdfNode *>(side->input("Closure2")->link->parent);
+    ASSERT_NE(front_bsdf, nullptr);
+    ASSERT_NE(back_bsdf, nullptr);
+    EXPECT_NE(front_bsdf, back_bsdf);
+    EXPECT_FLOAT_EQ(back_bsdf->get_alpha(), 1.0f);
+    ShaderInput *surface = lowered.output()->input("Surface");
+    ASSERT_NE(surface->link, nullptr);
+    EXPECT_EQ(surface->link->parent, side);
+  }
+}
+
+/* Batch 36: OpenPBR is also a registered unit-opacity ND_mix_surfaceshader
+ * operand (the same operand reader). */
+TEST(materialx_usdshade_reader, mix_surfaceshader_admits_unit_opacity_open_pbr_operands)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/MixOpenPBR"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+  pxr::UsdShadeShader fg = shader("Fg");
+  fg.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  fg.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 0.0f, 0.0f));
+  fg.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader bg = shader("Bg");
+  bg.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  bg.CreateInput(pxr::TfToken("base_metalness"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  bg.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  pxr::UsdShadeShader mix = shader("Mix");
+  mix.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_mix_surfaceshader")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(fg.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(mix.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(bg.ConnectableAPI(), pxr::TfToken("out")));
+  mix.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  mix.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(mix.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  ASSERT_TRUE(materialx::validate(graph));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  ShaderInput *surface = lowered.output()->input("Surface");
+  ASSERT_NE(surface->link, nullptr);
+  auto *mix_node = dynamic_cast<MixClosureNode *>(surface->link->parent);
+  ASSERT_NE(mix_node, nullptr);
+  EXPECT_FLOAT_EQ(mix_node->get_fac(), 0.25f);
+  auto *bg_bsdf = dynamic_cast<PrincipledBsdfNode *>(mix_node->input("Closure1")->link->parent);
+  auto *fg_bsdf = dynamic_cast<PrincipledBsdfNode *>(mix_node->input("Closure2")->link->parent);
+  ASSERT_NE(bg_bsdf, nullptr);
+  ASSERT_NE(fg_bsdf, nullptr);
+  EXPECT_FLOAT_EQ(bg_bsdf->get_metallic(), 1.0f);
+  EXPECT_EQ(fg_bsdf->get_base_color(), make_float3(1.0f, 0.0f, 0.0f));
 }
 
 CCL_NAMESPACE_END

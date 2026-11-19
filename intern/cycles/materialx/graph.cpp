@@ -1676,6 +1676,10 @@ const char *generic_surface_closure_output_name(const Node &source)
       source.nodedef == lama_surface_id || source.nodedef == surface_material_id) {
     return "Closure";
   }
+  if (source.nodedef == open_pbr_surface_id) {
+    /* Batch 36: the OpenPBR PrincipledBsdf as a unit-opacity operand. */
+    return "BSDF";
+  }
   if (source.nodedef == mix_bsdf_id || source.nodedef == mix_edf_id ||
       source.nodedef == lama_mix_bsdf_id || source.nodedef == lama_mix_edf_id) {
     return "Closure";
@@ -1723,6 +1727,12 @@ bool surface_shader_mix_has_unit_opacity(
     const auto opacity = node.color3_inputs.find("opacity");
     return finish(!node.links.contains("opacity") &&
                   (opacity == node.color3_inputs.end() || opacity->second == one_float3()));
+  }
+  if (node.nodedef == open_pbr_surface_id) {
+    /* Batch 36: unit geometry_opacity (omitted or literal 1.0, never linked). */
+    const auto opacity = node.inputs.find("geometry_opacity");
+    return finish(!node.links.contains("geometry_opacity") &&
+                  (opacity == node.inputs.end() || opacity->second == 1.0f));
   }
   if (node.nodedef == mix_surfaceshader_id) {
     const auto fg = node.links.find("fg");
@@ -32803,7 +32813,11 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       graph->connect(lowered_output(coat_normal->second, nodes_by_name, lowered_nodes),
                      surface_node->input("Coat Normal"));
     }
-    graph->connect(surface_node->output("BSDF"), graph->output()->input("Surface"));
+    /* Batch 36: an OpenPBR consumed as a surfaceshader operand (two-sided
+     * surfacematerial, mix_surfaceshader) feeds its consumer instead. */
+    if (!surface_shader_node_has_surface_shader_consumer(source, node.name)) {
+      graph->connect(surface_node->output("BSDF"), graph->output()->input("Surface"));
+    }
   }
 
   if (source.has_displacement && !source.displacement_is_vector3) {
