@@ -26639,10 +26639,14 @@ Link combine_vector3(Graph *graph,
   return link;
 }
 
-/** Emit a real ND_multiply_vector3FA node (vector3 * literal float scale)
- *  scaling an absorption/scattering operand by a literal weight -- mirrors
- *  read_vector3_output()'s own construction of the same nodedef. */
-Link scale_vector3(Graph *graph, const Color3Input &in1, const float scale, const string &synth_path)
+/** Emit a real ND_multiply_vector3FA node (vector3 * float scale) scaling an
+ *  absorption/scattering operand by a literal or graph-driven weight --
+ *  mirrors read_vector3_output()'s own construction of the same nodedef,
+ *  whose float 'in2' may be a literal or a linked float. */
+Link scale_vector3(Graph *graph,
+                   const Color3Input &in1,
+                   const FloatInput &scale,
+                   const string &synth_path)
 {
   Node math;
   math.name = unique_node_name(*graph, synth_path, synth_path + "#");
@@ -26653,7 +26657,12 @@ Link scale_vector3(Graph *graph, const Color3Input &in1, const float scale, cons
   else {
     math.vector3_inputs["in1"] = in1.value;
   }
-  math.inputs["in2"] = scale;
+  if (scale.is_linked) {
+    math.links["in2"] = scale.link;
+  }
+  else {
+    math.inputs["in2"] = scale.value;
+  }
   math.outputs["out"] = Type::Vector3;
   const Link link{math.name, "out", Type::Vector3};
   graph->nodes.push_back(std::move(math));
@@ -26703,7 +26712,7 @@ Link mix_vector3(Graph *graph,
 }
 
 /** Emit a real ND_mix_color3 node lerping two emission-color operands by a
- *  literal weight -- same construction as mix_vector3() above, but Color3
+ *  literal or linked weight -- same construction as mix_vector3() above, but Color3
  *  (not Vector3): ND_uniform_edf's real 1.39 nodedef declares 'color' as
  *  color3 (see read_volume_emission_color()'s comment), and graph.cpp's
  *  validate() requires Graph::volume_emission's link to be Type::Color3, so
@@ -26711,7 +26720,7 @@ Link mix_vector3(Graph *graph,
 Link mix_color3(Graph *graph,
                 const Color3Input &fg,
                 const Color3Input &bg,
-                const float mix_weight,
+                const FloatInput &mix_weight,
                 const string &synth_path)
 {
   Node mix;
@@ -26729,7 +26738,12 @@ Link mix_color3(Graph *graph,
   else {
     mix.color3_inputs["bg"] = bg.value;
   }
-  mix.inputs["mix"] = mix_weight;
+  if (mix_weight.is_linked) {
+    mix.links["mix"] = mix_weight.link;
+  }
+  else {
+    mix.inputs["mix"] = mix_weight.value;
+  }
   mix.outputs["out"] = Type::Color3;
   const Link link{mix.name, "out", Type::Color3};
   graph->nodes.push_back(std::move(mix));
@@ -26775,11 +26789,11 @@ bool resolve_vdf_shader(const pxr::UsdShadeConnectableAPI &source,
  * coefficients (the shape VolumeCoefficientsNode natively carries):
  *
  *  - ND_multiply_vdfF/ND_multiply_vdfC scale a VDF's absorption and
- *    scattering coefficients by a literal float/color3 weight -- an exact,
+ *    scattering coefficients by a float/color3 weight -- an exact,
  *    physically-based mapping (scaling extinction/scattering coefficients
  *    is literally what "weighting" a VDF's contribution means). The weight
- *    must be a literal: a dynamic/graph-driven scaling weight is an
- *    explicit, unsupported boundary this pass, not a silent narrowing.
+ *    may be a literal or graph-driven (linked into the same per-component
+ *    multiply; a color3 weight via ND_convert_color3_vector3).
  *  - ND_add_vdf sums two VDFs' absorption and scattering coefficients --
  *    also exact (Beer-Lambert extinction/scattering coefficients add under
  *    superposition). Their anisotropy cannot always be combined honestly:
@@ -26871,36 +26885,62 @@ bool read_vdf_coefficients(const pxr::UsdShadeConnectableAPI &source,
       set_error(error_message, matched_id + " requires a connected 'in1' VDF input");
       return false;
     }
-    if (!in2 || in2.HasConnectedSource()) {
-      set_error(error_message,
-               matched_id +
-                   " weight ('in2') must be a literal value -- a dynamic/graph-driven VDF "
-                   "scaling weight is an explicit, unsupported boundary this pass");
+    if (!in2) {
+      set_error(error_message, matched_id + " requires a weight ('in2') input");
       return false;
     }
-    float scalar_weight = 1.0f;
-    float3 color_weight_value = make_float3(1.0f, 1.0f, 1.0f);
+    /* The weight may be a literal or graph-driven (batch 33): scaling Beer-
+     * Lambert coefficients is linear in the weight per shading point, so a
+     * connected weight is the same exact multiply with its 'in2' socket
+     * linked -- the ND_mix_vdf 'mix' precedent. */
+    FloatInput scalar_weight;
+    scalar_weight.value = 1.0f;
+    Color3Input color_weight_input;
+    color_weight_input.value = make_float3(1.0f, 1.0f, 1.0f);
     if (color_weight) {
       if (in2.GetTypeName() != pxr::SdfValueTypeNames->Color3f) {
         set_error(error_message, "ND_multiply_vdfC 'in2' must be a color3f");
         return false;
       }
-      pxr::GfVec3f value;
-      if (!in2.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
-          !std::isfinite(value[2]))
-      {
-        set_error(error_message, "ND_multiply_vdfC requires a finite literal 'in2'");
-        return false;
+      if (in2.HasConnectedSource()) {
+        /* ND_multiply_vector3 takes a vector3 'in2': route the color3 weight
+         * through the stdlib ND_convert_color3_vector3 (component-exact). */
+        Link color_link;
+        std::unordered_set<string> active_shaders;
+        if (!read_color_output(in2, graph, &color_link, &active_shaders, 0, error_message)) {
+          return false;
+        }
+        Node convert;
+        const string convert_path = vdf.GetPath().GetString() + ".in2";
+        convert.name = unique_node_name(*graph, convert_path, convert_path + "#");
+        convert.nodedef = convert_color3_vector3_id;
+        convert.links["in"] = color_link;
+        convert.outputs["out"] = Type::Vector3;
+        color_weight_input.link = Link{convert.name, "out", Type::Vector3};
+        color_weight_input.is_linked = true;
+        graph->nodes.push_back(std::move(convert));
       }
-      color_weight_value = make_float3(value[0], value[1], value[2]);
+      else {
+        pxr::GfVec3f value;
+        if (!in2.Get(&value) || !std::isfinite(value[0]) || !std::isfinite(value[1]) ||
+            !std::isfinite(value[2]))
+        {
+          set_error(error_message, "ND_multiply_vdfC requires a finite literal or connected 'in2'");
+          return false;
+        }
+        color_weight_input.value = make_float3(value[0], value[1], value[2]);
+      }
     }
     else {
       if (in2.GetTypeName() != pxr::SdfValueTypeNames->Float) {
         set_error(error_message, "ND_multiply_vdfF 'in2' must be a float");
         return false;
       }
-      if (!in2.Get(&scalar_weight) || !std::isfinite(scalar_weight)) {
-        set_error(error_message, "ND_multiply_vdfF requires a finite literal 'in2'");
+      if (!read_volume_float_input(vdf, "in2", 1.0f, graph, &scalar_weight, error_message)) {
+        return false;
+      }
+      if (!scalar_weight.is_linked && !std::isfinite(scalar_weight.value)) {
+        set_error(error_message, "ND_multiply_vdfF requires a finite literal or connected 'in2'");
         return false;
       }
     }
@@ -26923,12 +26963,16 @@ bool read_vdf_coefficients(const pxr::UsdShadeConnectableAPI &source,
     }
     const string synth_base = vdf.GetPath().GetString();
     if (color_weight) {
-      Color3Input weight_input;
-      weight_input.value = color_weight_value;
-      result->absorption.link = combine_vector3(
-          graph, "ND_multiply_vector3", sub.absorption, weight_input, synth_base + ".absorption");
-      result->scattering.link = combine_vector3(
-          graph, "ND_multiply_vector3", sub.scattering, weight_input, synth_base + ".scattering");
+      result->absorption.link = combine_vector3(graph,
+                                                "ND_multiply_vector3",
+                                                sub.absorption,
+                                                color_weight_input,
+                                                synth_base + ".absorption");
+      result->scattering.link = combine_vector3(graph,
+                                                "ND_multiply_vector3",
+                                                sub.scattering,
+                                                color_weight_input,
+                                                synth_base + ".scattering");
     }
     else {
       result->absorption.link = scale_vector3(
@@ -27169,10 +27213,9 @@ bool volume_closure_input_is_empty(const pxr::UsdShadeInput &input)
  * a bare VDF connected directly (via read_vdf_coefficients(), covering its
  * own ND_mix_vdf/ND_add_vdf/... combinators), the standard
  * ND_volume(vdf, edf) combinator, or ND_mix_volumeshader(fg, bg, mix)
- * lerping two such volumeshader terminals by a literal weight -- the
- * volumeshader-typed sibling of read_vdf_coefficients()'s mix_vdf_id branch,
- * hitting the exact same anisotropy-superposition ceiling and literal-weight
- * requirement. ND_volume's 'edf' (emission) input is an explicit, honest
+ * lerping two such volumeshader terminals by a literal or connected weight --
+ * the volumeshader-typed sibling of read_vdf_coefficients()'s mix_vdf_id
+ * branch, hitting the exact same anisotropy-superposition ceiling. ND_volume's 'edf' (emission) input is an explicit, honest
  * boundary: if authored and connected to anything but ND_uniform_edf, this
  * fails closed rather than silently dropping emission.
  */
@@ -27335,18 +27378,24 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
         return false;
       }
 
-      float mix_weight = 0.0f;
+      /* stdlib default mix = 0.0 when omitted. A literal or a connected float
+       * weight (batch 33, the ND_mix_vdf precedent): the coefficient and
+       * emission lerps are linear in the weight per shading point, so a
+       * graph-driven factor links the same ND_mix_vector3/ND_mix_color3
+       * 'mix' sockets. */
+      FloatInput mix_weight;
       const pxr::UsdShadeInput mix_input = mix.GetInput(pxr::TfToken("mix"));
       if (mix_input) {
         if (mix_input.GetTypeName() != pxr::SdfValueTypeNames->Float) {
           set_error(error_message, "ND_mix_volumeshader requires float input 'mix'");
           return false;
         }
-        if (mix_input.HasConnectedSource() || !mix_input.Get(&mix_weight)) {
+        if (!read_volume_float_input(mix, "mix", 0.0f, graph, &mix_weight, error_message)) {
+          return false;
+        }
+        if (!mix_weight.is_linked && !std::isfinite(mix_weight.value)) {
           set_error(error_message,
-                   "ND_mix_volumeshader requires a literal 'mix' weight: a dynamic/graph-driven "
-                   "mix factor is an explicit, unsupported boundary this pass (mirrors "
-                   "ND_mix_vdf's literal-weight requirement), not a silent narrowing");
+                   "ND_mix_volumeshader requires a finite literal or connected 'mix' weight");
           return false;
         }
       }
@@ -27377,13 +27426,11 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
       }
 
       const string synth_base = mix.GetPath().GetString();
-      FloatInput literal_weight;
-      literal_weight.value = mix_weight;
       result->coefficients.absorption.link = mix_vector3(
-          graph, ca.absorption, cb.absorption, literal_weight, synth_base + ".absorption");
+          graph, ca.absorption, cb.absorption, mix_weight, synth_base + ".absorption");
       result->coefficients.absorption.is_linked = true;
       result->coefficients.scattering.link = mix_vector3(
-          graph, ca.scattering, cb.scattering, literal_weight, synth_base + ".scattering");
+          graph, ca.scattering, cb.scattering, mix_weight, synth_base + ".scattering");
       result->coefficients.scattering.is_linked = true;
       result->coefficients.has_scattering = ca.has_scattering || cb.has_scattering;
 
