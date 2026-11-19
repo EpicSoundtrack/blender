@@ -49162,4 +49162,143 @@ TEST(materialx_usdshade_reader, dot_displacementshader_null_default_is_zero_vect
   }
 }
 
+/* Batch 36: ND_hextilednormalmap_vector3 beyond the batch-12 literal subset.
+ * Unauthored inputs take their stdlib_defs.mtlx defaults (texcoord UV0,
+ * Nworld/Tworld/Bworld), a texture file takes the hex-tiled sampling network,
+ * and OpenPBR geometry_normal / standard_surface normal accept it. */
+TEST(materialx_usdshade_reader, hextilednormalmap_textured_default_basis_feeds_normal_terminals)
+{
+  const TemporaryImage image_asset;
+  for (const int variant : {0, 1, 2}) {
+    /* 0: probe graph (nothing authored, empty file) into OpenPBR;
+     * 1: textured, flip_g, strength into OpenPBR;
+     * 2: textured into standard_surface normal. */
+    SCOPED_TRACE(variant);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/HexNormal"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage,
+                                         material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader hex = shader("Hex");
+    hex.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_hextilednormalmap_vector3")));
+    if (variant != 0) {
+      hex.CreateInput(pxr::TfToken("file"), pxr::SdfValueTypeNames->Asset)
+          .Set(pxr::SdfAssetPath(image_asset.path()));
+      hex.CreateInput(pxr::TfToken("tiling"), pxr::SdfValueTypeNames->Float2)
+          .Set(pxr::GfVec2f(2.0f, 3.0f));
+    }
+    if (variant == 1) {
+      hex.CreateInput(pxr::TfToken("flip_g"), pxr::SdfValueTypeNames->Bool).Set(true);
+      hex.CreateInput(pxr::TfToken("strength"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+    }
+    hex.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Vector3f);
+    const bool standard = variant == 2;
+    pxr::UsdShadeShader surface = shader("Surface");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken(
+        standard ? "ND_standard_surface_surfaceshader" : "ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    surface.CreateInput(pxr::TfToken(standard ? "base" : "base_weight"),
+                        pxr::SdfValueTypeNames->Float)
+        .Set(1.0f);
+    ASSERT_TRUE(surface
+                    .CreateInput(pxr::TfToken(standard ? "normal" : "geometry_normal"),
+                                 pxr::SdfValueTypeNames->Vector3f)
+                    .ConnectToSource(hex.ConnectableAPI(), pxr::TfToken("out")));
+    const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+    ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                      pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                    [](const materialx::Node &node) {
+                                      return node.nodedef == "ND_hextilednormalmap_vector3";
+                                    });
+    ASSERT_NE(found, graph.nodes.end());
+    ASSERT_TRUE(found->links.contains("texcoord"));
+    ASSERT_TRUE(found->links.contains("normal"));
+    ASSERT_TRUE(found->links.contains("tangent"));
+    ASSERT_TRUE(found->links.contains("bitangent"));
+    EXPECT_EQ(found->asset_inputs.at("file").empty(), variant == 0);
+    EXPECT_EQ(found->int_inputs.at("flip_g"), variant == 1 ? 1 : 0);
+    EXPECT_FLOAT_EQ(found->inputs.at("strength"), variant == 1 ? 0.5f : 1.0f);
+    EXPECT_FLOAT_EQ(found->inputs.at("rotation"), 1.0f);
+    EXPECT_FLOAT_EQ(found->vector2_inputs.at("rotationrange").y, 360.0f);
+    EXPECT_FLOAT_EQ(found->vector2_inputs.at("tiling").y, variant == 0 ? 1.0f : 3.0f);
+    EXPECT_EQ(found->vector3_inputs.at("default"), make_float3(0.5f, 0.5f, 1.0f));
+    const auto source_nodedef = [&](const char *name) {
+      const string source = found->links.at(name).source_node;
+      for (const materialx::Node &node : graph.nodes) {
+        if (node.name == source) {
+          return node.nodedef;
+        }
+      }
+      return string();
+    };
+    EXPECT_EQ(source_nodedef("normal"), "ND_normal_vector3");
+    EXPECT_EQ(source_nodedef("tangent"), "ND_tangent_vector3");
+    EXPECT_EQ(source_nodedef("bitangent"), "ND_multiply_vector3FA");
+    ASSERT_TRUE(materialx::validate(graph));
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    int images = 0;
+    bool normal_linked = false;
+    for (ShaderNode *node : lowered.nodes) {
+      images += dynamic_cast<ImageTextureNode *>(node) != nullptr;
+      if (ShaderInput *normal = node->input("Normal");
+          normal && normal->link)
+      {
+        normal_linked = true;
+      }
+    }
+    EXPECT_EQ(images, variant == 0 ? 0 : 3);
+    EXPECT_TRUE(normal_linked);
+  }
+}
+
+/* Batch 36: the batch-12 all-literal empty-file subset keeps its constant
+ * lowering; a connected 'default' or a time-sampled control still refuses. */
+TEST(materialx_usdshade_reader, hextilednormalmap_general_path_refusals)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/HexNormalRefuse"));
+  const auto shader = [&](const char *name) {
+    return pxr::UsdShadeShader::Define(stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+  };
+  pxr::UsdShadeShader value = shader("Value");
+  value.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector3")));
+  value.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(0.5f, 0.5f, 1.0f));
+  value.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Vector3f);
+  pxr::UsdShadeShader hex = shader("Hex");
+  hex.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_hextilednormalmap_vector3")));
+  ASSERT_TRUE(hex.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Vector3f)
+                  .ConnectToSource(value.ConnectableAPI(), pxr::TfToken("out")));
+  hex.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Vector3f);
+  pxr::UsdShadeShader surface = shader("OpenPBR");
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  ASSERT_TRUE(surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Vector3f)
+                  .ConnectToSource(hex.ConnectableAPI(), pxr::TfToken("out")));
+  const pxr::TfToken context("mtlx", pxr::TfToken::Immortal);
+  ASSERT_TRUE(material.CreateSurfaceOutput(context).ConnectToSource(surface.ConnectableAPI(),
+                                                                    pxr::TfToken("out")));
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+  EXPECT_NE(error.find("literal finite vector3 input 'default'"), string::npos) << error;
+
+  hex.GetInput(pxr::TfToken("default")).DisconnectSource();
+  hex.GetInput(pxr::TfToken("default")).GetAttr().ClearConnections();
+  hex.CreateInput(pxr::TfToken("strength"), pxr::SdfValueTypeNames->Float)
+      .Set(0.5f, pxr::UsdTimeCode(1.0));
+  materialx::Graph sampled;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &sampled, &error));
+  EXPECT_NE(error.find("'strength'"), string::npos) << error;
+}
+
 CCL_NAMESPACE_END

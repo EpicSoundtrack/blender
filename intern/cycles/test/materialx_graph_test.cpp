@@ -28676,4 +28676,391 @@ TEST(materialx_graph, hextiledimage_linked_controls_match_mx_hextile_coord)
   EXPECT_FALSE(materialx::validate(both));
 }
 
+/* Batch 36: ND_hextilednormalmap_vector3 over a linked texcoord. Evaluate the
+ * whole lowered network on the CPU (texcoord injected at ".hextile.texcoord",
+ * a synthetic texture f(uv) at every ImageTextureNode, or the 'default' for an
+ * empty file) and compare with an independent float transcription of
+ * MaterialX 1.39 genglsl mx_hextilednormalmap.glsl (mx_hextile_coord,
+ * mx_axis_rotation_matrix as a column-major mat3, mx_gradient_blend_3_normals). */
+namespace {
+
+float hexnm_fract(const float x)
+{
+  return x - floorf(x);
+}
+
+float3 hexnm_texture(const float u, const float v)
+{
+  /* A smooth, non-flat synthetic normal-map texel in [0, 1]. */
+  return make_float3(0.5f + 0.35f * sinf(3.0f * u + 1.0f),
+                     0.5f + 0.3f * cosf(2.0f * v - 0.5f),
+                     0.8f + 0.15f * sinf(u + v));
+}
+
+struct HexNormalParams {
+  float2 tiling = make_float2(2.0f, 3.0f);
+  float rotation = 0.75f;
+  float2 rotation_range = make_float2(10.0f, 300.0f);
+  float scale = 0.5f;
+  float2 scale_range = make_float2(0.5f, 2.0f);
+  float offset = 0.25f;
+  float2 offset_range = make_float2(0.0f, 1.0f);
+  float falloff = 0.5f;
+  float strength = 0.8f;
+  bool flip_g = false;
+  bool textured = true;
+  float3 default_value = make_float3(0.7f, 0.35f, 0.9f);
+  float3 N = make_float3(0.1f, -0.2f, 0.97f);
+  float3 T = make_float3(0.95f, 0.1f, -0.05f);
+  float3 B = make_float3(-0.08f, 0.96f, 0.2f);
+};
+
+float3 hexnm_reference(const float u, const float v, const HexNormalParams &p)
+{
+  const float2 coord = make_float2(u * p.tiling.x, v * p.tiling.y);
+  const float sqrt3_2 = sqrtf(3.0f) * 2.0f;
+  const float2 st = make_float2(coord.x * sqrt3_2, coord.y * sqrt3_2);
+  const float2 skewed = make_float2(st.x + -0.57735027f * st.y, 1.15470054f * st.y);
+  const float fx = hexnm_fract(skewed.x), fy = hexnm_fract(skewed.y);
+  const float z = 1.0f - fx - fy;
+  const float s = (-z < 0.0f) ? 0.0f : 1.0f;
+  const float s2 = 2.0f * s - 1.0f;
+  float w[3] = {-z * s2, s - fy * s2, s - fx * s2};
+  const float bx = floorf(skewed.x), by = floorf(skewed.y);
+  const float2 ids[3] = {make_float2(bx + s, by + s),
+                         make_float2(bx + s, by + 1.0f - s),
+                         make_float2(bx + 1.0f - s, by + s)};
+  float3 normals[3];
+  for (int k = 0; k < 3; k++) {
+    const float2 id = ids[k];
+    const float2 ctr = make_float2((id.x + 0.5f * id.y) / sqrt3_2,
+                                   ((1.0f / 1.15470054f) * id.y) / sqrt3_2);
+    const float px = id.x + 0.12345f, py = id.y + 0.12345f;
+    float3 p3 = make_float3(
+        hexnm_fract(px * 0.1031f), hexnm_fract(py * 0.1030f), hexnm_fract(px * 0.0973f));
+    const float d = p3.x * (p3.y + 33.33f) + p3.y * (p3.z + 33.33f) + p3.z * (p3.x + 33.33f);
+    p3 = make_float3(p3.x + d, p3.y + d, p3.z + d);
+    const float rx = hexnm_fract((p3.x + p3.y) * p3.z);
+    const float ry = hexnm_fract((p3.x + p3.z) * p3.y);
+    const float rr_x = p.rotation_range.x * (float(M_PI) / 180.0f);
+    const float rr_y = p.rotation_range.y * (float(M_PI) / 180.0f);
+    const float rv = rr_x * (1.0f - rx * p.rotation) + rr_y * (rx * p.rotation);
+    const float inner = p.scale_range.x * (1.0f - ry) + p.scale_range.y * ry;
+    const float tile_scale = 1.0f * (1.0f - p.scale) + inner * p.scale;
+    const float ox = p.offset_range.x * (1.0f - rx * p.offset) +
+                     p.offset_range.y * (rx * p.offset);
+    const float oy = p.offset_range.x * (1.0f - ry * p.offset) +
+                     p.offset_range.y * (ry * p.offset);
+    const float dx = coord.x - ctr.x, dy = coord.y - ctr.y;
+    const float r_x = dx * cosf(rv) + dy * -sinf(rv);
+    const float r_y = dx * sinf(rv) + dy * cosf(rv);
+    float3 nm = p.textured ?
+                    hexnm_texture(r_x / tile_scale + ctr.x + ox, r_y / tile_scale + ctr.y + oy) :
+                    p.default_value;
+    if (p.flip_g) {
+      nm.y = 1.0f - nm.y;
+    }
+    nm = 2.0f * nm - make_float3(1.0f, 1.0f, 1.0f);
+    /* mat3 m = mx_axis_rotation_matrix(N, -rv); GLSL mat3(m0..m8) is
+     * column-major: column j = (m[3j], m[3j+1], m[3j+2]). */
+    const float3 a = p.N;
+    const float r = -rv;
+    const float sn = sinf(r), c = cosf(r), omc = 1.0f - c;
+    const float m[9] = {a.x * a.x * omc + c,
+                        a.x * a.y * omc - a.z * sn,
+                        a.x * a.z * omc + a.y * sn,
+                        a.y * a.x * omc + a.z * sn,
+                        a.y * a.y * omc + c,
+                        a.y * a.z * omc - a.x * sn,
+                        a.z * a.x * omc - a.y * sn,
+                        a.z * a.y * omc + a.x * sn,
+                        a.z * a.z * omc + c};
+    const auto mat_vec = [&](const float3 x) {
+      return make_float3(m[0] * x.x + m[3] * x.y + m[6] * x.z,
+                         m[1] * x.x + m[4] * x.y + m[7] * x.z,
+                         m[2] * x.x + m[5] * x.y + m[8] * x.z);
+    };
+    const float3 Tk = mat_vec(p.T) * p.strength;
+    const float3 Bk = mat_vec(p.B) * p.strength;
+    normals[k] = normalize(Tk * nm.x + Bk * nm.y + p.N * nm.z);
+    w[k] = powf(w[k], 7.0f);
+  }
+  const float sum = w[0] + w[1] + w[2];
+  for (int k = 0; k < 3; k++) {
+    w[k] /= sum;
+  }
+  if (p.falloff != 0.5f) {
+    const float rr = clamp(p.falloff, 0.001f, 0.999f);
+    for (int k = 0; k < 3; k++) {
+      const float ga = (1.0f / rr - 2.0f) * (1.0f - 2.0f * w[k]);
+      w[k] = (w[k] < 0.5f) ? w[k] / (ga + 1.0f) : (ga - w[k]) / (ga - 1.0f);
+    }
+    const float sum2 = w[0] + w[1] + w[2];
+    for (int k = 0; k < 3; k++) {
+      w[k] /= sum2;
+    }
+  }
+  float3 gg = zero_float3();
+  for (int k = 0; k < 3; k++) {
+    const float d = dot(p.N, normals[k]);
+    const float3 g = (d * p.N - normals[k]) / max(1e-8f, fabsf(d));
+    gg += clamp(w[k], 0.0f, 1.0f) * g;
+  }
+  return normalize(p.N - gg);
+}
+
+/* Scalars are carried broadcast in all three lanes. */
+float3 hexnm_evaluate(ShaderOutput *output, float u, float v);
+
+float3 hexnm_input(ShaderNode *node, const char *name, const float u, const float v)
+{
+  ShaderInput *input = node->input(name);
+  if (input == nullptr) {
+    ADD_FAILURE() << "missing input " << name << " on " << node->type->name.string();
+    return zero_float3();
+  }
+  if (input->link) {
+    return hexnm_evaluate(input->link, u, v);
+  }
+  if (input->type() == SocketType::FLOAT) {
+    const float value = node->get_float(input->socket_type);
+    return make_float3(value, value, value);
+  }
+  return node->get_float3(input->socket_type);
+}
+
+float3 hexnm_evaluate(ShaderOutput *output, const float u, const float v)
+{
+  ShaderNode *node = output->parent;
+  const string name = node->name.string();
+  const string texcoord_suffix = ".hextile.texcoord";
+  if (name.size() > texcoord_suffix.size() &&
+      name.compare(name.size() - texcoord_suffix.size(), texcoord_suffix.size(), texcoord_suffix) == 0)
+  {
+    const float value = output->name() == "X" ? u : (output->name() == "Y" ? v : 0.0f);
+    return make_float3(value, value, value);
+  }
+  if (dynamic_cast<ConvertNode *>(node) != nullptr) {
+    return hexnm_evaluate(node->inputs[0]->link, u, v);
+  }
+  if (dynamic_cast<ImageTextureNode *>(node) != nullptr) {
+    const float3 uv = hexnm_input(node, "Vector", u, v);
+    return hexnm_texture(uv.x, uv.y);
+  }
+  if (dynamic_cast<SeparateXYZNode *>(node) != nullptr) {
+    const float3 in = hexnm_input(node, "Vector", u, v);
+    const float value = output->name() == "X" ? in.x : (output->name() == "Y" ? in.y : in.z);
+    return make_float3(value, value, value);
+  }
+  if (dynamic_cast<CombineXYZNode *>(node) != nullptr) {
+    return make_float3(hexnm_input(node, "X", u, v).x,
+                       hexnm_input(node, "Y", u, v).x,
+                       hexnm_input(node, "Z", u, v).x);
+  }
+  if (auto *math = dynamic_cast<MathNode *>(node)) {
+    const float a = hexnm_input(node, "Value1", u, v).x;
+    const float b = hexnm_input(node, "Value2", u, v).x;
+    const float c = hexnm_input(node, "Value3", u, v).x;
+    float r = 0.0f;
+    switch (math->get_math_type()) {
+      case NODE_MATH_ADD:
+        r = a + b;
+        break;
+      case NODE_MATH_SUBTRACT:
+        r = a - b;
+        break;
+      case NODE_MATH_MULTIPLY:
+        r = a * b;
+        break;
+      case NODE_MATH_MATERIALX_DIVIDE:
+        r = a / b;
+        break;
+      case NODE_MATH_FRACTION:
+        r = a - floorf(a);
+        break;
+      case NODE_MATH_FLOOR:
+        r = floorf(a);
+        break;
+      case NODE_MATH_GREATER_THAN:
+        r = a > b ? 1.0f : 0.0f;
+        break;
+      case NODE_MATH_LESS_THAN:
+        r = a < b ? 1.0f : 0.0f;
+        break;
+      case NODE_MATH_MATERIALX_SINE:
+        r = sinf(a);
+        break;
+      case NODE_MATH_MATERIALX_COSINE:
+        r = cosf(a);
+        break;
+      case NODE_MATH_POWER:
+        r = powf(a, b);
+        break;
+      case NODE_MATH_MINIMUM:
+        r = fminf(a, b);
+        break;
+      case NODE_MATH_MAXIMUM:
+        r = fmaxf(a, b);
+        break;
+      case NODE_MATH_ABSOLUTE:
+        r = fabsf(a);
+        break;
+      case NODE_MATH_MULTIPLY_ADD:
+        r = a * b + c;
+        break;
+      default:
+        ADD_FAILURE() << "unexpected math type " << int(math->get_math_type());
+    }
+    return make_float3(r, r, r);
+  }
+  if (auto *vmath = dynamic_cast<VectorMathNode *>(node)) {
+    const float3 a = hexnm_input(node, "Vector1", u, v);
+    const float3 b = hexnm_input(node, "Vector2", u, v);
+    switch (vmath->get_math_type()) {
+      case NODE_VECTOR_MATH_ADD:
+        return a + b;
+      case NODE_VECTOR_MATH_SUBTRACT:
+        return a - b;
+      case NODE_VECTOR_MATH_DIVIDE:
+        return a / b;
+      case NODE_VECTOR_MATH_SCALE:
+        return a * hexnm_input(node, "Scale", u, v).x;
+      case NODE_VECTOR_MATH_MULTIPLY_ADD:
+        return a * b + hexnm_input(node, "Vector3", u, v);
+      case NODE_VECTOR_MATH_CROSS_PRODUCT:
+        return cross(a, b);
+      case NODE_VECTOR_MATH_NORMALIZE:
+        return normalize(a);
+      case NODE_VECTOR_MATH_DOT_PRODUCT: {
+        const float d = dot(a, b);
+        return make_float3(d, d, d);
+      }
+      default:
+        ADD_FAILURE() << "unexpected vector math type " << int(vmath->get_math_type());
+    }
+    return zero_float3();
+  }
+  ADD_FAILURE() << "unexpected node in hex normal network: " << node->type->name.string();
+  return zero_float3();
+}
+
+materialx::Node hexnm_node(const HexNormalParams &p)
+{
+  materialx::Node hex{"Hex", "ND_hextilednormalmap_vector3"};
+  hex.asset_inputs["file"] = p.textured ? "/nonexistent/hextile_normal.png" : "";
+  hex.string_inputs["colorspace"] = "";
+  hex.links["texcoord"] = {"UV", "out", materialx::Type::Vector2};
+  hex.vector2_inputs = {{"tiling", p.tiling},
+                        {"rotationrange", p.rotation_range},
+                        {"scalerange", p.scale_range},
+                        {"offsetrange", p.offset_range}};
+  hex.inputs = {{"rotation", p.rotation},
+                {"scale", p.scale},
+                {"offset", p.offset},
+                {"falloff", p.falloff},
+                {"strength", p.strength}};
+  hex.int_inputs["flip_g"] = p.flip_g ? 1 : 0;
+  hex.vector3_inputs = {
+      {"default", p.default_value}, {"normal", p.N}, {"tangent", p.T}, {"bitangent", p.B}};
+  hex.outputs["out"] = materialx::Type::Vector3;
+  return hex;
+}
+
+materialx::Node hexnm_uv()
+{
+  materialx::Node uv{"UV", "ND_geompropvalue_vector2"};
+  uv.string_inputs["geomprop"] = "st";
+  uv.outputs["out"] = materialx::Type::Vector2;
+  return uv;
+}
+
+}  // namespace
+
+TEST(materialx_graph, hextilednormalmap_network_matches_mx_hextilednormalmap)
+{
+  for (const int variant : {0, 1, 2, 3}) {
+    SCOPED_TRACE(variant);
+    HexNormalParams p;
+    p.textured = variant != 2;
+    p.flip_g = variant == 1;
+    p.falloff = variant == 3 ? 0.25f : 0.5f;
+    p.strength = variant == 3 ? 1.0f : 0.8f;
+    const materialx::Node uv = hexnm_uv();
+    const materialx::Node hex = hexnm_node(p);
+    ASSERT_TRUE(materialx::validate({{uv, hex}}));
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{uv, hex}}, &graph, &error)) << error;
+    ShaderNode *texcoord = nullptr;
+    ShaderNode *result = nullptr;
+    int images = 0;
+    for (ShaderNode *node : graph.nodes) {
+      texcoord = node->name == "Hex.hextile.texcoord" ? node : texcoord;
+      result = node->name == "Hex" ? node : result;
+      images += dynamic_cast<ImageTextureNode *>(node) != nullptr;
+    }
+    ASSERT_NE(texcoord, nullptr);
+    ASSERT_NE(texcoord->input("Vector")->link, nullptr);
+    ASSERT_NE(result, nullptr);
+    ASSERT_NE(dynamic_cast<VectorMathNode *>(result), nullptr);
+    EXPECT_EQ(images, p.textured ? 3 : 0);
+    for (const float2 sample : {make_float2(0.1f, 0.2f),
+                                make_float2(0.73f, 0.41f),
+                                make_float2(-1.3f, 2.6f),
+                                make_float2(0.5f, 0.5f),
+                                make_float2(0.37f, 0.91f)})
+    {
+      SCOPED_TRACE(sample.x);
+      const float3 expected = hexnm_reference(sample.x, sample.y, p);
+      const float3 actual = hexnm_evaluate(result->output("Vector"), sample.x, sample.y);
+      /* The shadertoy hash fracts products near 1e4 (see the hextiledimage
+       * coordinate test): float re-association moves tile rotations and
+       * offsets by ~1e-3; a wiring or sign error is O(0.1). */
+      EXPECT_NEAR(actual.x, expected.x, 1e-2f);
+      EXPECT_NEAR(actual.y, expected.y, 1e-2f);
+      EXPECT_NEAR(actual.z, expected.z, 1e-2f);
+      /* Guard against a degenerate fixture: the result is not just N. */
+      EXPECT_GT(len(expected - normalize(p.N)), 2e-2f);
+    }
+  }
+}
+
+/* Batch 36: the textured form keeps every control a literal XOR a typed link;
+ * a doubled or missing basis vector, a bad flip_g, a wrong-typed link or a
+ * non-finite literal refuse. */
+TEST(materialx_graph, hextilednormalmap_textured_validate_is_strict)
+{
+  materialx::Node n{"N", "ND_normal_vector3"};
+  n.string_inputs["space"] = "world";
+  n.outputs["out"] = materialx::Type::Vector3;
+  const materialx::Node uv = hexnm_uv();
+  materialx::Node hex = hexnm_node(HexNormalParams());
+  hex.vector3_inputs.erase("normal");
+  hex.links["normal"] = {"N", "out", materialx::Type::Vector3};
+  EXPECT_TRUE(materialx::validate({{uv, n, hex}}));
+  ShaderGraph graph;
+  string error;
+  EXPECT_TRUE(materialx::lower({{uv, n, hex}}, &graph, &error)) << error;
+
+  materialx::Node both = hex;
+  both.vector3_inputs["normal"] = make_float3(0.0f, 0.0f, 1.0f);
+  EXPECT_FALSE(materialx::validate({{uv, n, both}}));
+  materialx::Node missing = hex;
+  missing.vector3_inputs.erase("tangent");
+  EXPECT_FALSE(materialx::validate({{uv, n, missing}}));
+  materialx::Node no_default = hex;
+  no_default.vector3_inputs.erase("default");
+  EXPECT_FALSE(materialx::validate({{uv, n, no_default}}));
+  materialx::Node flip = hex;
+  flip.int_inputs["flip_g"] = 2;
+  EXPECT_FALSE(materialx::validate({{uv, n, flip}}));
+  materialx::Node wrong_type = hex;
+  wrong_type.inputs.erase("strength");
+  wrong_type.links["strength"] = {"N", "out", materialx::Type::Vector3};
+  EXPECT_FALSE(materialx::validate({{uv, n, wrong_type}}));
+  materialx::Node nonfinite = hex;
+  nonfinite.inputs["strength"] = std::numeric_limits<float>::infinity();
+  EXPECT_FALSE(materialx::validate({{uv, n, nonfinite}}));
+}
+
 CCL_NAMESPACE_END

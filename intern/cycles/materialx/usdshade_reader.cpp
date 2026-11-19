@@ -6416,6 +6416,297 @@ bool read_hextiledimage_shader(const pxr::UsdShadeShader &source,
   return true;
 }
 
+/* Batch 36: ND_hextilednormalmap_vector3 (stdlib_defs.mtlx nodedef; MaterialX
+ * 1.39 genglsl mx_hextilednormalmap.glsl + lib/mx_hextile.glsl +
+ * lib/mx_geometry.glsl). The hex-cell coordinates, hash, per-tile UV
+ * transforms and pow(w, 7)/Schlick-gain weights are the ones
+ * ND_hextiledimage uses (no luminance weighting); each tile's sample is
+ * decoded (flip_g, 2 nm - 1) into its own tangent frame, which is T/B rotated
+ * about N by the tile rotation and scaled by strength, and the three normals
+ * are combined with mx_gradient_blend_3_normals. graph.cpp lowers it in
+ * add_hextiledimage_lowering_nodes. Controls are literal (NodeDef default
+ * when unauthored) or one connected source; an empty file samples 'default'.
+ * Unauthored normal/tangent/bitangent are the NodeDef's Nworld/Tworld/Bworld:
+ * the world shading normal and Cycles' UV-map normal basis (TangentNode and
+ * B = sign * normalize(cross(N, T)), the ND_bitangent_vector3 expansion), the
+ * same frame the stock normal-map lowering of ND_normalmap_float uses. */
+bool read_hextilednormalmap_shader(const pxr::UsdShadeShader &source,
+                                   const string &nodedef,
+                                   const string &shader_path,
+                                   Graph *graph,
+                                   Link *result,
+                                   const int depth,
+                                   string *error_message)
+{
+  const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
+  if (!output || !is_usd_vector3_type(output.GetTypeName()) || source.GetOutputs().size() != 1) {
+    set_error(error_message, nodedef + " requires exactly one vector3 output 'out'");
+    return false;
+  }
+  if (!output.GetAttr().GetColorSpace().IsEmpty()) {
+    set_error(error_message, nodedef + " output colorspace transforms are unsupported");
+    return false;
+  }
+  for (const pxr::UsdShadeInput &input : source.GetInputs()) {
+    const string name = input.GetBaseName().GetString();
+    if (name != "file" && name != "default" && name != "texcoord" && name != "tiling" &&
+        name != "rotation" && name != "rotationrange" && name != "scale" &&
+        name != "scalerange" && name != "offset" && name != "offsetrange" &&
+        name != "falloff" && name != "strength" && name != "flip_g" && name != "normal" &&
+        name != "tangent" && name != "bitangent")
+    {
+      set_error(error_message, nodedef + " has unsupported input '" + name + "'");
+      return false;
+    }
+  }
+  const auto authored = [&](const char *name, pxr::UsdShadeInput *input) {
+    *input = source.GetInput(pxr::TfToken(name));
+    return *input && (input->GetAttr().HasAuthoredValueOpinion() ||
+                      composed_connection_count(input->GetAttr()) != 0);
+  };
+  const auto refuse = [&](const char *name, const char *what) {
+    set_error(error_message,
+              nodedef + " requires literal finite " + what + " input '" + name +
+                  "' or a single connected source (time samples are not lowered)");
+    return false;
+  };
+  const auto connected = [&](const char *name, pxr::UsdShadeInput *input,
+                             const bool vector3) {
+    *input = source.GetInput(pxr::TfToken(name));
+    return *input && input->HasConnectedSource() &&
+           input->GetAttr().GetNumTimeSamples() == 0 &&
+           composed_connection_count(input->GetAttr()) == 1 &&
+           (vector3 ? is_usd_vector3_type(input->GetTypeName()) : true);
+  };
+
+  Node tile;
+  tile.nodedef = nodedef;
+  string file_path;
+  string colorspace;
+  pxr::UsdShadeInput file_input;
+  if (authored("file", &file_input)) {
+    if (!read_filename_value_input(file_input, nodedef, "file", &file_path, error_message)) {
+      if (error_message && error_message->empty()) {
+        set_error(error_message, nodedef + " requires a uniform filename 'file'");
+      }
+      return false;
+    }
+    if (!file_path.empty() &&
+        (path_is_relative(file_path) || !path_is_file(file_path) || path_file_size(file_path) == 0))
+    {
+      set_error(error_message, nodedef + " file asset is unavailable or invalid");
+      return false;
+    }
+    const pxr::TfToken authored_colorspace = file_input.GetAttr().GetColorSpace();
+    if (!authored_colorspace.IsEmpty()) {
+      colorspace = authored_colorspace.GetString();
+      if (colorspace != "raw" && colorspace != "srgb_texture" && colorspace != "lin_rec709") {
+        set_error(error_message,
+                  nodedef + " has unsupported authored colorspace '" + colorspace + "'");
+        return false;
+      }
+    }
+  }
+  tile.asset_inputs["file"] = file_path;
+  tile.string_inputs["colorspace"] = colorspace;
+
+  const std::pair<const char *, float> float_controls[] = {{"rotation", 1.0f},
+                                                           {"scale", 1.0f},
+                                                           {"offset", 1.0f},
+                                                           {"falloff", 0.5f},
+                                                           {"strength", 1.0f}};
+  for (const auto &[name, fallback] : float_controls) {
+    pxr::UsdShadeInput input;
+    float value = fallback;
+    if (connected(name, &input, false) && input.GetTypeName() == pxr::SdfValueTypeNames->Float) {
+      std::unordered_set<string> active;
+      std::unordered_map<string, string> emitted;
+      Link link;
+      if (!read_float_output(input, graph, &link, &active, &emitted, depth + 1, error_message)) {
+        return false;
+      }
+      tile.links[name] = link;
+      continue;
+    }
+    if (authored(name, &input) &&
+        (input.GetTypeName() != pxr::SdfValueTypeNames->Float || input.HasConnectedSource() ||
+         input.GetAttr().GetNumTimeSamples() != 0 || !input.Get(&value) || !std::isfinite(value)))
+    {
+      return refuse(name, "float");
+    }
+    tile.inputs[name] = value;
+  }
+  const std::pair<const char *, float2> vector2_controls[] = {
+      {"tiling", make_float2(1.0f, 1.0f)},
+      {"rotationrange", make_float2(0.0f, 360.0f)},
+      {"scalerange", make_float2(0.5f, 2.0f)},
+      {"offsetrange", make_float2(0.0f, 1.0f)}};
+  for (const auto &[name, fallback] : vector2_controls) {
+    pxr::UsdShadeInput input;
+    float2 value = fallback;
+    pxr::GfVec2f usd_value;
+    if (connected(name, &input, false) && input.GetTypeName() == pxr::SdfValueTypeNames->Float2) {
+      std::unordered_set<string> active;
+      Link link;
+      if (!read_vector2_output(input, graph, &link, &active, depth + 1, error_message)) {
+        return false;
+      }
+      tile.links[name] = link;
+      continue;
+    }
+    if (authored(name, &input)) {
+      if (input.GetTypeName() != pxr::SdfValueTypeNames->Float2 || input.HasConnectedSource() ||
+          input.GetAttr().GetNumTimeSamples() != 0 || !input.Get(&usd_value) ||
+          !std::isfinite(usd_value[0]) || !std::isfinite(usd_value[1]))
+      {
+        return refuse(name, "vector2");
+      }
+      value = make_float2(usd_value[0], usd_value[1]);
+    }
+    tile.vector2_inputs[name] = value;
+  }
+  {
+    /* 'default' is only sampled when the file is empty; it stays literal. */
+    pxr::UsdShadeInput input;
+    pxr::GfVec3f usd_value(0.5f, 0.5f, 1.0f);
+    if (authored("default", &input) &&
+        (!is_usd_vector3_type(input.GetTypeName()) || input.HasConnectedSource() ||
+         composed_connection_count(input.GetAttr()) != 0 ||
+         input.GetAttr().GetNumTimeSamples() != 0 || !input.Get(&usd_value) ||
+         !std::isfinite(usd_value[0]) || !std::isfinite(usd_value[1]) ||
+         !std::isfinite(usd_value[2])))
+    {
+      set_error(error_message, nodedef + " requires literal finite vector3 input 'default'");
+      return false;
+    }
+    tile.vector3_inputs["default"] = make_float3(usd_value[0], usd_value[1], usd_value[2]);
+  }
+  {
+    pxr::UsdShadeInput input;
+    bool flip_g = false;
+    if (authored("flip_g", &input) &&
+        (input.GetTypeName() != pxr::SdfValueTypeNames->Bool || input.HasConnectedSource() ||
+         composed_connection_count(input.GetAttr()) != 0 ||
+         input.GetAttr().GetNumTimeSamples() != 0 || !input.Get(&flip_g)))
+    {
+      set_error(error_message, nodedef + " requires literal boolean input 'flip_g'");
+      return false;
+    }
+    tile.int_inputs["flip_g"] = flip_g ? 1 : 0;
+  }
+
+  const string base_name = source.GetPrim().GetName().GetString();
+  /* Default Nworld/Tworld/Bworld helpers, created on first use. */
+  string world_normal, world_tangent;
+  std::vector<Node> basis_nodes;
+  const auto helper = [&](const char *suffix, const char *helper_nodedef, const Type type) {
+    Node helper_node;
+    helper_node.name = unique_node_name(*graph, base_name + suffix, shader_path + suffix);
+    for (const Node &pending : basis_nodes) {
+      if (pending.name == helper_node.name) {
+        helper_node.name += "_";
+      }
+    }
+    helper_node.nodedef = helper_nodedef;
+    helper_node.outputs["out"] = type;
+    return helper_node;
+  };
+  const auto ensure_normal = [&]() {
+    if (world_normal.empty()) {
+      Node normal = helper(".Nworld", normal_vector3_id, Type::Vector3);
+      normal.string_inputs["space"] = "world";
+      world_normal = normal.name;
+      basis_nodes.push_back(std::move(normal));
+    }
+    return world_normal;
+  };
+  const auto ensure_tangent = [&]() {
+    if (world_tangent.empty()) {
+      Node tangent = helper(".Tworld", tangent_vector3_id, Type::Vector3);
+      tangent.string_inputs["space"] = "__cycles_normal_basis";
+      tangent.int_inputs["index"] = 0;
+      world_tangent = tangent.name;
+      basis_nodes.push_back(std::move(tangent));
+    }
+    return world_tangent;
+  };
+  for (const char *name : {"normal", "tangent", "bitangent"}) {
+    pxr::UsdShadeInput input;
+    if (connected(name, &input, true)) {
+      std::unordered_set<string> active;
+      Link link;
+      if (!read_vector3_output(input, graph, &link, &active, depth + 1, error_message)) {
+        return false;
+      }
+      tile.links[name] = link;
+      continue;
+    }
+    if (authored(name, &input)) {
+      pxr::GfVec3f usd_value;
+      if (!is_usd_vector3_type(input.GetTypeName()) || input.HasConnectedSource() ||
+          composed_connection_count(input.GetAttr()) != 0 ||
+          input.GetAttr().GetNumTimeSamples() != 0 || !input.Get(&usd_value) ||
+          !std::isfinite(usd_value[0]) || !std::isfinite(usd_value[1]) ||
+          !std::isfinite(usd_value[2]))
+      {
+        return refuse(name, "vector3");
+      }
+      tile.vector3_inputs[name] = make_float3(usd_value[0], usd_value[1], usd_value[2]);
+      continue;
+    }
+    if (string(name) == "normal") {
+      tile.links[name] = {ensure_normal(), "out", Type::Vector3};
+    }
+    else if (string(name) == "tangent") {
+      tile.links[name] = {ensure_tangent(), "out", Type::Vector3};
+    }
+    else {
+      /* Bworld = sign * normalize(cross(N, T)) (ND_bitangent_vector3 world). */
+      const string n = ensure_normal();
+      const string t = ensure_tangent();
+      Node cross = helper(".Bworld.cross", crossproduct_vector3_id, Type::Vector3);
+      cross.links["in1"] = {n, "out", Type::Vector3};
+      cross.links["in2"] = {t, "out", Type::Vector3};
+      Node unit = helper(".Bworld.unit", normalize_vector3_id, Type::Vector3);
+      unit.links["in"] = {cross.name, "out", Type::Vector3};
+      Node sign = helper(".Bworld.sign", geompropvalue_float_id, Type::Float);
+      sign.string_inputs["geomprop"] = "tangent_sign";
+      Node bitangent = helper(".Bworld", "ND_multiply_vector3FA", Type::Vector3);
+      bitangent.links["in1"] = {unit.name, "out", Type::Vector3};
+      bitangent.links["in2"] = {sign.name, "out", Type::Float};
+      tile.links[name] = {bitangent.name, "out", Type::Vector3};
+      for (Node *created : {&cross, &unit, &sign, &bitangent}) {
+        basis_nodes.push_back(std::move(*created));
+      }
+    }
+  }
+
+  Link texcoord;
+  pxr::UsdShadeInput texcoord_input;
+  if (!authored("texcoord", &texcoord_input)) {
+    Node coordinate;
+    coordinate.name = unique_node_name(*graph, base_name + ".texcoord", shader_path + ".texcoord");
+    coordinate.nodedef = "ND_geompropvalue_vector2";
+    coordinate.string_inputs["geomprop"] = texcoord_attribute_name(0);
+    coordinate.outputs["out"] = Type::Vector2;
+    texcoord = {coordinate.name, "out", Type::Vector2};
+    graph->nodes.push_back(std::move(coordinate));
+  }
+  else if (!read_image_vector_texcoord(source, nodedef, graph, &texcoord, depth + 1, error_message))
+  {
+    return false;
+  }
+  for (Node &created : basis_nodes) {
+    graph->nodes.push_back(std::move(created));
+  }
+  tile.links["texcoord"] = texcoord;
+  tile.name = unique_node_name(*graph, base_name, shader_path);
+  tile.outputs["out"] = Type::Vector3;
+  *result = {tile.name, "out", Type::Vector3};
+  graph->nodes.push_back(std::move(tile));
+  return true;
+}
+
 bool compose_gltf_colorimage_color4(const pxr::UsdShadeShader &source,
                                     const string &shader_path,
                                     Graph *graph,
@@ -25542,6 +25833,31 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     }
   }
   else if (nodedef == hextilednormalmap_vector3_id) {
+    /* Batch 12 kept: an empty file with all 16 inputs authored as unconnected
+     * literals folds to a constant (graph.cpp hextilednormalmap_constant_value).
+     * Batch 36: everything else (a texture file, unauthored NodeDef defaults,
+     * the default Nworld/Tworld/Bworld basis, linked controls) takes the
+     * hex-tiled sampling network (read_hextilednormalmap_shader). */
+    bool literal_subset = source.GetInputs().size() == 16;
+    for (const char *name : {"file", "default", "texcoord", "tiling", "rotation",
+                             "rotationrange", "scale", "scalerange", "offset", "offsetrange",
+                             "falloff", "strength", "flip_g", "normal", "tangent", "bitangent"})
+    {
+      const pxr::UsdShadeInput literal = source.GetInput(pxr::TfToken(name));
+      literal_subset = literal_subset && literal &&
+                       literal.GetAttr().HasAuthoredValueOpinion() &&
+                       composed_connection_count(literal.GetAttr()) == 0;
+    }
+    if (literal_subset) {
+      string literal_file;
+      literal_subset = read_filename_value_input(source.GetInput(pxr::TfToken("file")),
+                                                 nodedef, "file", &literal_file, nullptr) &&
+                       literal_file.empty();
+    }
+    if (!literal_subset) {
+      return finish(read_hextilednormalmap_shader(
+          source, nodedef, path, graph, result, depth, error_message));
+    }
     if (!shader_has_exact_signature(source,
                                     {"file",
                                      "default",
@@ -26026,9 +26342,16 @@ bool read_normal_terminal_input(const pxr::UsdShadeShader &surface,
   /* NG_bump_vector3 is a world-space normal (normalmap of heighttonormal),
    * exactly like the normalmap sources admitted here; standard_surface's
    * normal terminals already take it through the same expansion. */
-  if (!(is_bump ? read_default_basis_bump_output(
-                      input, graph, &source, emitted_shaders, error_message) :
-                  read_normalmap_output(input, graph, &source, emitted_shaders, error_message)))
+  /* Batch 36: mx_hextilednormalmap_vector3 also returns a world-space
+   * shading normal (mx_gradient_blend_3_normals), so it is admitted here
+   * through the general vector3 reader. */
+  const bool is_hextiled = !is_bump && connected_id == pxr::TfToken(hextilednormalmap_vector3_id);
+  std::unordered_set<string> active_vector_shaders;
+  if (!(is_bump     ? read_default_basis_bump_output(
+                          input, graph, &source, emitted_shaders, error_message) :
+        is_hextiled ? read_vector3_output(
+                          input, graph, &source, &active_vector_shaders, 0, error_message) :
+                      read_normalmap_output(input, graph, &source, emitted_shaders, error_message)))
   {
     return false;
   }
@@ -28236,11 +28559,17 @@ bool read_vector3_terminal_input(const pxr::UsdShadeShader &surface,
       set_error(error_message, "standard_surface normal source has no MaterialX node ID");
       return false;
     }
-    const bool ok = connected_id == pxr::TfToken(bump_vector3_id) ?
-                        read_default_basis_bump_output(
-                            input, graph, &source, emitted_normalmap_shaders, error_message) :
-                        read_normalmap_output(
-                            input, graph, &source, emitted_normalmap_shaders, error_message);
+    /* Batch 36: ND_hextilednormalmap_vector3 (world shading normal) through
+     * the general vector3 reader, as for OpenPBR geometry_normal. */
+    std::unordered_set<string> active_vector_shaders;
+    const bool ok =
+        connected_id == pxr::TfToken(bump_vector3_id) ?
+            read_default_basis_bump_output(
+                input, graph, &source, emitted_normalmap_shaders, error_message) :
+        connected_id == pxr::TfToken(hextilednormalmap_vector3_id) ?
+            read_vector3_output(input, graph, &source, &active_vector_shaders, 0, error_message) :
+            read_normalmap_output(
+                input, graph, &source, emitted_normalmap_shaders, error_message);
     if (!ok) {
       return false;
     }

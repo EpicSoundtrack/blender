@@ -4763,7 +4763,11 @@ ShaderNode *add_hextiledimage_lowering_nodes(const Node &node,
   const Operand scale = scalar_control("scale");
   const Operand offset = scalar_control("offset");
   const Operand falloff = scalar_control("falloff");
-  const Operand contrast = scalar_control("falloffcontrast");
+  /* Batch 36: ND_hextilednormalmap_vector3 shares the hex-cell network (see
+   * add_hextiledimage_lowering_nodes' header and the normal tail below). */
+  const bool normalmap = node.nodedef == hextilednormalmap_vector3_id;
+  const Operand contrast = normalmap ? Operand{nullptr, 0.0f} :
+                                       scalar_control("falloffcontrast");
   ShaderOutput *luma_socket = nullptr;
   if (node.links.contains("lumacoeffs")) {
     VectorMathNode *pass = graph->create_node<VectorMathNode>();
@@ -4812,7 +4816,60 @@ ShaderNode *add_hextiledimage_lowering_nodes(const Node &node,
   const Operand rr_x = radians(rr_x_deg);
   const Operand rr_y = radians(rr_y_deg);
 
+  /* Batch 36 normal-map operands: N/T/B are literal or linked pass-through
+   * vectors (".hextile.normal" etc., wired in the connect pass). */
+  const auto vmath = [&](const NodeVectorMathType type,
+                         ShaderOutput *a,
+                         ShaderOutput *b = nullptr,
+                         const float3 b_value = zero_float3()) -> VectorMathNode * {
+    VectorMathNode *created = graph->create_node<VectorMathNode>();
+    named(created);
+    created->set_math_type(type);
+    created->set_vector2(b_value);
+    if (a) {
+      graph->connect(a, created->input("Vector1"));
+    }
+    if (b) {
+      graph->connect(b, created->input("Vector2"));
+    }
+    return created;
+  };
+  const auto vscale = [&](ShaderOutput *v, ShaderOutput *s) {
+    VectorMathNode *created = vmath(NODE_VECTOR_MATH_SCALE, v);
+    graph->connect(s, created->input("Scale"));
+    return created->output("Vector");
+  };
+  const auto vector3_control = [&](const char *name) -> ShaderOutput * {
+    VectorMathNode *pass = graph->create_node<VectorMathNode>();
+    pass->name = node.name + ".hextile." + name;
+    pass->set_math_type(NODE_VECTOR_MATH_ADD);
+    pass->set_vector1(node.links.contains(name) ? zero_float3() : node.vector3_inputs.at(name));
+    pass->set_vector2(zero_float3());
+    lowered_nodes.emplace(pass->name, pass);
+    return pass->output("Vector");
+  };
+  ShaderOutput *basis_n = nullptr, *basis_t = nullptr, *basis_b = nullptr;
+  ShaderOutput *default_sample = nullptr;
+  Operand strength{nullptr, 1.0f};
+  if (normalmap) {
+    basis_n = vector3_control("normal");
+    basis_t = vector3_control("tangent");
+    basis_b = vector3_control("bitangent");
+    strength = scalar_control("strength");
+    if (node.asset_inputs.at("file").empty()) {
+      /* No texture: every tile samples the default (genglsl texture of an
+       * unbound/missing file is the default value). */
+      VectorMathNode *constant = graph->create_node<VectorMathNode>();
+      named(constant);
+      constant->set_math_type(NODE_VECTOR_MATH_ADD);
+      constant->set_vector1(node.vector3_inputs.at("default"));
+      constant->set_vector2(zero_float3());
+      default_sample = constant->output("Vector");
+    }
+  }
+
   ShaderOutput *colors[3];
+  ShaderOutput *normals[3] = {nullptr, nullptr, nullptr};
   ShaderOutput *alphas[3];
   ShaderOutput *blend[3];
   for (int k = 0; k < 3; k++) {
@@ -4853,6 +4910,79 @@ ShaderNode *add_hextiledimage_lowering_nodes(const Node &node,
     ShaderOutput *uv_x = add(add(div(r_x, tile_scale), ctr_x), offset_x);
     ShaderOutput *uv_y = add(add(div(r_y, tile_scale), ctr_y), offset_y);
 
+    if (normalmap) {
+      ShaderOutput *sample = default_sample;
+      if (sample == nullptr) {
+        CombineXYZNode *uv = graph->create_node<CombineXYZNode>();
+        named(uv);
+        uv->set_z(0.0f);
+        graph->connect(uv_x, uv->input("X"));
+        graph->connect(uv_y, uv->input("Y"));
+        ImageTextureNode *image = graph->create_node<ImageTextureNode>();
+        named(image);
+        image->set_filename(ustring(node.asset_inputs.at("file")));
+        image->set_colorspace(image_color3_colorspace(node.string_inputs.at("colorspace")));
+        image->set_interpolation(INTERPOLATION_LINEAR);
+        image->set_extension(EXTENSION_REPEAT);
+        graph->connect(uv->output("Vector"), image->input("Vector"));
+        sample = image->output("Color");
+      }
+      /* nm.y = flip_g ? 1 - nm.y : nm.y; nm = 2 nm - 1 */
+      if (node.int_inputs.at("flip_g") != 0) {
+        VectorMathNode *flip = vmath(NODE_VECTOR_MATH_MULTIPLY_ADD, sample, nullptr,
+                                     make_float3(1.0f, -1.0f, 1.0f));
+        flip->set_vector3(make_float3(0.0f, 1.0f, 0.0f));
+        sample = flip->output("Vector");
+      }
+      VectorMathNode *decode = vmath(NODE_VECTOR_MATH_MULTIPLY_ADD, sample, nullptr,
+                                     make_float3(2.0f, 2.0f, 2.0f));
+      decode->set_vector3(make_float3(-1.0f, -1.0f, -1.0f));
+      SeparateXYZNode *nm = graph->create_node<SeparateXYZNode>();
+      named(nm);
+      graph->connect(decode->output("Vector"), nm->input("Vector"));
+      /* Tk nm.x + Bk nm.y = Rk (T nm.x + B nm.y) strength, Rk =
+       * mx_axis_rotation_matrix(N, -rot_k) (GLSL column-major), i.e.
+       * Rk u = cos(rot) u + (1 - cos(rot)) N (N.u) + sin(rot) (N x u). */
+      ShaderOutput *u = vmath(NODE_VECTOR_MATH_ADD, vscale(basis_t, nm->output("X")),
+                              vscale(basis_b, nm->output("Y")))->output("Vector");
+      ShaderOutput *n_dot_u = vmath(NODE_VECTOR_MATH_DOT_PRODUCT, basis_n, u)->output("Value");
+      ShaderOutput *n_cross_u = vmath(NODE_VECTOR_MATH_CROSS_PRODUCT, basis_n, u)->output("Vector");
+      ShaderOutput *rotated = vmath(
+          NODE_VECTOR_MATH_ADD,
+          vmath(NODE_VECTOR_MATH_ADD, vscale(u, cos_r),
+                vscale(basis_n, mul(csub(1.0f, cos_r), n_dot_u)))->output("Vector"),
+          vscale(n_cross_u, sin_r))->output("Vector");
+      ShaderOutput *tangent_part = rotated;
+      if (strength.socket) {
+        tangent_part = vscale(rotated, strength.socket);
+      }
+      else if (strength.value != 1.0f) {
+        VectorMathNode *scaled = vmath(NODE_VECTOR_MATH_SCALE, rotated);
+        scaled->set_scale(strength.value);
+        tangent_part = scaled->output("Vector");
+      }
+      /* Nk = normalize(Tk nm.x + Bk nm.y + N nm.z) */
+      ShaderOutput *nk = vmath(NODE_VECTOR_MATH_NORMALIZE,
+                               vmath(NODE_VECTOR_MATH_ADD, tangent_part,
+                                     vscale(basis_n, nm->output("Z")))->output("Vector"))
+                             ->output("Vector");
+      /* mx_normals_to_gradient: g = (d N - Nk) / max(1e-8, |d|), d = N.Nk */
+      ShaderOutput *d = vmath(NODE_VECTOR_MATH_DOT_PRODUCT, basis_n, nk)->output("Value");
+      ShaderOutput *denominator = math(NODE_MATH_MAXIMUM,
+                                       math(NODE_MATH_ABSOLUTE, d, 0.0f), 0.0f, nullptr, 1e-8f);
+      CombineXYZNode *broadcast = graph->create_node<CombineXYZNode>();
+      named(broadcast);
+      graph->connect(denominator, broadcast->input("X"));
+      graph->connect(denominator, broadcast->input("Y"));
+      graph->connect(denominator, broadcast->input("Z"));
+      normals[k] = vmath(NODE_VECTOR_MATH_DIVIDE,
+                         vmath(NODE_VECTOR_MATH_SUBTRACT, vscale(basis_n, d), nk)->output("Vector"),
+                         broadcast->output("Vector"))
+                       ->output("Vector");
+      /* w = pow(weights, 7) (no luminance weighting for normal maps) */
+      blend[k] = math(NODE_MATH_POWER, weights[k], 0.0f, nullptr, 7.0f);
+      continue;
+    }
     CombineXYZNode *uv = graph->create_node<CombineXYZNode>();
     named(uv);
     uv->set_z(0.0f);
@@ -4920,6 +5050,21 @@ ShaderNode *add_hextiledimage_lowering_nodes(const Node &node,
       blend[k] = gain(blend[k]);
     }
     normalize3(blend);
+  }
+  if (normalmap) {
+    /* mx_gradient_blend_3_normals: gg = sum clamp(w_k, 0, 1) g_k,
+     * out = normalize(N - gg). */
+    ShaderOutput *gradient = nullptr;
+    for (int k = 0; k < 3; k++) {
+      ShaderOutput *w = math(NODE_MATH_MINIMUM, math(NODE_MATH_MAXIMUM, blend[k], 0.0f, nullptr, 0.0f),
+                             0.0f, nullptr, 1.0f);
+      ShaderOutput *term = vscale(normals[k], w);
+      gradient = gradient ? vmath(NODE_VECTOR_MATH_ADD, gradient, term)->output("Vector") : term;
+    }
+    VectorMathNode *out = vmath(
+        NODE_VECTOR_MATH_NORMALIZE,
+        vmath(NODE_VECTOR_MATH_SUBTRACT, basis_n, gradient)->output("Vector"));
+    return out;
   }
   ShaderOutput *result = nullptr;
   VectorMathNode *last = nullptr;
@@ -11558,6 +11703,61 @@ bool validate(const Graph &source,
           !node.int_inputs.empty() ||
           !node.color3_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (node.nodedef == hextilednormalmap_vector3_id && node.links.contains("texcoord")) {
+      /* Batch 36: textured (or empty-file) hex-tiled normal map over a
+       * linked texcoord; see add_hextiledimage_lowering_nodes. Every control
+       * and basis vector is a finite literal XOR a typed link. */
+      const auto output = node.outputs.find("out");
+      const auto file = node.asset_inputs.find("file");
+      const auto default_value = node.vector3_inputs.find("default");
+      const auto flip_g = node.int_inputs.find("flip_g");
+      size_t links = 1;
+      bool controls = validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name);
+      size_t float_literals = 0, vector2_literals = 0, vector3_literals = 1;
+      const auto control = [&](const char *name, const Type type, const bool has_literal,
+                               const bool finite_literal) {
+        const auto link = node.links.find(name);
+        const bool has_link = link != node.links.end();
+        links += has_link;
+        controls = controls && has_literal != has_link &&
+                   (has_link ? validate_link(link->second, type, *nodes_by_name) : finite_literal);
+        return has_literal;
+      };
+      for (const char *name : {"rotation", "scale", "offset", "falloff", "strength"}) {
+        const auto value = node.inputs.find(name);
+        float_literals += control(name, Type::Float, value != node.inputs.end(),
+                                  value != node.inputs.end() && std::isfinite(value->second));
+      }
+      for (const char *name : {"tiling", "rotationrange", "scalerange", "offsetrange"}) {
+        const auto value = node.vector2_inputs.find(name);
+        vector2_literals += control(name, Type::Vector2, value != node.vector2_inputs.end(),
+                                    value != node.vector2_inputs.end() &&
+                                        finite_value(value->second));
+      }
+      for (const char *name : {"normal", "tangent", "bitangent"}) {
+        const auto value = node.vector3_inputs.find(name);
+        vector3_literals += control(name, Type::Vector3, value != node.vector3_inputs.end(),
+                                    value != node.vector3_inputs.end() &&
+                                        finite_value(value->second));
+      }
+      if (!controls || node.links.size() != links || node.inputs.size() != float_literals ||
+          node.vector2_inputs.size() != vector2_literals ||
+          node.vector3_inputs.size() != vector3_literals ||
+          default_value == node.vector3_inputs.end() || !finite_value(default_value->second) ||
+          flip_g == node.int_inputs.end() || (flip_g->second != 0 && flip_g->second != 1) ||
+          node.int_inputs.size() != 1 || output == node.outputs.end() ||
+          output->second != Type::Vector3 || node.outputs.size() != 1 ||
+          file == node.asset_inputs.end() || node.asset_inputs.size() != 1 ||
+          node.string_inputs.size() != 1 || !node.string_inputs.contains("colorspace") ||
+          !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+          !node.vector4_inputs.empty() || !node.matrix33_inputs.empty() ||
+          !node.matrix44_inputs.empty())
       {
         return false;
       }
@@ -22321,7 +22521,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     else if (node.nodedef == ramp_gradient_id && node.links.contains("x")) {
       lowered = add_dynamic_ramp_gradient_lowering_nodes(node, graph, lowered_nodes);
     }
-    else if (node.nodedef == hextiledimage_color3_id || node.nodedef == hextiledimage_color4_id) {
+    else if (node.nodedef == hextiledimage_color3_id || node.nodedef == hextiledimage_color4_id ||
+             (node.nodedef == hextilednormalmap_vector3_id && node.links.contains("texcoord")))
+    {
       lowered = add_hextiledimage_lowering_nodes(node, graph, lowered_nodes);
     }
     else if (node.nodedef == ramp_id || node.nodedef == ramp_gradient_id) {
@@ -25993,7 +26195,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
   }
 
   for (const Node &node : source.nodes) {
-    if (node.nodedef == hextiledimage_color3_id || node.nodedef == hextiledimage_color4_id) {
+    if (node.nodedef == hextiledimage_color3_id || node.nodedef == hextiledimage_color4_id ||
+        (node.nodedef == hextilednormalmap_vector3_id && node.links.contains("texcoord")))
+    {
       graph->connect(lowered_output(node.links.at("texcoord"), nodes_by_name, lowered_nodes),
                      lowered_nodes.at(node.name + ".hextile.texcoord")->input("Vector"));
       /* Batch 12: linked hex-tiling controls feed their pass-through sockets. */
