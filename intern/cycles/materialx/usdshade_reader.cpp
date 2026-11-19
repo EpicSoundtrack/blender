@@ -3835,6 +3835,12 @@ bool read_normalmap_output(const pxr::UsdShadeInput &input,
                            std::unordered_map<string, string> *emitted_shaders,
                            string *error_message);
 
+bool read_default_basis_bump_output(const pxr::UsdShadeInput &input,
+                                    Graph *graph,
+                                    Link *result,
+                                    std::unordered_map<string, string> *emitted_shaders,
+                                    string *error_message);
+
 /**
  * Read a vector3 / vector2 / color3 input that may be authored EITHER as a
  * literal OR as a connection.
@@ -25604,15 +25610,21 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     node.asset_inputs["file"] = file_path;
   }
   else if (nodedef == bump_vector3_id) {
-    /* Documented boundary, not a fabricated substitute: Cycles' BumpNode
-     * (scene/shader_nodes.h) takes derivative-sampled height inputs
-     * (sample_center/sample_x/sample_y), which requires evaluating its
-     * 'height' input three times at offset shading positions -- this
-     * reader's single-value Link model has no mechanism for that, so this is
-     * left unadmitted rather than wiring a proxy. */
-    set_error(error_message,
-              nodedef + " has no verified honest native Cycles equivalent in this pass");
-    return finish(false);
+    /* stdlib_ng.mtlx NG_bump_vector3 is normalmap(heighttonormal(height),
+     * scale) with the default Nworld/Tworld/Bworld basis -- not Cycles'
+     * BumpNode. read_default_basis_bump_output() lowers exactly that graph
+     * (already used for standard_surface normal terminals); reuse it so a
+     * bump output is also admitted anywhere a vector3 is consumed. Authored
+     * basis inputs and a literal scale-less/unsupported form stay refusals. */
+    std::unordered_map<string, string> emitted_bump_shaders;
+    Link bump_result;
+    if (!read_default_basis_bump_output(
+            input, graph, &bump_result, &emitted_bump_shaders, error_message))
+    {
+      return finish(false);
+    }
+    *result = bump_result;
+    return finish(true);
   }
   else if (nodedef == normalmap_float_id || nodedef == normalmap_vector2_id) {
     /* ND_normalmap_float was previously only reachable as the direct source of
@@ -25903,10 +25915,18 @@ bool read_default_basis_bump_output(
     return false;
   }
   const pxr::UsdShadeInput height = bump.GetInput(pxr::TfToken("height"));
-  if (!height || height.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-      height.GetAttr().GetNumTimeSamples() != 0 || !height.HasConnectedSource())
+  /* stdlib_defs.mtlx declares height default 0. An omitted or literal height
+   * is a constant field, which heighttonormal turns into the flat normal. */
+  float height_value = 0.0f;
+  const bool height_linked = height && height.HasConnectedSource();
+  if (height && (height.GetTypeName() != pxr::SdfValueTypeNames->Float ||
+                 height.GetAttr().GetNumTimeSamples() != 0 ||
+                 (!height_linked && composed_connection_count(height.GetAttr()) != 0) ||
+                 (!height_linked && height.GetAttr().HasAuthoredValueOpinion() &&
+                  (!height.Get(&height_value) || !std::isfinite(height_value)))))
   {
-    set_error(error_message, "ND_bump_vector3 requires connected static float height");
+    set_error(error_message,
+              "ND_bump_vector3 requires a static float height (connected, finite literal or omitted)");
     return false;
   }
   float scale_value = 1.0f;
@@ -25927,14 +25947,14 @@ bool read_default_basis_bump_output(
   std::unordered_map<string, string> emitted_float_shaders;
   std::unordered_map<string, string> emitted_color4_shaders;
   Link height_link;
-  if (!read_float_output(height,
-                         graph,
-                         &height_link,
-                         &active_float_shaders,
-                         &emitted_float_shaders,
-                         &emitted_color4_shaders,
-                         0,
-                         error_message))
+  if (height_linked && !read_float_output(height,
+                                          graph,
+                                          &height_link,
+                                          &active_float_shaders,
+                                          &emitted_float_shaders,
+                                          &emitted_color4_shaders,
+                                          0,
+                                          error_message))
   {
     return false;
   }
@@ -25947,7 +25967,12 @@ bool read_default_basis_bump_output(
   heighttonormal.name = unique_node_name(
       *graph, bump.GetPrim().GetName().GetString() + ".heighttonormal", path + ".heighttonormal");
   heighttonormal.nodedef = heighttonormal_vector3_id;
-  heighttonormal.links["in"] = height_link;
+  if (height_linked) {
+    heighttonormal.links["in"] = height_link;
+  }
+  else {
+    heighttonormal.inputs["in"] = height_value;
+  }
   heighttonormal.links["texcoord"] = {uv.name, "out", Type::Vector2};
   heighttonormal.inputs["scale"] = 1.0f;
   heighttonormal.outputs["out"] = Type::Vector3;
@@ -25993,7 +26018,18 @@ bool read_normal_terminal_input(const pxr::UsdShadeShader &surface,
     return false;
   }
   Link source;
-  if (!read_normalmap_output(input, graph, &source, emitted_shaders, error_message)) {
+  pxr::UsdShadeShader connected;
+  pxr::TfToken connected_id;
+  const bool is_bump = connected_shader(input, nullptr, &connected, nullptr) &&
+                       connected.GetShaderId(&connected_id) &&
+                       connected_id == pxr::TfToken(bump_vector3_id);
+  /* NG_bump_vector3 is a world-space normal (normalmap of heighttonormal),
+   * exactly like the normalmap sources admitted here; standard_surface's
+   * normal terminals already take it through the same expansion. */
+  if (!(is_bump ? read_default_basis_bump_output(
+                      input, graph, &source, emitted_shaders, error_message) :
+                  read_normalmap_output(input, graph, &source, emitted_shaders, error_message)))
+  {
     return false;
   }
   open_pbr->links[input_name] = source;

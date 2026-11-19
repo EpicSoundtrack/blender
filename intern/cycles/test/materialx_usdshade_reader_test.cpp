@@ -34692,51 +34692,151 @@ TEST(materialx_usdshade_reader, amber_joined_noise_height_survives_reader_and_lo
   }
 }
 
-/* geometric_primvar_source_admission continuation: ND_bitangent_vector3 /
- * ND_bump_vector3 are deliberately left unadmitted -- Cycles' TangentNode has
- * no bitangent output, and Cycles' BumpNode needs derivative-sampled height
- * inputs this reader's single-value Link model does not support. This must
- * fail closed by name, not silently substitute a proxy. */
-TEST(materialx_usdshade_reader, rejects_bitangent_and_bump_without_mutating_graph)
+/* Batch 32: ND_bump_vector3 is stdlib_ng.mtlx NG_bump_vector3 =
+ * normalmap(heighttonormal(height), scale) with the default basis. It used to
+ * be refused outside standard_surface normal terminals ("no verified honest
+ * native Cycles equivalent"); it is now admitted in the general vector3
+ * dispatch (here: ND_displacement_vector3 'displacement') and on OpenPBR
+ * normal terminals through the same expansion. An authored basis input is
+ * still refused by name without mutating the destination graph. */
+static pxr::UsdShadeMaterial make_bump_consumer_material(const pxr::UsdStageRefPtr &stage,
+                                                         const bool openpbr_normal,
+                                                         const int height_form,
+                                                         const bool authored_basis)
 {
-  /* Batch 11: ND_bitangent_vector3 now lowers (MikkTSpace sign route). */
-  const char *unadmitted_nodedefs[] = {"ND_bump_vector3"};
-  for (const char *nodedef : unadmitted_nodedefs) {
-    SCOPED_TRACE(nodedef);
-    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
-    ASSERT_TRUE(stage);
-    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
-        stage, pxr::SdfPath("/Looks/TestMaterial"));
-    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
-        stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
-    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
-    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
-    surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+  /* height_form: 0 = omitted, 1 = literal 0.25, 2 = ND_constant_float 0.25 link. */
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial"));
+  pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/OpenPBR"));
+  surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+  surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float).Set(1.0f);
 
-    pxr::UsdShadeShader unadmitted = pxr::UsdShadeShader::Define(
-        stage, pxr::SdfPath("/Looks/TestMaterial/Unadmitted"));
-    unadmitted.CreateIdAttr(pxr::VtValue(pxr::TfToken(nodedef)));
-    unadmitted.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float3);
+  pxr::UsdShadeShader bump = pxr::UsdShadeShader::Define(
+      stage, pxr::SdfPath("/Looks/TestMaterial/Bump"));
+  bump.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_bump_vector3")));
+  bump.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Vector3f);
+  bump.CreateInput(pxr::TfToken("scale"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  if (height_form == 1) {
+    bump.CreateInput(pxr::TfToken("height"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+  }
+  else if (height_form == 2) {
+    pxr::UsdShadeShader height = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/Height"));
+    height.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+    height.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+    height.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    bump.CreateInput(pxr::TfToken("height"), pxr::SdfValueTypeNames->Float)
+        .ConnectToSource(height.ConnectableAPI(), pxr::TfToken("out"));
+  }
+  if (authored_basis) {
+    bump.CreateInput(pxr::TfToken("normal"), pxr::SdfValueTypeNames->Vector3f)
+        .Set(pxr::GfVec3f(0.0f, 0.0f, 1.0f));
+  }
 
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  if (openpbr_normal) {
+    surface.CreateInput(pxr::TfToken("geometry_normal"), pxr::SdfValueTypeNames->Vector3f)
+        .ConnectToSource(bump.ConnectableAPI(), pxr::TfToken("out"));
+  }
+  else {
     pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
         stage, pxr::SdfPath("/Looks/TestMaterial/Displacement"));
     displacement.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_displacement_vector3")));
-    ASSERT_TRUE(displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
-                    .ConnectToSource(unadmitted.ConnectableAPI(), pxr::TfToken("out")));
+    displacement.CreateInput(pxr::TfToken("displacement"), pxr::SdfValueTypeNames->Float3)
+        .ConnectToSource(bump.ConnectableAPI(), pxr::TfToken("out"));
     displacement.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    material.CreateDisplacementOutput(mtlx_render_context)
+        .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out"));
+  }
+  material.CreateSurfaceOutput(mtlx_render_context)
+      .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out"));
+  return material;
+}
 
-    const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
-    ASSERT_TRUE(material.CreateSurfaceOutput(mtlx_render_context)
-                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
-    ASSERT_TRUE(material.CreateDisplacementOutput(mtlx_render_context)
-                    .ConnectToSource(displacement.ConnectableAPI(), pxr::TfToken("out")));
+TEST(materialx_usdshade_reader, bump_lowers_as_ng_normalmap_of_heighttonormal_in_any_vector3_consumer)
+{
+  for (const bool openpbr_normal : {false, true}) {
+    for (const int height_form : {0, 1, 2}) {
+      SCOPED_TRACE(string(openpbr_normal ? "openpbr geometry_normal" : "displacement_vector3") +
+                   " height_form " + std::to_string(height_form));
+      const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+      ASSERT_TRUE(stage);
+      const pxr::UsdShadeMaterial material = make_bump_consumer_material(
+          stage, openpbr_normal, height_form, false);
+      string before;
+      ASSERT_TRUE(stage->GetRootLayer()->ExportToString(&before));
+      materialx::Graph graph;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+      string after;
+      ASSERT_TRUE(stage->GetRootLayer()->ExportToString(&after));
+      EXPECT_EQ(before, after);
 
+      const auto find_node = [&](const string &nodedef) {
+        return std::find_if(graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &n) {
+          return n.nodedef == nodedef;
+        });
+      };
+      const auto height = find_node("ND_heighttonormal_vector3");
+      const auto normalmap = find_node("ND_normalmap_float");
+      const auto uv = find_node("ND_geompropvalue_vector2");
+      ASSERT_NE(height, graph.nodes.end());
+      ASSERT_NE(normalmap, graph.nodes.end());
+      ASSERT_NE(uv, graph.nodes.end());
+      /* NG_bump_vector3: heighttonormal keeps its own defaults (scale 1, UV0);
+       * the bump 'scale' goes to normalmap. */
+      EXPECT_FLOAT_EQ(height->inputs.at("scale"), 1.0f);
+      EXPECT_EQ(height->links.at("texcoord").source_node, uv->name);
+      EXPECT_EQ(normalmap->links.at("in").source_node, height->name);
+      EXPECT_FLOAT_EQ(normalmap->inputs.at("scale"), 0.5f);
+      if (height_form == 2) {
+        ASSERT_TRUE(height->links.contains("in"));
+        EXPECT_EQ(find_node("ND_constant_float")->name, height->links.at("in").source_node);
+      }
+      else {
+        EXPECT_FALSE(height->links.contains("in"));
+        EXPECT_FLOAT_EQ(height->inputs.at("in"), height_form == 1 ? 0.25f : 0.0f);
+      }
+      if (openpbr_normal) {
+        const auto consumer = find_node("ND_open_pbr_surface_surfaceshader");
+        ASSERT_NE(consumer, graph.nodes.end());
+        EXPECT_EQ(consumer->links.at("geometry_normal").source_node, normalmap->name);
+      }
+      else {
+        /* ND_displacement_vector3 is a terminal field of the Graph. */
+        ASSERT_TRUE(graph.has_displacement);
+        ASSERT_TRUE(graph.displacement_is_vector3);
+        ASSERT_TRUE(graph.displacement_vector3.is_linked);
+        EXPECT_EQ(graph.displacement_vector3.link.source_node, normalmap->name);
+      }
+
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+      bool found_normalmap = false;
+      for (ShaderNode *node : lowered.nodes) {
+        found_normalmap |= dynamic_cast<MaterialXNormalMapNode *>(node) != nullptr;
+      }
+      EXPECT_TRUE(found_normalmap);
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, bump_with_authored_basis_is_refused_without_mutating_graph)
+{
+  for (const bool openpbr_normal : {false, true}) {
+    SCOPED_TRACE(openpbr_normal);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = make_bump_consumer_material(stage, openpbr_normal, 2, true);
     materialx::Graph source;
     source.nodes.push_back({"sentinel", "unsupported"});
     string error;
     EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
-    EXPECT_TRUE(error.find("no verified honest native Cycles equivalent") != string::npos ||
-                error.find("derivative-aware hex-tiled normal sampling") != string::npos) << error;
+    EXPECT_NE(error.find("ND_bump_vector3 has unsupported explicit basis/input 'normal'"),
+              string::npos)
+        << error;
     ASSERT_EQ(source.nodes.size(), 1);
     EXPECT_EQ(source.nodes[0].name, "sentinel");
   }
