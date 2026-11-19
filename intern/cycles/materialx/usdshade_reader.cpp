@@ -26783,6 +26783,82 @@ bool resolve_vdf_shader(const pxr::UsdShadeConnectableAPI &source,
   return false;
 }
 
+/** ND_volume's 'vdf'/'edf' NodeDef defaults are value="" (pbrlib_defs.mtlx):
+ *  the empty VDF (no absorption, no scattering) and the empty EDF (no
+ *  emission). Such an input is omitted, or authored as an unconnected token
+ *  with no value or the empty token -- the same predicate ND_light's empty
+ *  'edf' uses. An unconnected input carrying any other opinion (a non-empty
+ *  literal, a non-token type) is not the NodeDef default and fails closed.
+ *  Batch 34: the same NodeDef default (value="") applies to every closure-
+ *  typed combinator operand -- ND_multiply_vdfF/C 'in1', ND_mix_vdf 'fg'/'bg',
+ *  ND_mix_volumeshader 'fg'/'bg', ND_dot_volumeshader 'in'. */
+bool volume_closure_input_is_empty(const pxr::UsdShadeInput &input)
+{
+  if (!input) {
+    return true;
+  }
+  if (input.HasConnectedSource() || input.GetTypeName() != pxr::SdfValueTypeNames->Token) {
+    return false;
+  }
+  if (composed_connection_count(input.GetAttr()) != 0) {
+    return false; /* dangling connection: not empty */
+  }
+  if (!input.GetAttr().HasAuthoredValueOpinion()) {
+    return true;
+  }
+  pxr::TfToken literal;
+  return input.Get(&literal) && literal.IsEmpty();
+}
+
+bool read_vdf_coefficients(const pxr::UsdShadeConnectableAPI &source,
+                           const pxr::TfToken &source_name,
+                           const pxr::UsdShadeAttributeType source_type,
+                           const pxr::SdfValueTypeName &expected_type,
+                           Graph *graph,
+                           const int depth,
+                           VdfCoefficients *result,
+                           string *error_message);
+
+/** Batch 34: read one VDF-typed combinator operand. An omitted operand (or
+ *  the authored empty VDF, value="") is the MaterialX empty closure -- zero
+ *  absorption, zero scattering, no phase function -- exactly as ND_add_vdf
+ *  and ND_volume's 'vdf' already treat it. A connected operand recurses; any
+ *  other unconnected opinion or a dangling connection fails closed. */
+bool read_vdf_operand(const pxr::UsdShadeShader &vdf,
+                      const char *operand_name,
+                      const string &node_id,
+                      Graph *graph,
+                      const int depth,
+                      VdfCoefficients *result,
+                      string *error_message)
+{
+  const pxr::UsdShadeInput operand = vdf.GetInput(pxr::TfToken(operand_name));
+  if (volume_closure_input_is_empty(operand)) {
+    *result = VdfCoefficients();
+    return true;
+  }
+  if (!operand.HasConnectedSource()) {
+    set_error(error_message,
+              node_id + " '" + operand_name +
+                  "' VDF input must be connected or the empty VDF (value \"\")");
+    return false;
+  }
+  const auto sources = operand.GetConnectedSources();
+  if (sources.size() != 1) {
+    set_error(error_message,
+              node_id + " '" + operand_name + "' input must have exactly one source");
+    return false;
+  }
+  return read_vdf_coefficients(sources[0].source,
+                               sources[0].sourceName,
+                               sources[0].sourceType,
+                               operand.GetTypeName(),
+                               graph,
+                               depth + 1,
+                               result,
+                               error_message);
+}
+
 /**
  * Real native Cycles lowering for the VDF closure combinators, recursively
  * resolving a VDF connection down to its absorption/scattering/anisotropy
@@ -26879,12 +26955,7 @@ bool read_vdf_coefficients(const pxr::UsdShadeConnectableAPI &source,
 
   if (matched_id == multiply_vdff_id || matched_id == multiply_vdfc_id) {
     const bool color_weight = matched_id == multiply_vdfc_id;
-    const pxr::UsdShadeInput in1 = vdf.GetInput(pxr::TfToken("in1"));
     const pxr::UsdShadeInput in2 = vdf.GetInput(pxr::TfToken("in2"));
-    if (!in1 || !in1.HasConnectedSource()) {
-      set_error(error_message, matched_id + " requires a connected 'in1' VDF input");
-      return false;
-    }
     if (!in2) {
       set_error(error_message, matched_id + " requires a weight ('in2') input");
       return false;
@@ -26944,21 +27015,11 @@ bool read_vdf_coefficients(const pxr::UsdShadeConnectableAPI &source,
         return false;
       }
     }
-    const auto in1_sources = in1.GetConnectedSources();
-    if (in1_sources.size() != 1) {
-      set_error(error_message, matched_id + " 'in1' input must have exactly one source");
-      return false;
-    }
+    /* Batch 34: an omitted/empty 'in1' is the empty VDF (NodeDef value=""),
+     * so the scaled result is the empty VDF too -- zero coefficients through
+     * the same multiply, consistent with ND_add_vdf's empty operand. */
     VdfCoefficients sub;
-    if (!read_vdf_coefficients(in1_sources[0].source,
-                               in1_sources[0].sourceName,
-                               in1_sources[0].sourceType,
-                               in1.GetTypeName(),
-                               graph,
-                               depth + 1,
-                               &sub,
-                               error_message))
-    {
+    if (!read_vdf_operand(vdf, "in1", matched_id, graph, depth, &sub, error_message)) {
       return false;
     }
     const string synth_base = vdf.GetPath().GetString();
@@ -27073,39 +27134,12 @@ bool read_vdf_coefficients(const pxr::UsdShadeConnectableAPI &source,
   }
 
   if (matched_id == mix_vdf_id) {
-    const pxr::UsdShadeInput fg = vdf.GetInput(pxr::TfToken("fg"));
-    const pxr::UsdShadeInput bg = vdf.GetInput(pxr::TfToken("bg"));
-    if (!fg || !fg.HasConnectedSource() || !bg || !bg.HasConnectedSource()) {
-      set_error(error_message, "ND_mix_vdf requires connected 'fg' and 'bg' VDF inputs");
-      return false;
-    }
-    const auto fg_sources = fg.GetConnectedSources();
-    const auto bg_sources = bg.GetConnectedSources();
-    if (fg_sources.size() != 1 || bg_sources.size() != 1) {
-      set_error(error_message, "ND_mix_vdf inputs must each have exactly one source");
-      return false;
-    }
+    /* Batch 34: an omitted/empty 'fg' or 'bg' is the empty VDF (NodeDef
+     * value=""): the lerp is then against zero coefficients. */
     VdfCoefficients a;
     VdfCoefficients b;
-    if (!read_vdf_coefficients(fg_sources[0].source,
-                               fg_sources[0].sourceName,
-                               fg_sources[0].sourceType,
-                               fg.GetTypeName(),
-                               graph,
-                               depth + 1,
-                               &a,
-                               error_message))
-    {
-      return false;
-    }
-    if (!read_vdf_coefficients(bg_sources[0].source,
-                               bg_sources[0].sourceName,
-                               bg_sources[0].sourceType,
-                               bg.GetTypeName(),
-                               graph,
-                               depth + 1,
-                               &b,
-                               error_message))
+    if (!read_vdf_operand(vdf, "fg", mix_vdf_id, graph, depth, &a, error_message) ||
+        !read_vdf_operand(vdf, "bg", mix_vdf_id, graph, depth, &b, error_message))
     {
       return false;
     }
@@ -27184,28 +27218,57 @@ struct VolumeTerminal {
   Color3Input emission;
 };
 
-/** ND_volume's 'vdf'/'edf' NodeDef defaults are value="" (pbrlib_defs.mtlx):
- *  the empty VDF (no absorption, no scattering) and the empty EDF (no
- *  emission). Such an input is omitted, or authored as an unconnected token
- *  with no value or the empty token -- the same predicate ND_light's empty
- *  'edf' uses. An unconnected input carrying any other opinion (a non-empty
- *  literal, a non-token type) is not the NodeDef default and fails closed. */
-bool volume_closure_input_is_empty(const pxr::UsdShadeInput &input)
+bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
+                                    const pxr::TfToken &source_name,
+                                    const pxr::UsdShadeAttributeType source_type,
+                                    const pxr::SdfValueTypeName &expected_type,
+                                    Graph *graph,
+                                    const int depth,
+                                    VolumeTerminal *result,
+                                    string *error_message);
+
+/** Batch 34: read one volumeshader-typed combinator operand (ND_mix_volumeshader
+ *  'fg'/'bg', ND_dot_volumeshader 'in'). An omitted operand or the authored
+ *  empty volumeshader (NodeDef value="") is the empty closure: zero
+ *  coefficients and zero emission, what ND_volume with an empty 'vdf' and
+ *  empty 'edf' already lowers to. A connected operand (of `required_type`,
+ *  when given) recurses; anything else fails closed. */
+bool read_volume_terminal_operand(const pxr::UsdShadeShader &shader,
+                                  const char *operand_name,
+                                  const string &node_id,
+                                  const pxr::SdfValueTypeName *required_type,
+                                  Graph *graph,
+                                  const int depth,
+                                  VolumeTerminal *result,
+                                  string *error_message)
 {
-  if (!input) {
+  const pxr::UsdShadeInput operand = shader.GetInput(pxr::TfToken(operand_name));
+  if (volume_closure_input_is_empty(operand)) {
+    *result = VolumeTerminal();
     return true;
   }
-  if (input.HasConnectedSource() || input.GetTypeName() != pxr::SdfValueTypeNames->Token) {
+  if (!operand.HasConnectedSource() ||
+      (required_type && operand.GetTypeName() != *required_type))
+  {
+    set_error(error_message,
+              node_id + " '" + operand_name +
+                  "' volumeshader input must be connected or the empty volumeshader (value \"\")");
     return false;
   }
-  if (composed_connection_count(input.GetAttr()) != 0) {
-    return false; /* dangling connection: not empty */
+  const auto sources = operand.GetConnectedSources();
+  if (sources.size() != 1) {
+    set_error(error_message,
+              node_id + " '" + operand_name + "' input must have exactly one source");
+    return false;
   }
-  if (!input.GetAttr().HasAuthoredValueOpinion()) {
-    return true;
-  }
-  pxr::TfToken literal;
-  return input.Get(&literal) && literal.IsEmpty();
+  return resolve_volume_terminal_source(sources[0].source,
+                                        sources[0].sourceName,
+                                        sources[0].sourceType,
+                                        operand.GetTypeName(),
+                                        graph,
+                                        depth + 1,
+                                        result,
+                                        error_message);
 }
 
 /**
@@ -27246,11 +27309,6 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
                                  0,
                                  nullptr))
     {
-      const pxr::UsdShadeInput input = dot.GetInput(pxr::TfToken("in"));
-      if (!input || !input.HasConnectedSource() || input.GetTypeName() != expected_type) {
-        set_error(error_message, "ND_dot_volumeshader requires a connected volumeshader 'in' input");
-        return false;
-      }
       for (const pxr::UsdShadeInput &dot_input : dot.GetInputs()) {
         const string name = dot_input.GetBaseName().GetString();
         if (name != "in" && name != "note") {
@@ -27264,19 +27322,10 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
           return false;
         }
       }
-      const auto sources = input.GetConnectedSources();
-      if (sources.size() != 1) {
-        set_error(error_message, "ND_dot_volumeshader 'in' input must have exactly one source");
-        return false;
-      }
-      return resolve_volume_terminal_source(sources[0].source,
-                                            sources[0].sourceName,
-                                            sources[0].sourceType,
-                                            input.GetTypeName(),
-                                            graph,
-                                            depth + 1,
-                                            result,
-                                            error_message);
+      /* Batch 34: an omitted/empty 'in' is the empty volumeshader (NodeDef
+       * value=""); the pass-through then yields the empty closure. */
+      return read_volume_terminal_operand(
+          dot, "in", dot_volumeshader_id, &expected_type, graph, depth, result, error_message);
     }
   }
 
@@ -27340,40 +27389,14 @@ bool resolve_volume_terminal_source(const pxr::UsdShadeConnectableAPI &source,
                                  0,
                                  nullptr))
     {
-      const pxr::UsdShadeInput fg = mix.GetInput(pxr::TfToken("fg"));
-      const pxr::UsdShadeInput bg = mix.GetInput(pxr::TfToken("bg"));
-      if (!fg || !fg.HasConnectedSource() || !bg || !bg.HasConnectedSource()) {
-        set_error(error_message,
-                 "ND_mix_volumeshader requires connected 'fg' and 'bg' volumeshader inputs");
-        return false;
-      }
-      const auto fg_sources = fg.GetConnectedSources();
-      const auto bg_sources = bg.GetConnectedSources();
-      if (fg_sources.size() != 1 || bg_sources.size() != 1) {
-        set_error(error_message, "ND_mix_volumeshader inputs must each have exactly one source");
-        return false;
-      }
+      /* Batch 34: an omitted/empty 'fg' or 'bg' is the empty volumeshader
+       * (NodeDef value=""): zero coefficients and zero emission to lerp. */
       VolumeTerminal a;
       VolumeTerminal b;
-      if (!resolve_volume_terminal_source(fg_sources[0].source,
-                                          fg_sources[0].sourceName,
-                                          fg_sources[0].sourceType,
-                                          fg.GetTypeName(),
-                                          graph,
-                                          depth + 1,
-                                          &a,
-                                          error_message))
-      {
-        return false;
-      }
-      if (!resolve_volume_terminal_source(bg_sources[0].source,
-                                          bg_sources[0].sourceName,
-                                          bg_sources[0].sourceType,
-                                          bg.GetTypeName(),
-                                          graph,
-                                          depth + 1,
-                                          &b,
-                                          error_message))
+      if (!read_volume_terminal_operand(
+              mix, "fg", mix_volumeshader_id, nullptr, graph, depth, &a, error_message) ||
+          !read_volume_terminal_operand(
+              mix, "bg", mix_volumeshader_id, nullptr, graph, depth, &b, error_message))
       {
         return false;
       }

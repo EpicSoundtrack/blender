@@ -33191,6 +33191,150 @@ TEST(materialx_usdshade_reader, multiply_vdff_constant_weight_lowers_as_contract
   EXPECT_NE(native_volume->input("Absorption Coefficients")->link, nullptr);
 }
 
+/* Batch 34 (next-vdf-multiply-fullscope-v1 *-raw-all-omitted): ND_multiply_vdfF/C
+ * with 'in1' omitted (mode 0) or the authored empty VDF token (mode 1) is the
+ * MaterialX empty closure scaled -- still the empty VDF, consistent with
+ * ND_add_vdf's unconnected operand. A dangling 'in1' (mode 2) and a non-empty
+ * unconnected literal (mode 3) still fail closed. */
+TEST(materialx_usdshade_reader, multiply_vdf_omitted_in1_is_empty_closure)
+{
+  for (const bool color : {false, true}) {
+    for (const int mode : {0, 1, 2, 3}) {
+      const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+      const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+          stage, pxr::SdfPath("/Looks/ScaleEmpty"));
+      pxr::UsdShadeShader scaled = pxr::UsdShadeShader::Define(
+          stage, pxr::SdfPath("/Looks/ScaleEmpty/Scaled"));
+      scaled.CreateIdAttr(
+          pxr::VtValue(pxr::TfToken(color ? "ND_multiply_vdfC" : "ND_multiply_vdfF")));
+      if (mode == 1) {
+        scaled.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token);
+      }
+      if (mode == 2) {
+        scaled.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+            .GetAttr()
+            .SetConnections({pxr::SdfPath("/Looks/ScaleEmpty/Missing.outputs:out")});
+      }
+      if (mode == 3) {
+        scaled.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Token)
+            .Set(pxr::TfToken("not_empty"));
+      }
+      if (color) {
+        scaled.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Color3f)
+            .Set(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+      }
+      else {
+        scaled.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+      }
+      scaled.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+      pxr::UsdShadeShader volume = pxr::UsdShadeShader::Define(
+          stage, pxr::SdfPath("/Looks/ScaleEmpty/Volume"));
+      volume.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_volume")));
+      ASSERT_TRUE(volume.CreateInput(pxr::TfToken("vdf"), pxr::SdfValueTypeNames->Token)
+                      .ConnectToSource(scaled.ConnectableAPI(), pxr::TfToken("out")));
+      volume.CreateInput(pxr::TfToken("edf"), pxr::SdfValueTypeNames->Token);
+      volume.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+      ASSERT_TRUE(material.CreateVolumeOutput().ConnectToSource(volume.ConnectableAPI(),
+                                                                 pxr::TfToken("out")));
+
+      materialx::Graph source;
+      string error;
+      const bool read = materialx::read_usdshade_graph(material, &source, &error);
+      if (mode >= 2) {
+        EXPECT_FALSE(read) << "color=" << color << " mode=" << mode;
+        EXPECT_TRUE(source.nodes.empty());
+        continue;
+      }
+      ASSERT_TRUE(read) << "color=" << color << " mode=" << mode << " " << error;
+      ASSERT_TRUE(source.has_volume);
+      ASSERT_TRUE(source.volume_absorption.is_linked);
+      const auto scale = std::find_if(source.nodes.begin(), source.nodes.end(), [&](const auto &n) {
+        return n.name == source.volume_absorption.link.source_node;
+      });
+      ASSERT_NE(scale, source.nodes.end());
+      EXPECT_EQ(scale->nodedef, color ? "ND_multiply_vector3" : "ND_multiply_vector3FA");
+      ASSERT_TRUE(scale->vector3_inputs.contains("in1")) << "empty closure is a literal zero";
+      EXPECT_EQ(scale->vector3_inputs.at("in1").x, 0.0f);
+      EXPECT_EQ(scale->vector3_inputs.at("in1").y, 0.0f);
+      EXPECT_EQ(scale->vector3_inputs.at("in1").z, 0.0f);
+      EXPECT_TRUE(materialx::validate(source));
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+      VolumeCoefficientsNode *native_volume = nullptr;
+      for (ShaderNode *node : lowered.nodes) {
+        native_volume = native_volume ? native_volume :
+                                        dynamic_cast<VolumeCoefficientsNode *>(node);
+      }
+      ASSERT_NE(native_volume, nullptr);
+    }
+  }
+}
+
+/* Batch 34: ND_mix_vdf 'fg'/'bg' and ND_mix_volumeshader 'fg'/'bg' (plus
+ * ND_dot_volumeshader 'in') omitted is the empty closure (NodeDef value=""),
+ * lerped as literal zero coefficients/emission. */
+TEST(materialx_usdshade_reader, mix_vdf_and_mix_volumeshader_omitted_operand_is_empty_closure)
+{
+  for (const int shape : {0, 1, 2}) {
+    /* 0: ND_mix_vdf, bg omitted. 1: ND_mix_volumeshader, bg omitted.
+     * 2: ND_mix_volumeshader, bg = ND_dot_volumeshader with 'in' omitted. */
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/MixEmpty"));
+    pxr::UsdShadeShader absorption = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/MixEmpty/Absorption"));
+    absorption.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_absorption_vdf")));
+    absorption.CreateInput(pxr::TfToken("absorption"), pxr::SdfValueTypeNames->Float3)
+        .Set(pxr::GfVec3f(0.4f, 0.6f, 0.8f));
+    absorption.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader fg = absorption;
+    if (shape != 0) {
+      fg = pxr::UsdShadeShader::Define(stage, pxr::SdfPath("/Looks/MixEmpty/FgVolume"));
+      fg.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_volume")));
+      ASSERT_TRUE(fg.CreateInput(pxr::TfToken("vdf"), pxr::SdfValueTypeNames->Token)
+                      .ConnectToSource(absorption.ConnectableAPI(), pxr::TfToken("out")));
+      fg.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    }
+    pxr::UsdShadeShader mix = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/MixEmpty/Mix"));
+    mix.CreateIdAttr(
+        pxr::VtValue(pxr::TfToken(shape == 0 ? "ND_mix_vdf" : "ND_mix_volumeshader")));
+    ASSERT_TRUE(mix.CreateInput(pxr::TfToken("fg"), pxr::SdfValueTypeNames->Token)
+                    .ConnectToSource(fg.ConnectableAPI(), pxr::TfToken("out")));
+    if (shape == 2) {
+      pxr::UsdShadeShader dot = pxr::UsdShadeShader::Define(
+          stage, pxr::SdfPath("/Looks/MixEmpty/EmptyDot"));
+      dot.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_dot_volumeshader")));
+      dot.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+      ASSERT_TRUE(mix.CreateInput(pxr::TfToken("bg"), pxr::SdfValueTypeNames->Token)
+                      .ConnectToSource(dot.ConnectableAPI(), pxr::TfToken("out")));
+    }
+    mix.CreateInput(pxr::TfToken("mix"), pxr::SdfValueTypeNames->Float).Set(0.25f);
+    mix.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateVolumeOutput().ConnectToSource(mix.ConnectableAPI(),
+                                                               pxr::TfToken("out")));
+
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error))
+        << "shape=" << shape << " " << error;
+    ASSERT_TRUE(source.has_volume);
+    ASSERT_TRUE(source.volume_absorption.is_linked);
+    const auto lerp = std::find_if(source.nodes.begin(), source.nodes.end(), [&](const auto &n) {
+      return n.name == source.volume_absorption.link.source_node;
+    });
+    ASSERT_NE(lerp, source.nodes.end());
+    EXPECT_EQ(lerp->nodedef, "ND_mix_vector3");
+    ASSERT_TRUE(lerp->vector3_inputs.contains("bg")) << "empty closure is a literal zero";
+    EXPECT_EQ(lerp->vector3_inputs.at("bg").x, 0.0f);
+    EXPECT_EQ(lerp->vector3_inputs.at("bg").y, 0.0f);
+    EXPECT_EQ(lerp->vector3_inputs.at("bg").z, 0.0f);
+    EXPECT_TRUE(materialx::validate(source));
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << "shape=" << shape << " " << error;
+  }
+}
+
 /* Geometric-source observation (real gap closed): ND_normal_vector3 /
  * ND_position_vector3, world space. Cycles' GeometryNode carries no space
  * parameter -- its Position/Normal outputs are always world space (see
