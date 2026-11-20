@@ -9268,6 +9268,38 @@ bool read_integer_b_constant_arm(const pxr::UsdShadeInput &input,
   return true;
 }
 
+/* ND_geomcolor_* 'index': a literal non-negative Int, or a link to a uniform
+ * exact ND_constant_integer producer folded at read time (lineage: certified
+ * private host def35d38 geomcolor-float-current-host-v1 reader). */
+bool read_geomcolor_index(const pxr::UsdShadeInput &index_input,
+                          const string &nodedef,
+                          int *index,
+                          string *error_message)
+{
+  *index = 0;
+  if (!index_input) {
+    return true;
+  }
+  if (index_input.HasConnectedSource() || composed_connection_count(index_input.GetAttr()) != 0) {
+    if (index_input.GetAttr().GetNumTimeSamples() != 0 ||
+        !read_integer_b_constant_arm(index_input, nodedef, "index", index, error_message) ||
+        *index < 0)
+    {
+      set_error(error_message,
+                nodedef + " linked index requires exact uniform non-negative ConstantInteger");
+      return false;
+    }
+    return true;
+  }
+  if (index_input.GetTypeName() != pxr::SdfValueTypeNames->Int || !index_input.Get(index) ||
+      *index < 0)
+  {
+    set_error(error_message, nodedef + " 'index' must be a literal non-negative integer");
+    return false;
+  }
+  return true;
+}
+
 /**
  * Task 5: integer exact-domain observation.
  *
@@ -14854,14 +14886,10 @@ bool read_color_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == geomcolor_color3_id) {
     int index = 0;
-    const pxr::UsdShadeInput index_input = source_shader.GetInput(pxr::TfToken("index"));
-    if (index_input) {
-      if (index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
-          index_input.HasConnectedSource() || !index_input.Get(&index) || index < 0)
-      {
-        set_error(error_message, "ND_geomcolor_color3 'index' must be a literal non-negative integer");
-        return finish(false);
-      }
+    if (!read_geomcolor_index(source_shader.GetInput(pxr::TfToken("index")), nodedef, &index,
+                              error_message))
+    {
+      return finish(false);
     }
 
     Node color;
@@ -22252,14 +22280,10 @@ bool read_float_output(const pxr::UsdShadeInput &input,
   }
   else if (nodedef == geomcolor_float_id) {
     int index = 0;
-    const pxr::UsdShadeInput index_input = source.GetInput(pxr::TfToken("index"));
-    if (index_input) {
-      if (index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
-          index_input.HasConnectedSource() || !index_input.Get(&index) || index < 0)
-      {
-        set_error(error_message, "ND_geomcolor_float 'index' must be a literal non-negative integer");
-        return finish(false);
-      }
+    if (!read_geomcolor_index(source.GetInput(pxr::TfToken("index")), nodedef, &index,
+                              error_message))
+    {
+      return finish(false);
     }
     /* Reuses the existing ND_geompropvalue_float Cycles lowering -- see the
      * geomcolor_color3_id case in read_color_output() for the same

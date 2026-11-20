@@ -34606,6 +34606,96 @@ TEST(materialx_usdshade_reader, reads_and_lowers_geomcolor_float_color3_color4)
 }
 
 
+/* Batch 38 port (certified private host def35d38): a geomcolor 'index' linked
+ * to a uniform exact ND_constant_integer folds to that color-set index; other
+ * producers and negative constants stay refused. */
+TEST(materialx_usdshade_reader, geomcolor_index_linked_constant_integer_folds)
+{
+  const auto build = [](const int constant, const char *producer_id, const bool color3,
+                        materialx::Graph *source, string *error) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::SdfPath root("/Looks/GeomColorLinked");
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+    const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+      pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(stage,
+                                                             root.AppendChild(pxr::TfToken(name)));
+      node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      node.CreateOutput(pxr::TfToken("out"), type);
+      return node;
+    };
+    pxr::UsdShadeShader surface = shader(
+        "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    pxr::UsdShadeShader index = shader("Index", producer_id, pxr::SdfValueTypeNames->Int);
+    if (string(producer_id) == "ND_constant_integer") {
+      index.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(constant);
+    }
+    else {
+      index.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Int).Set(constant);
+      index.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Int).Set(0);
+    }
+    pxr::UsdShadeShader geom = shader("GeomColor",
+                                      color3 ? "ND_geomcolor_color3" : "ND_geomcolor_float",
+                                      color3 ? pxr::SdfValueTypeNames->Color3f :
+                                               pxr::SdfValueTypeNames->Float);
+    EXPECT_TRUE(geom.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int)
+                    .ConnectToSource(index.ConnectableAPI(), pxr::TfToken("out")));
+    EXPECT_TRUE(surface
+                    .CreateInput(pxr::TfToken(color3 ? "base_color" : "specular_roughness"),
+                                 color3 ? pxr::SdfValueTypeNames->Color3f :
+                                          pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(geom.ConnectableAPI(), pxr::TfToken("out")));
+    EXPECT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx"))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    return materialx::read_usdshade_graph(material, source, error);
+  };
+  const auto geomprop_of = [](const materialx::Graph &graph) -> string {
+    for (const materialx::Node &node : graph.nodes) {
+      if (node.name == "GeomColor") {
+        return node.string_inputs.at("geomprop");
+      }
+    }
+    return "<missing>";
+  };
+
+  for (const bool color3 : {false, true}) {
+    for (const int constant : {0, 1, 3}) {
+      materialx::Graph source;
+      string error;
+      ASSERT_TRUE(build(constant, "ND_constant_integer", color3, &source, &error)) << error;
+      EXPECT_EQ(geomprop_of(source),
+                constant == 0 ? string("displayColor") :
+                                "displayColor" + std::to_string(constant));
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(source, &lowered));
+      bool found = false;
+      for (ShaderNode *node : lowered.nodes) {
+        if (AttributeNode *attribute = dynamic_cast<AttributeNode *>(node)) {
+          if (node->name == "GeomColor") {
+            found = true;
+            EXPECT_EQ(attribute->get_attribute(), ustring(geomprop_of(source)));
+          }
+        }
+      }
+      EXPECT_TRUE(found);
+    }
+    {
+      materialx::Graph source;
+      string error;
+      EXPECT_FALSE(build(-1, "ND_constant_integer", color3, &source, &error));
+      EXPECT_NE(error.find("linked index requires exact uniform non-negative ConstantInteger"),
+                string::npos)
+          << error;
+    }
+    {
+      materialx::Graph source;
+      string error;
+      EXPECT_FALSE(build(1, "ND_add_integer", color3, &source, &error));
+      EXPECT_FALSE(error.empty());
+    }
+  }
+}
+
+
 TEST(materialx_usdshade_reader, reads_geomprop_and_primvar_fallback_inputs)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
