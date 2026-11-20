@@ -3435,6 +3435,47 @@ std::pair<float, float> integer_words(const int value)
   return {float(high), float(integer - high * 65536)};
 }
 
+bool is_exact_sha256_text(const string &text)
+{
+  return text.size() == 64 && std::all_of(text.begin(), text.end(), [](const char c) {
+           return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+         });
+}
+
+/* Batch 39: an Integer reader the add-on's private Int32 projection attests as
+ * an ND_add_integer leaf ("mx_private_words_out" + provenance). It reads its
+ * exact (high, low) word attribute, never the one-Float32 attribute. */
+bool is_integer_word_leaf(const Node &node)
+{
+  return (node.nodedef == geompropvalue_integer_id ||
+          node.nodedef == usd_primvar_reader_integer_id) &&
+         node.string_inputs.contains("mx_private_words_out");
+}
+
+bool integer_word_leaf_descriptor_valid(const Node &node)
+{
+  const char *name = node.nodedef == geompropvalue_integer_id ? "geomprop" : "varname";
+  const auto original = node.string_inputs.find(name);
+  const auto declared = node.string_inputs.find("mx_public_geomprop_out");
+  const auto alias = node.string_inputs.find("mx_private_words_out");
+  const auto graph_sha = node.string_inputs.find("mx_public_graph_sha256");
+  const auto descriptor_sha = node.string_inputs.find("mx_projection_descriptor_sha256");
+  return node.string_inputs.size() == 5 && original != node.string_inputs.end() &&
+         !original->second.empty() && declared != node.string_inputs.end() &&
+         declared->second == original->second && alias != node.string_inputs.end() &&
+         alias->second.rfind("__mx_private_i32_words_", 0) == 0 &&
+         graph_sha != node.string_inputs.end() && is_exact_sha256_text(graph_sha->second) &&
+         descriptor_sha != node.string_inputs.end() &&
+         is_exact_sha256_text(descriptor_sha->second) && !node.fallback_int_inputs.contains("out");
+}
+
+/* Batch 39: an ND_add_integer with a runtime operand (a word leaf or another
+ * varying add), lowered to exact 16-bit word arithmetic with carry and Int32 wrap. */
+bool is_varying_add_integer(const Node &node)
+{
+  return node.nodedef == add_integer_id && !node.links.empty();
+}
+
 float integer_predicate_condition_value(const string &nodedef, const int value1, const int value2)
 {
   if (is_conditional_with_integer_predicate(nodedef)) {
@@ -13744,9 +13785,11 @@ bool validate(const Graph &source,
       const char *name = node.nodedef == geompropvalue_integer_id ? "geomprop" : "varname";
       const auto geomprop = node.string_inputs.find(name);
       const auto output = node.outputs.find("out");
+      const bool word_leaf = is_integer_word_leaf(node);
       if (geomprop == node.string_inputs.end() || geomprop->second.empty() ||
           output == node.outputs.end() || output->second != Type::Integer ||
-          node.string_inputs.size() != 1 || node.outputs.size() != 1 || !node.links.empty() ||
+          (word_leaf ? !integer_word_leaf_descriptor_valid(node) : node.string_inputs.size() != 1) ||
+          node.outputs.size() != 1 || !node.links.empty() ||
           !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
@@ -13768,6 +13811,39 @@ bool validate(const Graph &source,
           !node.vector2_inputs.empty() || !node.vector3_inputs.empty() ||
           !node.vector4_inputs.empty() || !node.string_inputs.empty() ||
           !node.asset_inputs.empty())
+      {
+        return false;
+      }
+      continue;
+    }
+
+    if (is_varying_add_integer(node)) {
+      /* Batch 39: each operand is a literal XOR a link to an attested word leaf
+       * or another ND_add_integer (lowered on words; literal adds fold). */
+      const auto output = node.outputs.find("out");
+      const auto valid_operand = [&](const char *name) {
+        const bool literal = node.int_inputs.contains(name);
+        const auto link = node.links.find(name);
+        if (literal == (link != node.links.end())) {
+          return false;
+        }
+        if (literal) {
+          return true;
+        }
+        if (!validate_link(link->second, Type::Integer, *nodes_by_name)) {
+          return false;
+        }
+        const Node &source = *nodes_by_name->at(link->second.source_node);
+        return source.nodedef == add_integer_id || is_integer_word_leaf(source);
+      };
+      if (!valid_operand("in1") || !valid_operand("in2") ||
+          node.int_inputs.size() + node.links.size() != 2 || !node.inputs.empty() ||
+          output == node.outputs.end() || output->second != Type::Integer ||
+          node.outputs.size() != 1 || !node.color3_inputs.empty() ||
+          !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+          !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
         return false;
       }
@@ -15291,6 +15367,7 @@ ShaderOutput *lowered_output(const Link &link,
         (is_boolean_predicate_conditional(source.nodedef) &&
          boolean_predicate_conditional_output_type(source.nodedef) == Type::Integer)) {
       return (source.nodedef == constant_integer_id || is_integer_math(source.nodedef) ||
+              is_integer_word_leaf(source) ||
               source.nodedef == convert_boolean_integer_id || is_integer_result_conditional(source.nodedef) ||
               is_integer_predicate_conditional(source.nodedef) ||
               is_boolean_predicate_conditional(source.nodedef) ||
@@ -16641,6 +16718,104 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       lowered_nodes.emplace(node.name, attribute);
       continue;
     }
+    if (is_integer_word_leaf(node) || is_varying_add_integer(node)) {
+      /* Batch 39 (port of certified private host 1d8236a9, exact-words add):
+       * an Int32 never passes through one Float32. Each value is the pair
+       * (high, low), high = floor(v / 65536) in [-32768, 32767] and low in
+       * [0, 65535], both exact in Float32, exposed as "<name>.i32.high" /
+       * "<name>.i32.low" (MathNode "Value"). A word leaf reads the add-on's
+       * private float3 word attribute (x = high, y = low). A varying add sums
+       * the words: low_sum = l1 + l2 in [0, 131070], carry = low_sum > 65535,
+       * low = low_sum - 65536 carry, high = h1 + h2 + carry in [-65536, 65535],
+       * then wraps high into [-32768, 32767] (two's-complement Int32 add).
+       * Every intermediate is an integer below 2^18, so every step is exact.
+       * Operand words are wired in the connect pass. The typed Integer holder
+       * is metadata; Float consumers use ".float" = 65536 high + low, the
+       * single rounding of the completed sum. */
+      const auto make_math = [&](const string &suffix, const NodeMathType type) {
+        MathNode *math = graph->create_node<MathNode>();
+        math->name = node.name + suffix;
+        math->set_math_type(type);
+        math->set_use_clamp(false);
+        lowered_nodes.emplace(math->name, math);
+        return math;
+      };
+      if (is_integer_word_leaf(node)) {
+        AttributeNode *attribute = graph->create_node<AttributeNode>();
+        attribute->set_use_materialx_exact(true);
+        attribute->name = node.name;
+        attribute->set_attribute(ustring(node.string_inputs.at("mx_private_words_out")));
+        lowered_nodes.emplace(node.name, attribute);
+        SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+        separate->name = node.name + ".i32.separate";
+        lowered_nodes.emplace(separate->name, separate);
+        graph->connect(attribute->output("Vector"), separate->input("Vector"));
+        MathNode *high = make_math(".i32.high", NODE_MATH_ADD);
+        high->set_value2(0.0f);
+        graph->connect(separate->output("X"), high->input("Value1"));
+        MathNode *low = make_math(".i32.low", NODE_MATH_ADD);
+        low->set_value2(0.0f);
+        graph->connect(separate->output("Y"), low->input("Value1"));
+      }
+      else {
+        MagicTextureNode *integer = graph->create_node<MagicTextureNode>();
+        integer->name = node.name;
+        integer->set_depth(0);
+        lowered_nodes.emplace(node.name, integer);
+        for (const char *port : {"in1", "in2"}) {
+          if (const auto literal = node.int_inputs.find(port); literal != node.int_inputs.end()) {
+            const std::pair<float, float> split = integer_words(literal->second);
+            for (const auto &[part, value] :
+                 {std::pair{".high", split.first}, std::pair{".low", split.second}}) {
+              ValueNode *word = graph->create_node<ValueNode>();
+              word->name = node.name + ".i32." + port + part;
+              word->set_value(value);
+              lowered_nodes.emplace(word->name, word);
+            }
+          }
+        }
+        make_math(".i32.low_sum", NODE_MATH_ADD);
+        MathNode *carry = make_math(".i32.carry", NODE_MATH_GREATER_THAN);
+        carry->set_value2(65535.5f);
+        MathNode *carry_scaled = make_math(".i32.carry_scaled", NODE_MATH_MULTIPLY);
+        carry_scaled->set_value2(65536.0f);
+        graph->connect(lowered_nodes.at(node.name + ".i32.low_sum")->output("Value"),
+                       carry->input("Value1"));
+        graph->connect(carry->output("Value"), carry_scaled->input("Value1"));
+        MathNode *low = make_math(".i32.low", NODE_MATH_SUBTRACT);
+        graph->connect(lowered_nodes.at(node.name + ".i32.low_sum")->output("Value"),
+                       low->input("Value1"));
+        graph->connect(carry_scaled->output("Value"), low->input("Value2"));
+        MathNode *high_sum = make_math(".i32.high_sum", NODE_MATH_ADD);
+        MathNode *high_carry = make_math(".i32.high_carry", NODE_MATH_ADD);
+        graph->connect(high_sum->output("Value"), high_carry->input("Value1"));
+        graph->connect(carry->output("Value"), high_carry->input("Value2"));
+        MathNode *over = make_math(".i32.wrap_over", NODE_MATH_GREATER_THAN);
+        over->set_value2(32767.5f);
+        graph->connect(high_carry->output("Value"), over->input("Value1"));
+        MathNode *under = make_math(".i32.wrap_under", NODE_MATH_LESS_THAN);
+        under->set_value2(-32768.5f);
+        graph->connect(high_carry->output("Value"), under->input("Value1"));
+        MathNode *direction = make_math(".i32.wrap_direction", NODE_MATH_SUBTRACT);
+        graph->connect(under->output("Value"), direction->input("Value1"));
+        graph->connect(over->output("Value"), direction->input("Value2"));
+        MathNode *shift = make_math(".i32.wrap_shift", NODE_MATH_MULTIPLY);
+        shift->set_value2(65536.0f);
+        graph->connect(direction->output("Value"), shift->input("Value1"));
+        MathNode *high = make_math(".i32.high", NODE_MATH_ADD);
+        graph->connect(high_carry->output("Value"), high->input("Value1"));
+        graph->connect(shift->output("Value"), high->input("Value2"));
+      }
+      MathNode *scale = make_math(".i32.float_high", NODE_MATH_MULTIPLY);
+      scale->set_value2(65536.0f);
+      graph->connect(lowered_nodes.at(node.name + ".i32.high")->output("Value"),
+                     scale->input("Value1"));
+      MathNode *as_float = make_math(".float", NODE_MATH_ADD);
+      graph->connect(scale->output("Value"), as_float->input("Value1"));
+      graph->connect(lowered_nodes.at(node.name + ".i32.low")->output("Value"),
+                     as_float->input("Value2"));
+      continue;
+    }
     if (is_integer_math(node.nodedef) && node.links.contains("in")) {
       /* The typed Integer socket holder remains metadata. Runtime consumers
        * use lowered_output's existing .float route, now driven by the Float link. */
@@ -16884,6 +17059,29 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         int integer = 0;
         if (const auto link = node.links.find(operand); link != node.links.end()) {
           const Node &source_node = *nodes_by_name.at(link->second.source_node);
+          /* Batch 39: a word leaf or varying ND_add_integer producer exposes its
+           * exact words; a literal ND_add_integer folds (wrapped) to words. */
+          const auto high = lowered_nodes.find(link->second.source_node + ".i32.high");
+          const auto low = lowered_nodes.find(link->second.source_node + ".i32.low");
+          if ((is_integer_word_leaf(source_node) || is_varying_add_integer(source_node)) &&
+              high != lowered_nodes.end() && low != lowered_nodes.end())
+          {
+            return {high->second->output("Value"), low->second->output("Value")};
+          }
+          if (source_node.nodedef == add_integer_id && source_node.links.empty() &&
+              integer_math_literal_result(source_node, &integer))
+          {
+            const std::pair<float, float> split = integer_words(integer);
+            ValueNode *high_value = graph->create_node<ValueNode>();
+            high_value->name = node.name + ".i32." + operand + ".high";
+            high_value->set_value(split.first);
+            lowered_nodes.emplace(high_value->name, high_value);
+            ValueNode *low_value = graph->create_node<ValueNode>();
+            low_value->name = node.name + ".i32." + operand + ".low";
+            low_value->set_value(split.second);
+            lowered_nodes.emplace(low_value->name, low_value);
+            return {high_value->output("Value"), low_value->output("Value")};
+          }
           const char *literal_port = source_node.nodedef == constant_integer_id ? "value" :
                                      source_node.nodedef == dot_integer_id      ? "in" :
                                                                                   nullptr;
@@ -26700,6 +26898,23 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
   }
 
   for (const Node &node : source.nodes) {
+    if (is_varying_add_integer(node)) {
+      /* Batch 39: feed the word carry network (see lower()) from each operand's
+       * exact words: a literal's split ValueNodes or the producer's ".i32.*". */
+      const auto word = [&](const char *port, const char *part) {
+        const auto link = node.links.find(port);
+        const string prefix = link == node.links.end() ? node.name + ".i32." + port :
+                                                         link->second.source_node + ".i32";
+        return lowered_nodes.at(prefix + "." + part)->output("Value");
+      };
+      ShaderNode *low_sum = lowered_nodes.at(node.name + ".i32.low_sum");
+      ShaderNode *high_sum = lowered_nodes.at(node.name + ".i32.high_sum");
+      graph->connect(word("in1", "low"), low_sum->input("Value1"));
+      graph->connect(word("in2", "low"), low_sum->input("Value2"));
+      graph->connect(word("in1", "high"), high_sum->input("Value1"));
+      graph->connect(word("in2", "high"), high_sum->input("Value2"));
+      continue;
+    }
     if (node.nodedef == hextiledimage_color3_id || node.nodedef == hextiledimage_color4_id ||
         (node.nodedef == hextilednormalmap_vector3_id && node.links.contains("texcoord")))
     {

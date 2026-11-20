@@ -34630,6 +34630,10 @@ class Batch38FoldGraph : public ShaderGraph {
  * (no constant folding needed). Unknown node kinds fail the test by name. */
 float3 batch38_eval(ShaderOutput *output);
 
+/* Batch 39: per-shading-point attribute values (by attribute name) for
+ * AttributeNode; null outside the batch-39 tests. */
+const std::map<string, float3> *batch39_attributes = nullptr;
+
 float3 batch38_input(ShaderNode *node, const char *name)
 {
   ShaderInput *input = node->input(name);
@@ -34665,6 +34669,18 @@ float3 batch38_eval(ShaderOutput *output)
 {
   ShaderNode *node = output->parent;
   const string socket = output->name().string();
+  if (auto *attribute = dynamic_cast<AttributeNode *>(node); attribute && batch39_attributes) {
+    const auto found = batch39_attributes->find(attribute->get_attribute().string());
+    const bool present = found != batch39_attributes->end();
+    const float3 value = present ? found->second :
+                         attribute->get_use_fallback() ? attribute->get_fallback_color() :
+                                                         zero_float3();
+    if (socket == "Alpha") {
+      return make_float3(present ? 1.0f :
+                         attribute->get_use_fallback() ? attribute->get_fallback_alpha() : 0.0f);
+    }
+    return socket == "Fac" ? make_float3(value.x) : value;
+  }
   if (auto *math = dynamic_cast<MathNode *>(node)) {
     const float a = batch38_scalar(node, "Value1");
     const float b = batch38_scalar(node, "Value2");
@@ -50500,6 +50516,315 @@ TEST(materialx_usdshade_reader, mix_surfaceshader_admits_unit_opacity_open_pbr_o
   ASSERT_NE(fg_bsdf, nullptr);
   EXPECT_FLOAT_EQ(bg_bsdf->get_metallic(), 1.0f);
   EXPECT_EQ(fg_bsdf->get_base_color(), make_float3(1.0f, 0.0f, 0.0f));
+}
+
+
+namespace {
+
+/* Batch 39: the add-on's private Int32 projection (native_cycles_i21_projection)
+ * words: high = v >> 16 (floor), low = v & 0xFFFF. */
+float3 batch39_words(const int value)
+{
+  return make_float3(float(value >> 16), float(value & 0xFFFF), 0.0f);
+}
+
+int batch39_wrap_add(const int a, const int b)
+{
+  return int32_t(uint32_t(a) + uint32_t(b));
+}
+
+/* Certified b41x bsai add_integer contract graph (add-integer-current-public-v2 /
+ * add-integer-overflow-full-v4): the sum under test is observed only through
+ * three ND_ifequal_floatI masks against the private-word bounds lower (== sum),
+ * upper (== sum, operand order swapped) and negative (sum +- 1); expected mask
+ * (1, 1, 0). Varying operands carry the projection's leaf descriptor. */
+struct Batch39AddIntegerContract {
+  enum Kind { LITERAL, CONSTANT, DEFAULT, VARYING, NESTED_VARYING };
+  Batch38EmissionProbe probe;
+  pxr::SdfValueTypeName integer = pxr::SdfValueTypeNames->Int;
+  pxr::UsdShadeShader add;
+  std::map<string, string> aliases;
+
+  static string sha(const char digit)
+  {
+    return string(64, digit);
+  }
+
+  pxr::UsdShadeShader word_reader(const char *name, const char *geomprop, const bool leaf)
+  {
+    pxr::UsdShadeShader reader = probe.shader(name, "ND_geompropvalue_integer", integer);
+    reader.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+        .Set(string(geomprop));
+    reader.CreateInput(pxr::TfToken("default"), integer).Set(0);
+    const string alias = string("__mx_private_i32_words_") + geomprop;
+    aliases[geomprop] = alias;
+    if (leaf) {
+      const pxr::SdfValueTypeName text = pxr::SdfValueTypeNames->String;
+      reader.CreateInput(pxr::TfToken("mx_private_words_out"), text).Set(alias);
+      reader.CreateInput(pxr::TfToken("mx_public_geomprop_out"), text).Set(string(geomprop));
+      reader.CreateInput(pxr::TfToken("mx_public_graph_sha256"), text).Set(sha('a'));
+      reader.CreateInput(pxr::TfToken("mx_projection_descriptor_sha256"), text).Set(sha('b'));
+    }
+    return reader;
+  }
+
+  pxr::UsdShadeShader mask(const char *name, const char *bound, const bool bound_first)
+  {
+    pxr::UsdShadeShader predicate = probe.shader(name, "ND_ifequal_floatI",
+                                                 pxr::SdfValueTypeNames->Float);
+    predicate.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    predicate.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    pxr::UsdShadeShader reader = word_reader((string("Bound_") + name).c_str(), bound, false);
+    const char *bound_port = bound_first ? "value1" : "value2";
+    predicate.CreateInput(pxr::TfToken(bound_first ? "value2" : "value1"), integer)
+        .ConnectToSource(add.GetOutput(pxr::TfToken("out")));
+    predicate.CreateInput(pxr::TfToken(bound_port), integer)
+        .ConnectToSource(reader.GetOutput(pxr::TfToken("out")));
+    const pxr::SdfValueTypeName text = pxr::SdfValueTypeNames->String;
+    predicate.CreateInput(pxr::TfToken(string("mx_private_words_") + bound_port), text)
+        .Set(aliases.at(bound));
+    predicate.CreateInput(pxr::TfToken(string("mx_public_geomprop_") + bound_port), text)
+        .Set(string(bound));
+    predicate.CreateInput(pxr::TfToken("mx_public_graph_sha256"), text).Set(sha('a'));
+    predicate.CreateInput(pxr::TfToken("mx_projection_descriptor_sha256"), text).Set(sha('c'));
+    return predicate;
+  }
+
+  pxr::UsdShadeOutput leaf_out(const char *name, const char *geomprop)
+  {
+    return word_reader(name, geomprop, true).GetOutput(pxr::TfToken("out"));
+  }
+
+  Batch39AddIntegerContract(const Kind kind, const int in1, const int in2)
+  {
+    add = probe.shader("UnderTest", "ND_add_integer", integer);
+    if (kind == LITERAL) {
+      add.CreateInput(pxr::TfToken("in1"), integer).Set(in1);
+      add.CreateInput(pxr::TfToken("in2"), integer).Set(in2);
+    }
+    else if (kind == CONSTANT) {
+      add.CreateInput(pxr::TfToken("in1"), integer)
+          .ConnectToSource(probe.constant_integer("K_in1", in1).GetOutput(pxr::TfToken("out")));
+      add.CreateInput(pxr::TfToken("in2"), integer)
+          .ConnectToSource(probe.constant_integer("K_in2", in2).GetOutput(pxr::TfToken("out")));
+    }
+    else if (kind == VARYING) {
+      add.CreateInput(pxr::TfToken("in1"), integer)
+          .ConnectToSource(leaf_out("V_in1", "math_varying_in1"));
+      add.CreateInput(pxr::TfToken("in2"), integer)
+          .ConnectToSource(leaf_out("V_in2", "math_varying_in2"));
+    }
+    else if (kind == NESTED_VARYING) {
+      /* in1 = math_varying_in1 + math_varying_in3 (an inner varying add). */
+      pxr::UsdShadeShader inner = probe.shader("Inner", "ND_add_integer", integer);
+      inner.CreateInput(pxr::TfToken("in1"), integer)
+          .ConnectToSource(leaf_out("V_in1", "math_varying_in1"));
+      inner.CreateInput(pxr::TfToken("in2"), integer)
+          .ConnectToSource(leaf_out("V_in3", "math_varying_in3"));
+      add.CreateInput(pxr::TfToken("in1"), integer)
+          .ConnectToSource(inner.GetOutput(pxr::TfToken("out")));
+      add.CreateInput(pxr::TfToken("in2"), integer)
+          .ConnectToSource(leaf_out("V_in2", "math_varying_in2"));
+    }
+    /* DEFAULT: in1/in2 unauthored (NodeDef default 0). */
+    pxr::UsdShadeShader rgb = probe.shader("MaskRGB", "ND_combine3_color3",
+                                           pxr::SdfValueTypeNames->Color3f);
+    const struct {
+      const char *port, *name, *bound;
+      bool bound_first;
+    } masks[] = {{"in1", "MaskLower", "math_varying_bound_lower", false},
+                 {"in2", "MaskUpper", "math_varying_bound_upper", true},
+                 {"in3", "MaskNegative", "math_varying_bound_negative", false}};
+    for (const auto &item : masks) {
+      rgb.CreateInput(pxr::TfToken(item.port), pxr::SdfValueTypeNames->Float)
+          .ConnectToSource(
+              mask(item.name, item.bound, item.bound_first).GetOutput(pxr::TfToken("out")));
+    }
+    probe.observe_color3(rgb);
+  }
+};
+
+/* Word attributes of one certified region: operands and the exact wrapped sum
+ * as the three bounds (negative = sum + 1, or sum - 1 at INT_MAX). */
+std::map<string, float3> batch39_region(const int in1, const int in2, const int in3 = 0)
+{
+  const int sum = batch39_wrap_add(batch39_wrap_add(in1, in3), in2);
+  const int negative = sum == INT_MAX ? sum - 1 : sum + 1;
+  const string p = "__mx_private_i32_words_";
+  return {{p + "math_varying_in1", batch39_words(in1)},
+          {p + "math_varying_in2", batch39_words(in2)},
+          {p + "math_varying_in3", batch39_words(in3)},
+          {p + "math_varying_bound_lower", batch39_words(sum)},
+          {p + "math_varying_bound_upper", batch39_words(sum)},
+          {p + "math_varying_bound_negative", batch39_words(negative)}};
+}
+
+bool batch39_ends_with(const string &name, const char *suffix)
+{
+  const size_t n = strlen(suffix);
+  return name.size() > n && name.compare(name.size() - n, n, suffix) == 0;
+}
+
+}  // namespace
+
+/* Batch 39 port (certified private host 1d8236a9 exact-words add + overflow wrap):
+ * all 13 certified ND_add_integer contracts (b41x bsai: K x3, D, V, B_precision,
+ * B_endpoints, B_cancellation, WRAP L/K max+1 and min-1, WRAP V_three_wraps) with
+ * their certified operand sets, read -> lower -> CPU interpretation of the
+ * unfolded lowered network with the projection's word attributes per region.
+ * Every region must give mask (1, 1, 0): the sum equals its bound exactly and
+ * differs from bound +- 1, across the full Int32 range including wraparound. */
+TEST(materialx_usdshade_reader, add_integer_certified_contracts_exact_words)
+{
+  using Contract = Batch39AddIntegerContract;
+  const int MIN = INT_MIN, MAX = INT_MAX;
+  const struct {
+    const char *id;
+    Contract::Kind kind;
+    std::vector<std::pair<int, int>> regions;
+  } cases[] = {
+      {"K:sample0", Contract::CONSTANT, {{7, 3}}},
+      {"K:sample1", Contract::CONSTANT, {{-4, 9}}},
+      {"K:sample2", Contract::CONSTANT, {{0, -5}}},
+      {"D:sample0", Contract::DEFAULT, {{0, 0}}},
+      {"V:sample0", Contract::VARYING, {{-7, 3}, {0, 0}, {9, -4}}},
+      {"B_precision", Contract::VARYING,
+       {{16777216, 1}, {16777217, -16777216}, {-16777217, 16777216}}},
+      {"B_endpoints", Contract::VARYING, {{2147483646, 0}, {MIN, 0}, {MAX, -2147483647}}},
+      {"B_cancellation", Contract::VARYING, {{MAX, -1}, {MIN, 1}, {MAX, MIN}}},
+      {"WRAP:L_max_plus_one", Contract::LITERAL, {{MAX, 1}}},
+      {"WRAP:L_min_minus_one", Contract::LITERAL, {{MIN, -1}}},
+      {"WRAP:K_max_plus_one", Contract::CONSTANT, {{MAX, 1}}},
+      {"WRAP:K_min_minus_one", Contract::CONSTANT, {{MIN, -1}}},
+      {"WRAP:V_three_wraps", Contract::VARYING, {{MAX, 1}, {MIN, -1}, {MAX, MAX}}},
+  };
+  int contracts = 0;
+  for (const auto &test : cases) {
+    SCOPED_TRACE(test.id);
+    const bool varying = test.kind == Contract::VARYING;
+    Contract contract(test.kind,
+                      varying ? 0 : test.regions[0].first,
+                      varying ? 0 : test.regions[0].second);
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(contract.probe.material, &graph, &error)) << error;
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    EmissionNode *emission = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      if (auto *found = dynamic_cast<EmissionNode *>(node)) {
+        emission = found;
+      }
+    }
+    ASSERT_NE(emission, nullptr);
+    for (const auto &[in1, in2] : test.regions) {
+      SCOPED_TRACE(std::to_string(in1) + " + " + std::to_string(in2));
+      const std::map<string, float3> attributes = batch39_region(in1, in2);
+      batch39_attributes = &attributes;
+      const float3 color = batch38_input(emission, "Color");
+      batch39_attributes = nullptr;
+      EXPECT_EQ(color.x, 1.0f);
+      EXPECT_EQ(color.y, 1.0f);
+      EXPECT_EQ(color.z, 0.0f);
+    }
+    contracts++;
+  }
+  EXPECT_EQ(contracts, 13);
+}
+
+/* Batch 39: the varying word network over an Int32 edge battery (both operand
+ * orders, carries, high-word wraps at both ends), read directly from the add's
+ * exact words and its single-rounding ".float" route; a nested varying add
+ * (wraps through two adds); a reader without the projection's leaf descriptor
+ * and a leaf with a nonzero default stay refused. */
+TEST(materialx_usdshade_reader, add_integer_varying_words_edge_battery)
+{
+  using Contract = Batch39AddIntegerContract;
+  const int edges[] = {INT_MIN, INT_MIN + 1, -16777217, -65537, -65536,      -65535,
+                       -32768,  -1,          0,         1,      32767,       65535,
+                       65536,   65537,       16777216,  16777217, INT_MAX - 1, INT_MAX};
+  for (const Contract::Kind kind : {Contract::VARYING, Contract::NESTED_VARYING}) {
+    SCOPED_TRACE(kind == Contract::VARYING ? "varying" : "nested varying");
+    Contract contract(kind, 0, 0);
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(contract.probe.material, &graph, &error)) << error;
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    /* Each mask reads the add through its own operand reader: check every copy. */
+    std::vector<ShaderNode *> highs, lows, floats;
+    EmissionNode *emission = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      const string name = node->name.string();
+      if (name.rfind("UnderTest", 0) == 0 && batch39_ends_with(name, ".i32.high")) {
+        highs.push_back(node);
+      }
+      if (name.rfind("UnderTest", 0) == 0 && batch39_ends_with(name, ".i32.low")) {
+        lows.push_back(node);
+      }
+      if (name.rfind("UnderTest", 0) == 0 && batch39_ends_with(name, ".float")) {
+        floats.push_back(node);
+      }
+      if (auto *found = dynamic_cast<EmissionNode *>(node)) {
+        emission = found;
+      }
+    }
+    ASSERT_FALSE(highs.empty());
+    ASSERT_EQ(highs.size(), lows.size());
+    ASSERT_EQ(highs.size(), floats.size());
+    ASSERT_NE(emission, nullptr);
+    int checked = 0;
+    for (const int a : edges) {
+      for (const int b : edges) {
+        const int c = kind == Contract::NESTED_VARYING ? (a ^ b) : 0;
+        const int sum = batch39_wrap_add(batch39_wrap_add(a, c), b);
+        const std::map<string, float3> attributes = batch39_region(a, b, c);
+        batch39_attributes = &attributes;
+        for (size_t i = 0; i < highs.size(); i++) {
+          EXPECT_EQ(batch38_eval(highs[i]->output("Value")).x, float(sum >> 16))
+              << a << " + " << c << " + " << b;
+          EXPECT_EQ(batch38_eval(lows[i]->output("Value")).x, float(sum & 0xFFFF))
+              << a << " + " << c << " + " << b;
+          EXPECT_EQ(batch38_eval(floats[i]->output("Value")).x, float(sum));
+        }
+        const float3 color = batch38_input(emission, "Color");
+        batch39_attributes = nullptr;
+        EXPECT_EQ(color.x, 1.0f) << a << " + " << c << " + " << b;
+        EXPECT_EQ(color.y, 1.0f) << a << " + " << c << " + " << b;
+        EXPECT_EQ(color.z, 0.0f) << a << " + " << c << " + " << b;
+        checked++;
+      }
+    }
+    EXPECT_EQ(checked, int(std::size(edges) * std::size(edges)));
+  }
+
+  /* No leaf descriptor: the operand would reach Cycles as one Float32. */
+  {
+    Batch38EmissionProbe probe;
+    const pxr::SdfValueTypeName integer = pxr::SdfValueTypeNames->Int;
+    pxr::UsdShadeShader add = probe.shader("Add", "ND_add_integer", integer);
+    pxr::UsdShadeShader reader = probe.shader("Reader", "ND_geompropvalue_integer", integer);
+    reader.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+        .Set(string("math_varying_in1"));
+    add.CreateInput(pxr::TfToken("in1"), integer)
+        .ConnectToSource(reader.GetOutput(pxr::TfToken("out")));
+    add.CreateInput(pxr::TfToken("in2"), integer).Set(1);
+    probe.observe_integer(add);
+    float3 color;
+    string error;
+    EXPECT_FALSE(probe.evaluate(&color, &error));
+  }
+  /* A leaf with a nonzero default is refused: an absent source reads words (0, 0). */
+  {
+    Contract nonzero(Contract::VARYING, 0, 0);
+    pxr::UsdShadeShader leaf = pxr::UsdShadeShader::Get(
+        nonzero.probe.stage, nonzero.probe.material.GetPath().AppendChild(pxr::TfToken("V_in1")));
+    ASSERT_TRUE(leaf);
+    leaf.GetInput(pxr::TfToken("default")).Set(5);
+    materialx::Graph graph;
+    string error;
+    EXPECT_FALSE(materialx::read_usdshade_graph(nonzero.probe.material, &graph, &error));
+  }
 }
 
 CCL_NAMESPACE_END

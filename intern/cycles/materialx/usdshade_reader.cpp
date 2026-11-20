@@ -9483,6 +9483,42 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
         *graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     attribute.nodedef = nodedef;
     attribute.string_inputs[input_name] = value;
+    if (source_shader.GetInput(pxr::TfToken("mx_private_words_out"))) {
+      /* Batch 39 (lineage: certified private host 1d8236a9): an ND_add_integer
+       * leaf the add-on's private Int32 projection attests
+       * (native_cycles_i21_projection _integer_add_plan) is read from its exact
+       * 16-bit word attribute, the batch-13 transport. The projection creates
+       * no word attribute where the source is absent, which reads (0, 0), so
+       * only the NodeDef default 0 is exact there. */
+      for (const char *key : {"mx_private_words_out",
+                              "mx_public_geomprop_out",
+                              "mx_public_graph_sha256",
+                              "mx_projection_descriptor_sha256"})
+      {
+        const pxr::UsdShadeInput field = source_shader.GetInput(pxr::TfToken(key));
+        string text;
+        if (!field || field.GetTypeName() != pxr::SdfValueTypeNames->String ||
+            field.GetAttr().GetNumTimeSamples() != 0 || field.HasConnectedSource() ||
+            composed_connection_count(field.GetAttr()) != 0 || !field.Get(&text) || text.empty())
+        {
+          set_error(error_message, nodedef + " has an invalid private Int32 word leaf descriptor");
+          return finish(false);
+        }
+        attribute.string_inputs[key] = text;
+      }
+      if (attribute.string_inputs.at("mx_public_geomprop_out") != value ||
+          attribute.string_inputs.at("mx_private_words_out").rfind("__mx_private_i32_words_", 0) != 0)
+      {
+        set_error(error_message, nodedef + " private Int32 word leaf owner/name mismatch");
+        return finish(false);
+      }
+      if (attribute.fallback_int_inputs.contains("out") && attribute.fallback_int_inputs.at("out") != 0)
+      {
+        set_error(error_message, nodedef + " private Int32 word leaf requires default 0");
+        return finish(false);
+      }
+      attribute.fallback_int_inputs.erase("out");
+    }
     attribute.outputs["out"] = Type::Integer;
     *result = {attribute.name, "out", Type::Integer};
     emitted_shaders->emplace(shader_path, attribute.name);
@@ -9509,8 +9545,8 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
       /* Batch 38 (lineage: certified private host 1d8236a9, add-wrap-shapes-disconnect
        * reader): absent or unvalued operands are the NodeDef default 0, a connected
        * operand folds a direct static ND_constant_integer or an all-literal
-       * ND_add_integer, and the Int32 sum wraps (two's complement). Connected
-       * varying operands are not lowered here. */
+       * ND_add_integer, and the Int32 sum wraps (two's complement). Batch 39:
+       * attested private Int32 word leaves and varying adds stay linked. */
       for (const auto &port : source_shader.GetInputs()) {
         const string port_name = port.GetBaseName().GetString();
         if (port_name != "in1" && port_name != "in2") {
@@ -9546,28 +9582,58 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
             }
             continue;
           }
+          /* Batch 39: a varying operand is an attested private Int32 word leaf
+           * (ND_geompropvalue_integer / ND_UsdPrimvarReader_integer carrying
+           * "mx_private_words_out") or a varying ND_add_integer over them; it
+           * stays linked and lowers to the exact word carry network. */
+          const string producer_name = producer_id.GetString();
           Link link;
-          if (producer_id.GetString() != add_integer_id ||
+          if ((producer_name != add_integer_id && producer_name != geompropvalue_integer_id &&
+               producer_name != usd_primvar_reader_integer_id && producer_name != dot_integer_id) ||
               !read_integer_output(operand, graph, &link, active_shaders, emitted_shaders,
                                    depth + 1, error_message))
           {
             set_error(error_message,
                       nodedef + " connected '" + name +
-                          "' must be a static ND_constant_integer or literal ND_add_integer");
+                          "' must be a static ND_constant_integer, ND_add_integer or attested "
+                          "private Int32 word reader");
             return finish(false);
           }
           bool folded = false;
+          bool linked = false;
           for (const Node &upstream : graph->nodes) {
-            if (upstream.name == link.source_node && upstream.nodedef == add_integer_id &&
-                upstream.links.empty())
-            {
+            if (upstream.name != link.source_node) {
+              continue;
+            }
+            if (upstream.nodedef == add_integer_id && upstream.links.empty()) {
               folded = integer_add_wrap(upstream.int_inputs.at("in1"),
                                         upstream.int_inputs.at("in2"),
                                         &integer.int_inputs[name]);
             }
+            else if (upstream.nodedef == constant_integer_id && upstream.links.empty()) {
+              integer.int_inputs[name] = upstream.int_inputs.contains("value") ?
+                                             upstream.int_inputs.at("value") :
+                                             0;
+              folded = true;
+            }
+            else if (upstream.nodedef == add_integer_id ||
+                     ((upstream.nodedef == geompropvalue_integer_id ||
+                       upstream.nodedef == usd_primvar_reader_integer_id) &&
+                      upstream.string_inputs.contains("mx_private_words_out")))
+            {
+              linked = true;
+            }
+            break;
+          }
+          if (linked) {
+            integer.int_inputs.erase(name);
+            integer.links[name] = link;
+            continue;
           }
           if (!folded) {
-            set_error(error_message, nodedef + " connected '" + name + "' did not fold");
+            set_error(error_message,
+                      nodedef + " connected '" + name +
+                          "' is neither foldable nor an attested private Int32 word operand");
             return finish(false);
           }
           continue;
