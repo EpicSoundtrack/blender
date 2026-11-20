@@ -8929,6 +8929,121 @@ TEST(materialx_usdshade_reader, reads_and_lowers_non_matrix_switch_defaults)
   ASSERT_NE(dynamic_cast<TextureCoordinateNode *>(nodes["SwitchMatrix33I"]), nullptr);
 }
 
+TEST(materialx_usdshade_reader, linked_switch_selector_expands_to_runtime_ifgreater_chain)
+{
+  /* A connected 'which' selects in<k> for the smallest k > which (zero for
+   * which >= 10). The reader expands it into ND_ifgreater_<type> s1..s10 with a
+   * float compare; ND_switch_*I reaches it through ND_convert_integer_float. */
+  struct SwitchCase {
+    const char *name;
+    const char *nodedef;
+    pxr::SdfValueTypeName type;
+    materialx::Type output_type;
+    const char *select_id;
+  };
+  const SwitchCase cases[] = {
+      {"SwitchFloat", "ND_switch_float", pxr::SdfValueTypeNames->Float, materialx::Type::Float, "ND_ifgreater_float"},
+      {"SwitchFloatI", "ND_switch_floatI", pxr::SdfValueTypeNames->Float, materialx::Type::Float, "ND_ifgreater_float"},
+      {"SwitchColor3I", "ND_switch_color3I", pxr::SdfValueTypeNames->Color3f, materialx::Type::Color3, "ND_ifgreater_color3"},
+      {"SwitchColor4I", "ND_switch_color4I", pxr::SdfValueTypeNames->Color4f, materialx::Type::Color4, "ND_ifgreater_color4"},
+      {"SwitchVector2I", "ND_switch_vector2I", pxr::SdfValueTypeNames->Float2, materialx::Type::Vector2, "ND_ifgreater_vector2"},
+      {"SwitchVector3I", "ND_switch_vector3I", pxr::SdfValueTypeNames->Float3, materialx::Type::Vector3, "ND_ifgreater_vector3"},
+      {"SwitchVector4I", "ND_switch_vector4I", pxr::SdfValueTypeNames->Float4, materialx::Type::Vector4, "ND_ifgreater_vector4"}};
+  for (const SwitchCase &test_case : cases) {
+    SCOPED_TRACE(test_case.nodedef);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/LinkedSwitch"));
+    const auto shader = [&](const char *name, const char *id, const pxr::SdfValueTypeName &type) {
+      pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+          stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+      result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      result.CreateOutput(pxr::TfToken("out"), type);
+      return result;
+    };
+    const bool integer = string(test_case.nodedef).back() == 'I';
+    pxr::UsdShadeShader which = integer ?
+        shader("Which", "ND_constant_integer", pxr::SdfValueTypeNames->Int) :
+        shader("Which", "ND_constant_float", pxr::SdfValueTypeNames->Float);
+    if (integer) {
+      which.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(2);
+    }
+    else {
+      which.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(2.5f);
+    }
+    pxr::UsdShadeShader arm = shader("Arm", "ND_constant_float", pxr::SdfValueTypeNames->Float);
+    arm.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(0.75f);
+    pxr::UsdShadeShader switch_node = shader(test_case.name, test_case.nodedef, test_case.type);
+    ASSERT_TRUE(switch_node.CreateInput(pxr::TfToken("which"), integer ? pxr::SdfValueTypeNames->Int :
+                                                                         pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(which.ConnectableAPI(), pxr::TfToken("out")));
+    if (test_case.output_type == materialx::Type::Float) {
+      ASSERT_TRUE(switch_node.CreateInput(pxr::TfToken("in3"), pxr::SdfValueTypeNames->Float)
+                      .ConnectToSource(arm.ConnectableAPI(), pxr::TfToken("out")));
+      switch_node.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Float).Set(0.125f);
+    }
+    else if (test_case.output_type == materialx::Type::Color3) {
+      switch_node.CreateInput(pxr::TfToken("in3"), test_case.type).Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+    }
+    else if (test_case.output_type == materialx::Type::Color4 ||
+             test_case.output_type == materialx::Type::Vector4) {
+      switch_node.CreateInput(pxr::TfToken("in3"), test_case.type).Set(pxr::GfVec4f(0.25f, 0.5f, 0.75f, 1.0f));
+    }
+    else if (test_case.output_type == materialx::Type::Vector2) {
+      switch_node.CreateInput(pxr::TfToken("in3"), test_case.type).Set(pxr::GfVec2f(0.25f, 0.5f));
+    }
+    else {
+      switch_node.CreateInput(pxr::TfToken("in3"), test_case.type).Set(pxr::GfVec3f(0.25f, 0.5f, 0.75f));
+    }
+    pxr::UsdShadeShader surface = shader(
+        "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken(test_case.name), test_case.type)
+                    .ConnectToSource(switch_node.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    vector<materialx::SelectedOutput> selected = {
+        {switch_node.GetPath().GetString(), test_case.nodedef, "out", test_case.output_type}};
+    materialx::Graph source;
+    vector<materialx::Link> outputs;
+    string error;
+    ASSERT_TRUE(materialx::resolve_manifest_outputs(material, "mtlx", selected, &source, &outputs, &error))
+        << error;
+    ASSERT_EQ(outputs.size(), 1u);
+    std::unordered_map<string, const materialx::Node *> by_name;
+    size_t selects = 0;
+    for (const materialx::Node &node : source.nodes) {
+      by_name[node.name] = &node;
+      selects += node.nodedef == test_case.select_id;
+    }
+    EXPECT_EQ(selects, 10u);
+    const materialx::Node *s1 = by_name[outputs[0].source_node];
+    ASSERT_NE(s1, nullptr);
+    EXPECT_EQ(s1->nodedef, test_case.select_id);
+    EXPECT_FLOAT_EQ(s1->inputs.at("value1"), 1.0f);
+    ASSERT_TRUE(s1->links.contains("value2"));
+    ASSERT_TRUE(s1->links.contains("in2"));
+    const materialx::Node *which_source = by_name[s1->links.at("value2").source_node];
+    ASSERT_NE(which_source, nullptr);
+    EXPECT_EQ(which_source->nodedef, integer ? "ND_convert_integer_float" : "ND_constant_float");
+    /* Follow the chain: s2 .. s10, each comparing k > which. */
+    const materialx::Node *current = s1;
+    for (int index = 2; index <= 10; index++) {
+      ASSERT_TRUE(current->links.contains("in2")) << index;
+      current = by_name[current->links.at("in2").source_node];
+      ASSERT_NE(current, nullptr) << index;
+      EXPECT_EQ(current->nodedef, test_case.select_id);
+      EXPECT_FLOAT_EQ(current->inputs.at("value1"), float(index));
+      EXPECT_EQ(current->links.at("value2").source_node, s1->links.at("value2").source_node);
+      if (index == 3 && test_case.output_type == materialx::Type::Float) {
+        ASSERT_TRUE(current->links.contains("in1"));
+      }
+    }
+    EXPECT_FALSE(current->links.contains("in2"));
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+  }
+}
+
 TEST(materialx_usdshade_reader, reads_and_lowers_contrast_adjustment_defaults)
 {
   /* stdlib_defs.mtlx gives every contrast input a literal default.  Missing

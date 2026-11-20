@@ -4737,6 +4737,16 @@ bool read_conditional_value_operand(const pxr::UsdShadeShader &shader,
                                     int depth,
                                     string *error_message);
 
+bool read_linked_switch_output(const pxr::UsdShadeShader &shader,
+                               const string &nodedef,
+                               Type type,
+                               Graph *graph,
+                               Node *node,
+                               string *error_message,
+                               std::unordered_set<string> *active_vector4_shaders,
+                               std::unordered_map<string, string> *emitted_vector4_shaders,
+                               int depth);
+
 bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
                                 const string &nodedef,
                                 Type type,
@@ -19332,6 +19342,171 @@ bool read_conditional_value_operand(const pxr::UsdShadeShader &shader,
   return true;
 }
 
+/* A connected 'which' (ND_switch_*, ND_switch_*I; not matrix) selects at shader
+ * evaluation. MaterialX switch returns in<k> for the smallest k in 1..10 with
+ * k > which, and the zero default when which >= 10 (stdlib_defs.mtlx; the same
+ * rule as selected_switch_input_index_from_*). Expand it in place into the
+ * equivalent chain of float-predicate ND_ifgreater_<type> nodes,
+ *   s10 = ifgreater(10, which, in10, 0), sk = ifgreater(k, which, ink, s(k+1)),
+ * with the switch node itself becoming s1. An integer 'which' reaches the float
+ * compare through ND_convert_integer_float, which is exact around every
+ * threshold. Unauthored arms take their typed zero default. */
+bool read_linked_switch_output(const pxr::UsdShadeShader &shader,
+                               const string &nodedef,
+                               const Type type,
+                               Graph *graph,
+                               Node *node,
+                               string *error_message,
+                               std::unordered_set<string> *active_vector4_shaders,
+                               std::unordered_map<string, string> *emitted_vector4_shaders,
+                               const int depth)
+{
+  const bool integer_selector = switch_uses_integer_selector(nodedef);
+  const pxr::UsdShadeInput selector = shader.GetInput(pxr::TfToken("which"));
+  if (graph == nullptr || depth > 64 ||
+      selector.GetTypeName() !=
+          (integer_selector ? pxr::SdfValueTypeNames->Int : pxr::SdfValueTypeNames->Float) ||
+      selector.GetAttr().GetNumTimeSamples() != 0)
+  {
+    set_error(error_message, nodedef + " requires a correctly typed connected input 'which'");
+    return false;
+  }
+  for (const pxr::UsdShadeInput &input : shader.GetInputs()) {
+    const string name = input.GetBaseName().GetString();
+    bool known = name == "which";
+    for (int index = 1; index <= 10 && !known; index++) {
+      known = name == switch_input_name(index);
+    }
+    if (!known) {
+      set_error(error_message, nodedef + " has unsupported input '" + name + "'");
+      return false;
+    }
+  }
+  const pxr::SdfValueTypeName expected_type = type == Type::Float ? pxr::SdfValueTypeNames->Float :
+                                           type == Type::Color3 ? pxr::SdfValueTypeNames->Color3f :
+                                           type == Type::Color4 ? pxr::SdfValueTypeNames->Color4f :
+                                           type == Type::Vector2 ? pxr::SdfValueTypeNames->Float2 :
+                                           type == Type::Vector3 ? pxr::SdfValueTypeNames->Float3 :
+                                                                  pxr::SdfValueTypeNames->Float4;
+  const pxr::UsdShadeOutput output = shader.GetOutput(pxr::TfToken("out"));
+  if (!output || !usd_value_types_match(output.GetTypeName(), expected_type)) {
+    set_error(error_message, nodedef + " requires correctly typed output 'out'");
+    return false;
+  }
+
+  std::unordered_set<string> active;
+  std::unordered_map<string, string> emitted, emitted_color4;
+  Link which;
+  if (integer_selector) {
+    Link integer_which;
+    if (!read_integer_output(selector, graph, &integer_which, &active, &emitted, depth + 1,
+                             error_message))
+    {
+      return false;
+    }
+    Node convert;
+    const string path = shader.GetPath().GetString() + ".which_float";
+    convert.name = unique_node_name(*graph, node->name + ".which_float", path);
+    convert.nodedef = convert_integer_float_id;
+    convert.links["in"] = integer_which;
+    convert.outputs["out"] = Type::Float;
+    which = {convert.name, "out", Type::Float};
+    graph->nodes.push_back(std::move(convert));
+  }
+  else {
+    std::unordered_set<string> active_float;
+    std::unordered_map<string, string> emitted_float, emitted_float_color4;
+    if (!read_float_output(selector, graph, &which, &active_float, &emitted_float,
+                           &emitted_float_color4, depth + 1, error_message))
+    {
+      return false;
+    }
+  }
+
+  /* Read every arm once (literal, link or typed zero default). */
+  Node arms;
+  for (int index = 1; index <= 10; index++) {
+    const string name = switch_input_name(index);
+    const pxr::UsdShadeInput input = shader.GetInput(pxr::TfToken(name));
+    if (!input || (!input.HasConnectedSource() && !input.GetAttr().HasAuthoredValueOpinion())) {
+      if (input && !usd_value_types_match(input.GetTypeName(), expected_type)) {
+        set_error(error_message, nodedef + " requires typed input '" + name + "'");
+        return false;
+      }
+      if (type == Type::Float) arms.inputs[name] = 0.0f;
+      else if (type == Type::Color3) arms.color3_inputs[name] = zero_float3();
+      else if (type == Type::Color4) arms.float4_inputs[name] = zero_float4();
+      else if (type == Type::Vector2) arms.vector2_inputs[name] = make_float2(0.0f, 0.0f);
+      else if (type == Type::Vector3) arms.vector3_inputs[name] = zero_float3();
+      else arms.vector4_inputs[name] = zero_float4();
+    }
+    else if (!read_conditional_value_operand(
+                 shader, nodedef, name.c_str(), type, graph, &arms,
+                 active_vector4_shaders ? active_vector4_shaders : &active, &emitted_color4,
+                 emitted_vector4_shaders ? emitted_vector4_shaders : &emitted, depth + 1,
+                 error_message))
+    {
+      return false;
+    }
+  }
+
+  const char *select_id = type == Type::Float  ? ifgreater_float_id :
+                          type == Type::Color3 ? ifgreater_color3_id :
+                          type == Type::Color4 ? ifgreater_color4_id :
+                          type == Type::Vector2 ? ifgreater_vector2_id :
+                          type == Type::Vector3 ? ifgreater_vector3_id :
+                                                  ifgreater_vector4_id;
+  const auto set_arm = [&](Node *select, const char *port, const string &arm) {
+    if (const auto link = arms.links.find(arm); link != arms.links.end()) {
+      select->links[port] = link->second;
+    }
+    else if (type == Type::Float) select->inputs[port] = arms.inputs.at(arm);
+    else if (type == Type::Color3) select->color3_inputs[port] = arms.color3_inputs.at(arm);
+    else if (type == Type::Color4) select->float4_inputs[port] = arms.float4_inputs.at(arm);
+    else if (type == Type::Vector2) select->vector2_inputs[port] = arms.vector2_inputs.at(arm);
+    else if (type == Type::Vector3) select->vector3_inputs[port] = arms.vector3_inputs.at(arm);
+    else select->vector4_inputs[port] = arms.vector4_inputs.at(arm);
+  };
+  const auto set_zero = [&](Node *select, const char *port) {
+    if (type == Type::Float) select->inputs[port] = 0.0f;
+    else if (type == Type::Color3) select->color3_inputs[port] = zero_float3();
+    else if (type == Type::Color4) select->float4_inputs[port] = zero_float4();
+    else if (type == Type::Vector2) select->vector2_inputs[port] = make_float2(0.0f, 0.0f);
+    else if (type == Type::Vector3) select->vector3_inputs[port] = zero_float3();
+    else select->vector4_inputs[port] = zero_float4();
+  };
+
+  Link chain;
+  for (int index = 10; index >= 2; index--) {
+    Node select;
+    const string suffix = ".switch_" + switch_input_name(index);
+    select.name = unique_node_name(*graph, node->name + suffix, shader.GetPath().GetString() + suffix);
+    select.nodedef = select_id;
+    select.inputs["value1"] = float(index);
+    select.links["value2"] = which;
+    set_arm(&select, "in1", switch_input_name(index));
+    if (index == 10) {
+      set_zero(&select, "in2");
+    }
+    else {
+      select.links["in2"] = chain;
+    }
+    select.outputs["out"] = type;
+    chain = {select.name, "out", type};
+    graph->nodes.push_back(std::move(select));
+  }
+  /* The switch node itself becomes s1. */
+  node->nodedef = select_id;
+  node->inputs.erase("which");
+  node->int_inputs.erase("which");
+  node->inputs["value1"] = 1.0f;
+  node->links["value2"] = which;
+  set_arm(node, "in1", switch_input_name(1));
+  node->links["in2"] = chain;
+  node->outputs["out"] = type;
+  return true;
+}
+
 bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
                                 const string &nodedef,
                                 const Type type,
@@ -19344,6 +19519,12 @@ bool read_literal_switch_output(const pxr::UsdShadeShader &shader,
 {
   const bool integer_selector = switch_uses_integer_selector(nodedef);
   const pxr::UsdShadeInput selector = shader.GetInput(pxr::TfToken("which"));
+  if (selector && selector.HasConnectedSource() && type != Type::Matrix33 &&
+      type != Type::Matrix44)
+  {
+    return read_linked_switch_output(shader, nodedef, type, graph, node, error_message,
+                                     active_vector4_shaders, emitted_vector4_shaders, depth);
+  }
   if (selector && (selector.HasConnectedSource() ||
                    selector.GetTypeName() != (integer_selector ? pxr::SdfValueTypeNames->Int :
                                                                 pxr::SdfValueTypeNames->Float)))
