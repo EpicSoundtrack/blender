@@ -11225,7 +11225,6 @@ bool validate(const Graph &source,
       const bool texcoord_link = node.links.contains("texcoord");
       const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
       const bool line = node.nodedef == line_float_id;
-      const bool extended = node.nodedef != hexagon_float_id;
       size_t vector_literals = size_t(texcoord_literal), control_links = 0;
       auto vector_control = [&](const char *name) {
         const auto literal = node.vector2_inputs.find(name);
@@ -11236,7 +11235,7 @@ bool validate(const Graph &source,
           return finite_value(literal->second);
         }
         ++control_links;
-        return extended && validate_link(link->second, Type::Vector2, *nodes_by_name);
+        return validate_link(link->second, Type::Vector2, *nodes_by_name);
       };
       const bool controls_valid = vector_control("center") &&
           (!line || (vector_control("point1") && vector_control("point2")));
@@ -11248,7 +11247,7 @@ bool validate(const Graph &source,
           (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           !controls_valid || radius_literal == radius_link ||
           (radius_literal && !std::isfinite(node.inputs.at("radius"))) ||
-          (radius_link && (!extended || !validate_link(node.links.at("radius"), Type::Float, *nodes_by_name))) ||
+          (radius_link && !validate_link(node.links.at("radius"), Type::Float, *nodes_by_name)) ||
           (line && node.vector2_inputs.contains("point1") && node.vector2_inputs.contains("point2") &&
            node.vector2_inputs.at("point1").x == node.vector2_inputs.at("point2").x &&
            node.vector2_inputs.at("point1").y == node.vector2_inputs.at("point2").y) ||
@@ -22939,6 +22938,18 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         clamp->set_clamp_type(NODE_CLAMP_MINMAX);
         clamp->set_min(-0.57735f * radius);
         clamp->set_max(0.57735f * radius);
+        if (node.links.contains("radius")) {
+          /* Batch 38: connected radius scales the clamp bounds at runtime. */
+          for (const auto &[suffix, coefficient] :
+               {std::pair{"radius_low", -0.57735f}, std::pair{"radius_high", 0.57735f}})
+          {
+            MathNode *bound = graph->create_node<MathNode>();
+            bound->name = node.name + "." + suffix;
+            bound->set_math_type(NODE_MATH_MULTIPLY);
+            bound->set_value2(coefficient);
+            lowered_nodes.emplace(bound->name, bound);
+          }
+        }
         CombineXYZNode *combine_clamp_rad = graph->create_node<CombineXYZNode>();
         combine_clamp_rad->name = node.name + ".combine_clamp_rad";
         combine_clamp_rad->set_y(radius);
@@ -29188,6 +29199,15 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         ShaderNode *p3_sqrt = lowered_nodes.at(node.name + ".p3_sqrt");
         ShaderNode *condition = lowered_nodes.at(node.name + ".condition");
         ShaderNode *result = lowered_nodes.at(node.name);
+        if (radius_control) {
+          ShaderNode *low = lowered_nodes.at(node.name + ".radius_low");
+          ShaderNode *high = lowered_nodes.at(node.name + ".radius_high");
+          graph->connect(radius_control, low->input("Value1"));
+          graph->connect(radius_control, high->input("Value1"));
+          graph->connect(low->output("Value"), clamp->input("Min"));
+          graph->connect(high->output("Value"), clamp->input("Max"));
+          graph->connect(radius_control, combine_clamp_rad->input("Y"));
+        }
         graph->connect(new_p2->output("Vector"), new_p2_separate->input("Vector"));
         graph->connect(new_p2_separate->output("X"), clamp->input("Value"));
         graph->connect(clamp->output("Result"), combine_clamp_rad->input("X"));

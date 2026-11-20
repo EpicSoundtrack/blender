@@ -23707,9 +23707,9 @@ bool read_float_output(const pxr::UsdShadeInput &input,
                                     error_message) ||
         source.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Float ||
         !([&]() {
-          if (nodedef == hexagon_float_id) {
-            return read_literal_vector2_input(source, nodedef, "center", &node, error_message);
-          }
+          /* Batch 38: hexagon center/radius take the same literal-or-connected
+           * contract as the other shapes (lineage: certified private hosts
+           * f9ab7db9 hexagon13 and hexagon-linked-radius-v1). */
           std::unordered_set<string> active_vector2_controls;
           return read_vector2_operand(source, nodedef, "center", graph, &node,
                                       &active_vector2_controls, depth + 1, error_message);
@@ -23733,21 +23733,10 @@ bool read_float_output(const pxr::UsdShadeInput &input,
         return finish(false);
       }
     }
-    if (nodedef != hexagon_float_id) {
-      if (!read_float_operand(source, nodedef, "radius", graph, &node, active_shaders,
-                              emitted_shaders, emitted_color4_shaders, depth + 1,
-                              error_message)) {
-        return finish(false);
-      }
-    }
-    else {
-      const pxr::UsdShadeInput radius_input = source.GetInput(pxr::TfToken("radius"));
-      if (!radius_input || radius_input.GetTypeName() != pxr::SdfValueTypeNames->Float ||
-          radius_input.HasConnectedSource() || !radius_input.Get(&node.inputs["radius"]) ||
-          !std::isfinite(node.inputs["radius"])) {
-        set_error(error_message, nodedef + " requires literal finite float input 'radius'");
-        return finish(false);
-      }
+    if (!read_float_operand(source, nodedef, "radius", graph, &node, active_shaders,
+                            emitted_shaders, emitted_color4_shaders, depth + 1,
+                            error_message)) {
+      return finish(false);
     }
     /* texcoord is legal as a vector2 LITERAL as well as a connection
      * (MaterialX gives it defaultgeomprop="UV0"). */

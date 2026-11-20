@@ -34672,6 +34672,10 @@ float3 batch38_eval(ShaderOutput *output)
       case NODE_MATH_MAXIMUM: r = fmaxf(a, b); break;
       case NODE_MATH_FRACTION: r = a - floorf(a); break;
       case NODE_MATH_FLOOR: r = floorf(a); break;
+      case NODE_MATH_SQRT: r = a > 0.0f ? sqrtf(a) : 0.0f; break;
+      case NODE_MATH_GREATER_THAN: r = a > b ? 1.0f : 0.0f; break;
+      case NODE_MATH_LESS_THAN: r = a < b ? 1.0f : 0.0f; break;
+      case NODE_MATH_MODULO: r = b == 0.0f ? 0.0f : fmodf(a, b); break;
       default: ADD_FAILURE() << "unsupported math type " << int(math->get_math_type());
     }
     return make_float3(r);
@@ -34715,6 +34719,37 @@ float3 batch38_eval(ShaderOutput *output)
   }
   if (auto *value = dynamic_cast<ValueNode *>(node)) {
     return make_float3(value->get_value());
+  }
+  if (auto *vmath = dynamic_cast<VectorMathNode *>(node)) {
+    const float3 a = batch38_input(node, "Vector1");
+    const float3 b = batch38_input(node, "Vector2");
+    switch (vmath->get_math_type()) {
+      case NODE_VECTOR_MATH_ADD: return a + b;
+      case NODE_VECTOR_MATH_SUBTRACT: return a - b;
+      case NODE_VECTOR_MATH_MULTIPLY: return a * b;
+      case NODE_VECTOR_MATH_ABSOLUTE: return fabs(a);
+      case NODE_VECTOR_MATH_DOT_PRODUCT: return make_float3(dot(a, b));
+      case NODE_VECTOR_MATH_SCALE: return a * batch38_scalar(node, "Scale");
+      default: ADD_FAILURE() << "unsupported vector math " << int(vmath->get_math_type());
+    }
+    return zero_float3();
+  }
+  if (dynamic_cast<CombineXYZNode *>(node)) {
+    return make_float3(batch38_scalar(node, "X"), batch38_scalar(node, "Y"),
+                       batch38_scalar(node, "Z"));
+  }
+  if (dynamic_cast<ConvertNode *>(node)) {
+    ShaderInput *input = node->inputs[0];
+    const float3 value = batch38_input(node, input->name().c_str());
+    if (output->type() == SocketType::FLOAT && input->type() != SocketType::FLOAT) {
+      ADD_FAILURE() << "batch38 interpreter: vector->float convert " << node->name;
+    }
+    return input->type() == SocketType::FLOAT ? make_float3(value.x) : value;
+  }
+  if (auto *clamp = dynamic_cast<ClampNode *>(node)) {
+    EXPECT_EQ(clamp->get_clamp_type(), NODE_CLAMP_MINMAX);
+    return make_float3(fminf(fmaxf(batch38_scalar(node, "Value"), batch38_scalar(node, "Min")),
+                             batch38_scalar(node, "Max")));
   }
   if (auto *color = dynamic_cast<ColorNode *>(node)) {
     return color->get_value();
@@ -35189,6 +35224,60 @@ TEST(materialx_usdshade_reader, range_remap_color4_linked_operands_match_literal
       EXPECT_NEAR(results[1].x, expected, 1e-5f);
     }
   }
+}
+
+/* Batch 38 port (certified private hosts f9ab7db9 hexagon13 / hexagon-linked-radius-v1):
+ * ND_hexagon_float center and radius may be connected; the interpreted lowered
+ * graph equals the literal-operand lowering inside, outside and on the clamp edge. */
+TEST(materialx_usdshade_reader, hexagon_linked_center_radius_match_literal)
+{
+  const pxr::GfVec2f samples[] = {{0.5f, 0.5f}, {0.62f, 0.55f}, {0.9f, 0.5f},
+                                  {0.5f, 0.88f}, {0.7f, 0.75f}, {0.1f, 0.2f}};
+  int inside = 0;
+  for (const pxr::GfVec2f &uv : samples) {
+    for (const int linked_mask : {1, 2, 3}) {
+      float3 results[2];
+      for (const bool linked : {false, true}) {
+        SCOPED_TRACE(std::to_string(uv[0]) + "," + std::to_string(uv[1]) + " mask " +
+                     std::to_string(linked_mask) + (linked ? " linked" : " literal"));
+        Batch38EmissionProbe probe;
+        const pxr::SdfValueTypeName vector2 = pxr::SdfValueTypeNames->Float2;
+        const pxr::SdfValueTypeName scalar = pxr::SdfValueTypeNames->Float;
+        pxr::UsdShadeShader hexagon = probe.shader("Hexagon", "ND_hexagon_float", scalar);
+        hexagon.CreateInput(pxr::TfToken("texcoord"), vector2).Set(uv);
+        pxr::UsdShadeInput center = hexagon.CreateInput(pxr::TfToken("center"), vector2);
+        pxr::UsdShadeInput radius = hexagon.CreateInput(pxr::TfToken("radius"), scalar);
+        if (linked && (linked_mask & 1)) {
+          pxr::UsdShadeShader k = probe.shader("K_center", "ND_constant_vector2", vector2);
+          k.CreateInput(pxr::TfToken("value"), vector2).Set(pxr::GfVec2f(0.55f, 0.5f));
+          center.ConnectToSource(k.GetOutput(pxr::TfToken("out")));
+        }
+        else {
+          center.Set(pxr::GfVec2f(0.55f, 0.5f));
+        }
+        if (linked && (linked_mask & 2)) {
+          pxr::UsdShadeShader k = probe.shader("K_radius", "ND_constant_float", scalar);
+          k.CreateInput(pxr::TfToken("value"), scalar).Set(0.3f);
+          radius.ConnectToSource(k.GetOutput(pxr::TfToken("out")));
+        }
+        else {
+          radius.Set(0.3f);
+        }
+        pxr::UsdShadeShader observed = probe.shader("Observed", "ND_convert_float_color3",
+                                                    pxr::SdfValueTypeNames->Color3f);
+        observed.CreateInput(pxr::TfToken("in"), scalar)
+            .ConnectToSource(hexagon.GetOutput(pxr::TfToken("out")));
+        probe.observe_color3(observed);
+        string error;
+        ASSERT_TRUE(probe.interpret(&results[linked], &error)) << error;
+      }
+      EXPECT_EQ(results[1].x, results[0].x);
+      inside += results[0].x > 0.5f;
+    }
+  }
+  /* The sample set covers both inside and outside the hexagon. */
+  EXPECT_GT(inside, 0);
+  EXPECT_LT(inside, 18);
 }
 
 /* Batch 38 port (certified private host def35d38): a geomcolor 'index' linked
