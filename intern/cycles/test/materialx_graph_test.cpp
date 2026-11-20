@@ -6463,6 +6463,64 @@ TEST(materialx_graph, lowers_exact_vector2_normalize_to_vector_output)
   ASSERT_NE(separate->input("Vector")->link, nullptr);
 }
 
+TEST(materialx_graph, normalize_vector2_prescales_overflow_and_subnormal_inputs)
+{
+  /* x*x + y*y overflows float for |x| ~ 1e30 and flushes for |x| ~ 1e-30;
+   * MaterialX normalize(in) is still the unit direction. The lowering divides
+   * by max(|x|, |y|, FLT_MIN) before the Cycles normalize. */
+  class NormalizeFoldGraph : public ShaderGraph {
+   public:
+    void fold_constants()
+    {
+      constant_fold(nullptr);
+    }
+  };
+  for (const float2 in : {make_float2(1e30f, -1e30f), make_float2(3e-30f, 4e-30f),
+                          make_float2(3.0f, 4.0f), make_float2(0.0f, 0.0f)})
+  {
+    const float length = std::max(std::fabs(in.x), std::fabs(in.y));
+    const float2 scaled = length > 0.0f ? make_float2(in.x / length, in.y / length) : in;
+    const float norm = std::sqrt(scaled.x * scaled.x + scaled.y * scaled.y);
+    const float2 expected = norm > 0.0f ? make_float2(scaled.x / norm, scaled.y / norm) : in;
+    for (const int component : {0, 1}) {
+      materialx::Node normalize{"Normalize", "ND_normalize_vector2"};
+      normalize.vector2_inputs["in"] = in;
+      normalize.outputs["out"] = materialx::Type::Vector2;
+      materialx::Node extract{"Extract", "ND_extract_vector2"};
+      extract.int_inputs["index"] = component;
+      extract.links["in"] = {"Normalize", "out", materialx::Type::Vector2};
+      extract.outputs["out"] = materialx::Type::Float;
+      materialx::Node color{"Color", "ND_convert_float_color3"};
+      color.links["in"] = {"Extract", "out", materialx::Type::Float};
+      color.outputs["out"] = materialx::Type::Color3;
+      materialx::Node surface{"Surface", "ND_surface_unlit"};
+      surface.inputs["emission"] = 1.0f;
+      surface.links["emission_color"] = {"Color", "out", materialx::Type::Color3};
+      surface.outputs["out"] = materialx::Type::SurfaceShader;
+      NormalizeFoldGraph graph;
+      string error;
+      ASSERT_TRUE(materialx::lower({{normalize, extract, color, surface}}, &graph, &error)) << error;
+      std::unordered_map<string, ShaderNode *> nodes;
+      EmissionNode *emission = nullptr;
+      for (ShaderNode *node : graph.nodes) {
+        nodes[node->name.string()] = node;
+        if (auto *candidate = dynamic_cast<EmissionNode *>(node)) emission = candidate;
+      }
+      ASSERT_NE(nodes["Normalize.normalize.source"], nullptr);
+      ASSERT_NE(nodes["Normalize.normalize.normal_floor"], nullptr);
+      ASSERT_NE(nodes["Normalize.normalize.scaled"], nullptr);
+      EXPECT_FLOAT_EQ(static_cast<MathNode *>(nodes["Normalize.normalize.normal_floor"])->get_value2(),
+                      1.17549435e-38f);
+      ASSERT_NE(emission, nullptr);
+      graph.fold_constants();
+      ASSERT_EQ(emission->input("Color")->link, nullptr);
+      const float value = component == 0 ? expected.x : expected.y;
+      EXPECT_NEAR(emission->get_color().x, value, 1e-6f) << in.x << " " << in.y;
+      EXPECT_TRUE(std::isfinite(emission->get_color().x));
+    }
+  }
+}
+
 TEST(materialx_graph, lowers_standard_binary_float_literals_to_native_math)
 {
   struct MathCase {

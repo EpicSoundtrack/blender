@@ -24801,7 +24801,52 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         VectorMathNode *math = graph->create_node<VectorMathNode>();
         math->set_math_type(vector_type);
         const char *first_name = vector2_math_is_unary(node.nodedef) ? "in" : "in1";
-        if (const auto input = node.vector2_inputs.find(first_name); input != node.vector2_inputs.end()) {
+        if (node.nodedef == "ND_normalize_vector2") {
+          /* Pre-scale by max(|x|, |y|) (floored at FLT_MIN) so x*x + y*y in the
+           * Cycles normalize cannot overflow to inf or flush to zero. Zero input
+           * stays zero and finite nonzero directions are unchanged. */
+          SeparateXYZNode *source = graph->create_node<SeparateXYZNode>();
+          source->name = node.name + ".normalize.source";
+          if (const auto input = node.vector2_inputs.find("in");
+              input != node.vector2_inputs.end())
+          {
+            source->set_vector(make_float3(input->second.x, input->second.y, 0.0f));
+          }
+          auto make_math = [&](const string &suffix, NodeMathType type) {
+            MathNode *item = graph->create_node<MathNode>();
+            item->name = node.name + ".normalize." + suffix;
+            item->set_math_type(type);
+            lowered_nodes.emplace(item->name, item);
+            return item;
+          };
+          MathNode *abs_x = make_math("abs_x", NODE_MATH_ABSOLUTE);
+          MathNode *abs_y = make_math("abs_y", NODE_MATH_ABSOLUTE);
+          MathNode *maximum = make_math("maximum", NODE_MATH_MAXIMUM);
+          MathNode *normal_floor = make_math("normal_floor", NODE_MATH_MAXIMUM);
+          normal_floor->set_value2(1.17549435e-38f);
+          MathNode *divide_x = make_math("divide_x", NODE_MATH_DIVIDE);
+          MathNode *divide_y = make_math("divide_y", NODE_MATH_DIVIDE);
+          CombineXYZNode *scaled = graph->create_node<CombineXYZNode>();
+          scaled->name = node.name + ".normalize.scaled";
+          scaled->set_z(0.0f);
+          lowered_nodes.emplace(source->name, source);
+          lowered_nodes.emplace(scaled->name, scaled);
+          graph->connect(source->output("X"), abs_x->input("Value1"));
+          graph->connect(source->output("Y"), abs_y->input("Value1"));
+          graph->connect(abs_x->output("Value"), maximum->input("Value1"));
+          graph->connect(abs_y->output("Value"), maximum->input("Value2"));
+          graph->connect(maximum->output("Value"), normal_floor->input("Value1"));
+          graph->connect(source->output("X"), divide_x->input("Value1"));
+          graph->connect(source->output("Y"), divide_y->input("Value1"));
+          graph->connect(normal_floor->output("Value"), divide_x->input("Value2"));
+          graph->connect(normal_floor->output("Value"), divide_y->input("Value2"));
+          graph->connect(divide_x->output("Value"), scaled->input("X"));
+          graph->connect(divide_y->output("Value"), scaled->input("Y"));
+          graph->connect(scaled->output("Vector"), math->input("Vector1"));
+        }
+        else if (const auto input = node.vector2_inputs.find(first_name);
+                 input != node.vector2_inputs.end())
+        {
           math->set_vector1(make_float3(input->second.x, input->second.y, 0.0f));
         }
         if (const auto input = node.vector2_inputs.find("in2"); input != node.vector2_inputs.end()) {
@@ -31321,7 +31366,13 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
                                         lowered_nodes.at(node.name + ".vector2.math");
       const char *first_name = vector2_math_is_unary(node.nodedef) ? "in" : "in1";
       if (const auto input = node.links.find(first_name); input != node.links.end()) {
-        graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), math->input("Vector1"));
+        ShaderOutput *output = lowered_output(input->second, nodes_by_name, lowered_nodes);
+        if (node.nodedef == "ND_normalize_vector2") {
+          graph->connect(output, lowered_nodes.at(node.name + ".normalize.source")->input("Vector"));
+        }
+        else {
+          graph->connect(output, math->input("Vector1"));
+        }
       }
       if (const auto input = node.links.find("in2"); input != node.links.end()) {
         ShaderOutput *output = lowered_output(input->second, nodes_by_name, lowered_nodes);
