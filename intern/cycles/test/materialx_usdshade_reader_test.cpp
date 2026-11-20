@@ -34606,6 +34606,156 @@ TEST(materialx_usdshade_reader, reads_and_lowers_geomcolor_float_color3_color4)
 }
 
 
+namespace {
+/* Batch 38: read a USDShade graph whose color3 observer feeds an unlit emission,
+ * lower it, constant-fold, and return the folded emission color. */
+class Batch38FoldGraph : public ShaderGraph {
+ public:
+  void fold_constants()
+  {
+    constant_fold(nullptr);
+  }
+};
+
+struct Batch38EmissionProbe {
+  pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage,
+                                                                 pxr::SdfPath("/Material"));
+
+  pxr::UsdShadeShader shader(const char *name, const char *id, const pxr::SdfValueTypeName &type)
+  {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), type);
+    return result;
+  }
+  pxr::UsdShadeShader constant_integer(const char *name, const int value)
+  {
+    pxr::UsdShadeShader result = shader(name, "ND_constant_integer", pxr::SdfValueTypeNames->Int);
+    result.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(value);
+    return result;
+  }
+  pxr::UsdShadeShader constant_boolean(const char *name, const bool value)
+  {
+    pxr::UsdShadeShader result = shader(name, "ND_constant_boolean", pxr::SdfValueTypeNames->Bool);
+    result.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Bool).Set(value);
+    return result;
+  }
+  void observe_color3(const pxr::UsdShadeShader &color3)
+  {
+    pxr::UsdShadeShader surface = shader("Surface", "ND_surface_unlit",
+                                         pxr::SdfValueTypeNames->Token);
+    surface.CreateInput(pxr::TfToken("emission"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    surface.CreateInput(pxr::TfToken("opacity"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+    surface.CreateInput(pxr::TfToken("emission_color"), pxr::SdfValueTypeNames->Color3f)
+        .ConnectToSource(color3.GetOutput(pxr::TfToken("out")));
+    material.CreateSurfaceOutput(pxr::TfToken("mtlx"))
+        .ConnectToSource(surface.GetOutput(pxr::TfToken("out")));
+  }
+  void observe_integer(const pxr::UsdShadeShader &integer)
+  {
+    pxr::UsdShadeShader color = shader("Observed", "ND_convert_integer_color3",
+                                       pxr::SdfValueTypeNames->Color3f);
+    color.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Int)
+        .ConnectToSource(integer.GetOutput(pxr::TfToken("out")));
+    observe_color3(color);
+  }
+  /* Returns false (with error) if reading or lowering refuses the graph; otherwise the
+   * folded constant emission color, or NaN if the emission color stays linked. */
+  bool evaluate(float3 *color, string *error)
+  {
+    materialx::Graph graph;
+    if (!materialx::read_usdshade_graph(material, &graph, error)) {
+      return false;
+    }
+    Batch38FoldGraph lowered;
+    if (!materialx::lower(graph, &lowered, error)) {
+      return false;
+    }
+    lowered.fold_constants();
+    for (ShaderNode *node : lowered.nodes) {
+      if (auto *emission = dynamic_cast<EmissionNode *>(node)) {
+        *color = emission->input("Color")->link ? make_float3(std::nanf("")) :
+                                                  emission->get_color();
+        return true;
+      }
+    }
+    *error = "no emission";
+    return false;
+  }
+};
+}  // namespace
+
+/* Batch 38 port (certified private host 7c59578c integerI3-word-observer-K-v1):
+ * ND_if*_integerI result arms may be direct static ND_constant_integer producers,
+ * with linked or literal predicate operands. */
+TEST(materialx_usdshade_reader, integerI_predicates_fold_constant_integer_arms)
+{
+  const struct {
+    const char *id;
+    int value1;
+    int value2;
+    bool linked_predicate;
+    float expected;
+  } cases[] = {{"ND_ifequal_integerI", 4, 4, true, 10.0f},
+               {"ND_ifequal_integerI", 4, 5, true, -10.0f},
+               {"ND_ifequal_integerI", 4, 4, false, 10.0f},
+               {"ND_ifgreater_integerI", 5, 4, true, 10.0f},
+               {"ND_ifgreater_integerI", 4, 4, true, -10.0f},
+               {"ND_ifgreater_integerI", 4, 4, false, -10.0f},
+               {"ND_ifgreatereq_integerI", 4, 4, true, 10.0f},
+               {"ND_ifgreatereq_integerI", 3, 4, true, -10.0f},
+               {"ND_ifgreatereq_integerI", 5, 4, false, 10.0f}};
+  for (const auto &test : cases) {
+    SCOPED_TRACE(string(test.id) + " " + std::to_string(test.value1) + " " +
+                 std::to_string(test.value2) + (test.linked_predicate ? " linked" : " literal"));
+    Batch38EmissionProbe probe;
+    pxr::UsdShadeShader predicate = probe.shader("Predicate", test.id, pxr::SdfValueTypeNames->Int);
+    const pxr::SdfValueTypeName integer = pxr::SdfValueTypeNames->Int;
+    ASSERT_TRUE(predicate.CreateInput(pxr::TfToken("in1"), integer)
+                    .ConnectToSource(probe.constant_integer("K1", 10).ConnectableAPI(),
+                                     pxr::TfToken("out")));
+    ASSERT_TRUE(predicate.CreateInput(pxr::TfToken("in2"), integer)
+                    .ConnectToSource(probe.constant_integer("K2", -10).ConnectableAPI(),
+                                     pxr::TfToken("out")));
+    if (test.linked_predicate) {
+      ASSERT_TRUE(predicate.CreateInput(pxr::TfToken("value1"), integer)
+                      .ConnectToSource(probe.constant_integer("V1", test.value1).ConnectableAPI(),
+                                       pxr::TfToken("out")));
+      ASSERT_TRUE(predicate.CreateInput(pxr::TfToken("value2"), integer)
+                      .ConnectToSource(probe.constant_integer("V2", test.value2).ConnectableAPI(),
+                                       pxr::TfToken("out")));
+    }
+    else {
+      predicate.CreateInput(pxr::TfToken("value1"), integer).Set(test.value1);
+      predicate.CreateInput(pxr::TfToken("value2"), integer).Set(test.value2);
+    }
+    probe.observe_integer(predicate);
+    float3 color;
+    string error;
+    ASSERT_TRUE(probe.evaluate(&color, &error)) << error;
+    EXPECT_EQ(color, make_float3(test.expected)) << color.x;
+  }
+
+  /* A non-constant producer for a result arm stays refused. */
+  Batch38EmissionProbe probe;
+  pxr::UsdShadeShader predicate = probe.shader(
+      "Predicate", "ND_ifequal_integerI", pxr::SdfValueTypeNames->Int);
+  pxr::UsdShadeShader add = probe.shader("Add", "ND_add_integer", pxr::SdfValueTypeNames->Int);
+  add.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Int).Set(1);
+  add.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Int).Set(2);
+  ASSERT_TRUE(predicate.CreateInput(pxr::TfToken("in1"), pxr::SdfValueTypeNames->Int)
+                  .ConnectToSource(add.ConnectableAPI(), pxr::TfToken("out")));
+  predicate.CreateInput(pxr::TfToken("in2"), pxr::SdfValueTypeNames->Int).Set(0);
+  predicate.CreateInput(pxr::TfToken("value1"), pxr::SdfValueTypeNames->Int).Set(0);
+  predicate.CreateInput(pxr::TfToken("value2"), pxr::SdfValueTypeNames->Int).Set(0);
+  probe.observe_integer(predicate);
+  float3 color;
+  string error;
+  EXPECT_FALSE(probe.evaluate(&color, &error));
+}
+
 /* Batch 38 port (certified private host def35d38): a geomcolor 'index' linked
  * to a uniform exact ND_constant_integer folds to that color-set index; other
  * producers and negative constants stay refused. */

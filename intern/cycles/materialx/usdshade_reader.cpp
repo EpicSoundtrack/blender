@@ -9606,7 +9606,10 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
     }
     for (const char *name : {"in1", "in2"}) {
       const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
-      if (is_integer_result_conditional(nodedef)) {
+      /* Integer-result arms: literal or direct static ND_constant_integer, also for
+       * the Integer-output integer predicates (lineage: certified private host
+       * 7c59578c integerI3-word-observer-K-v1 reader). */
+      if (is_integer_result_conditional(nodedef) || is_integer_predicate_conditional(nodedef)) {
         if (operand && operand.GetAttr().GetNumTimeSamples() != 0) {
           set_error(error_message, nodedef + " requires unsampled integer arms");
           return finish(false);
