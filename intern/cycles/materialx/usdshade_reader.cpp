@@ -9268,6 +9268,38 @@ bool read_integer_b_constant_arm(const pxr::UsdShadeInput &input,
   return true;
 }
 
+/* ND_hsvadjust_color3/color4 'amount' connected to a vector3 producer: the
+ * hue offset / saturation / value multipliers are read at shader evaluation
+ * (lineage: certified private host 8191182a norm2-bf4-v2). Leaves the node
+ * untouched when 'amount' is not connected. */
+bool read_hsvadjust_linked_amount(const pxr::UsdShadeShader &source_shader,
+                                  const string &nodedef,
+                                  Graph *graph,
+                                  Node *node,
+                                  const int depth,
+                                  string *error_message)
+{
+  const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
+  if (!amount || !amount.HasConnectedSource()) {
+    return true;
+  }
+  if (!is_usd_vector3_type(amount.GetTypeName()) || amount.GetAttr().GetNumTimeSamples() != 0 ||
+      composed_connection_count(amount.GetAttr()) != 1)
+  {
+    set_error(error_message, nodedef + " requires a single connected vector3 'amount'");
+    return false;
+  }
+  Link link;
+  std::unordered_set<string> active_vector3_shaders;
+  if (!read_vector3_output(amount, graph, &link, &active_vector3_shaders, depth + 1,
+                           error_message))
+  {
+    return false;
+  }
+  node->links["amount"] = link;
+  return true;
+}
+
 /* ND_geomcolor_* 'index': a literal non-negative Int, or a link to a uniform
  * exact ND_constant_integer producer folded at read time (lineage: certified
  * private host def35d38 geomcolor-float-current-host-v1 reader). */
@@ -12014,7 +12046,13 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       }
       conversion.float4_inputs["in"] = make_float4(value[0], value[1], value[2], value[3]);
     }
-    if (nodedef == hsvadjust_color4_id) {
+    if (nodedef == hsvadjust_color4_id &&
+        !read_hsvadjust_linked_amount(source_shader, nodedef, graph, &conversion, depth,
+                                      error_message))
+    {
+      return finish(false);
+    }
+    if (nodedef == hsvadjust_color4_id && !conversion.links.contains("amount")) {
       const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
       pxr::GfVec3f value(0.0f, 1.0f, 1.0f);
       if (amount && (!is_usd_vector3_type(amount.GetTypeName()) ||
@@ -16443,7 +16481,13 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     {
       return finish(false);
     }
-    if (nodedef == hsvadjust_color3_id) {
+    if (nodedef == hsvadjust_color3_id &&
+        !read_hsvadjust_linked_amount(source_shader, nodedef, graph, &conversion, depth,
+                                      error_message))
+    {
+      return finish(false);
+    }
+    if (nodedef == hsvadjust_color3_id && !conversion.links.contains("amount")) {
       const pxr::UsdShadeInput amount = source_shader.GetInput(pxr::TfToken("amount"));
       pxr::GfVec3f value(0.0f, 1.0f, 1.0f);
       if (amount && (!is_usd_vector3_type(amount.GetTypeName()) ||

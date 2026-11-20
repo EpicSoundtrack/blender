@@ -34868,6 +34868,86 @@ TEST(materialx_usdshade_reader, reflect_refract_unvalued_normal_is_nworld)
   EXPECT_TRUE(std::isnan(value.x)) << "emission must stay linked to the shading normal";
 }
 
+/* Batch 38 port (certified private host 8191182a norm2-bf4-v2): ND_hsvadjust
+ * 'amount' connected to a vector3 producer is applied at shader evaluation and
+ * matches the literal-amount result. */
+TEST(materialx_usdshade_reader, hsvadjust_linked_amount_matches_literal_amount)
+{
+  const struct {
+    pxr::GfVec4f in;
+    pxr::GfVec3f amount;
+  } cases[] = {{pxr::GfVec4f(1.0f, 0.0f, 0.0f, 0.2f), pxr::GfVec3f(1.0f / 3.0f, 1.0f, 1.0f)},
+               {pxr::GfVec4f(0.25f, 0.5f, 0.75f, 0.4f), pxr::GfVec3f(-0.2f, 0.5f, 1.25f)},
+               {pxr::GfVec4f(0.8f, 0.2f, 0.6f, 0.7f), pxr::GfVec3f(1.2f, 1.5f, 0.6f)}};
+  for (const bool color4 : {true, false}) {
+    for (const auto &test : cases) {
+      float3 results[2];
+      for (const bool linked : {false, true}) {
+        SCOPED_TRACE(string(color4 ? "color4" : "color3") + (linked ? " linked" : " literal"));
+        Batch38EmissionProbe probe;
+        const pxr::SdfValueTypeName type = color4 ? pxr::SdfValueTypeNames->Color4f :
+                                                    pxr::SdfValueTypeNames->Color3f;
+        pxr::UsdShadeShader tested = probe.shader(
+            "Tested", color4 ? "ND_hsvadjust_color4" : "ND_hsvadjust_color3", type);
+        if (color4) {
+          tested.CreateInput(pxr::TfToken("in"), type).Set(test.in);
+        }
+        else {
+          tested.CreateInput(pxr::TfToken("in"), type)
+              .Set(pxr::GfVec3f(test.in[0], test.in[1], test.in[2]));
+        }
+        pxr::UsdShadeInput amount = tested.CreateInput(pxr::TfToken("amount"),
+                                                       pxr::SdfValueTypeNames->Vector3f);
+        if (linked) {
+          pxr::UsdShadeShader constant = probe.shader("Amount", "ND_constant_vector3",
+                                                      pxr::SdfValueTypeNames->Vector3f);
+          constant.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Vector3f)
+              .Set(test.amount);
+          ASSERT_TRUE(amount.ConnectToSource(constant.GetOutput(pxr::TfToken("out"))));
+        }
+        else {
+          amount.Set(test.amount);
+        }
+        if (color4) {
+          pxr::UsdShadeShader rgb = probe.shader("Observed", "ND_convert_color4_color3",
+                                                 pxr::SdfValueTypeNames->Color3f);
+          rgb.CreateInput(pxr::TfToken("in"), type)
+              .ConnectToSource(tested.GetOutput(pxr::TfToken("out")));
+          probe.observe_color3(rgb);
+        }
+        else {
+          probe.observe_color3(tested);
+        }
+        string error;
+        ASSERT_TRUE(probe.evaluate(&results[linked], &error)) << error;
+        ASSERT_FALSE(std::isnan(results[linked].x));
+      }
+      EXPECT_NEAR(results[1].x, results[0].x, 1e-5f);
+      EXPECT_NEAR(results[1].y, results[0].y, 1e-5f);
+      EXPECT_NEAR(results[1].z, results[0].z, 1e-5f);
+    }
+  }
+  /* Red with hue + 1/3 is green (MaterialX hue is in [0, 1)). */
+  Batch38EmissionProbe probe;
+  pxr::UsdShadeShader tested = probe.shader("Tested", "ND_hsvadjust_color3",
+                                            pxr::SdfValueTypeNames->Color3f);
+  tested.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(1.0f, 0.0f, 0.0f));
+  pxr::UsdShadeShader constant = probe.shader("Amount", "ND_constant_vector3",
+                                              pxr::SdfValueTypeNames->Vector3f);
+  constant.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Vector3f)
+      .Set(pxr::GfVec3f(1.0f / 3.0f, 1.0f, 1.0f));
+  tested.CreateInput(pxr::TfToken("amount"), pxr::SdfValueTypeNames->Vector3f)
+      .ConnectToSource(constant.GetOutput(pxr::TfToken("out")));
+  probe.observe_color3(tested);
+  float3 value;
+  string error;
+  ASSERT_TRUE(probe.evaluate(&value, &error)) << error;
+  EXPECT_NEAR(value.x, 0.0f, 1e-5f);
+  EXPECT_NEAR(value.y, 1.0f, 1e-5f);
+  EXPECT_NEAR(value.z, 0.0f, 1e-5f);
+}
+
 /* Batch 38 port (certified private host def35d38): a geomcolor 'index' linked
  * to a uniform exact ND_constant_integer folds to that color-set index; other
  * producers and negative constants stay refused. */

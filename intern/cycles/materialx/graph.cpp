@@ -8633,8 +8633,13 @@ bool validate(const Graph &source,
       const auto coefficients = node.color3_inputs.find("lumacoeffs");
       const auto amount = node.inputs.find("amount");
       const auto amount_vector = node.vector3_inputs.find("amount");
+      /* Batch 38: hsvadjust 'amount' may be a connected vector3. */
+      const auto amount_link = node.links.find("amount");
+      const bool amount_linked = hsvadjust && amount_link != node.links.end();
       const auto output = node.outputs.find("out");
       if (input_literal == (input_link != node.links.end()) ||
+          (amount_linked && (amount_vector != node.vector3_inputs.end() ||
+                             !validate_link(amount_link->second, Type::Vector3, *nodes_by_name))) ||
           (input_link != node.links.end() &&
            !validate_link(input_link->second, color4 ? Type::Color4 : Type::Color3, *nodes_by_name)) ||
           (!hsvadjust && (coefficients == node.color3_inputs.end() ||
@@ -8642,16 +8647,16 @@ bool validate(const Graph &source,
                           !std::isfinite(coefficients->second.y) ||
                           !std::isfinite(coefficients->second.z))) ||
           (saturate && (amount == node.inputs.end() || !std::isfinite(amount->second))) ||
-          (hsvadjust &&
+          (hsvadjust && !amount_linked &&
            (amount_vector == node.vector3_inputs.end() || !finite_value(amount_vector->second))) ||
           (color4 && input_literal && !color4_has_finite_components(node.float4_inputs.at("in"))) ||
           (!color4 && input_literal && !finite_value(node.color3_inputs.at("in"))) ||
-          node.links.size() != (input_link == node.links.end() ? 0 : 1) ||
+          node.links.size() != (input_link == node.links.end() ? 0 : 1) + size_t(amount_linked) ||
           node.color3_inputs.size() != (hsvadjust ? size_t(!color4 && input_literal) :
                                                    1 + size_t(!color4 && input_literal)) ||
           node.float4_inputs.size() != size_t(color4 && input_literal) ||
           node.inputs.size() != size_t(saturate) || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
-          node.vector3_inputs.size() != size_t(hsvadjust) || !node.vector4_inputs.empty() ||
+          node.vector3_inputs.size() != size_t(hsvadjust && !amount_linked) || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty() ||
           output == node.outputs.end() ||
@@ -21318,10 +21323,17 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         const float4 input = node.float4_inputs.at("in");
         rgb_to_hsv->set_color(make_float3(input.x, input.y, input.z));
       }
-      const float3 amount = node.vector3_inputs.at("amount");
-      hue->set_value2(amount.x);
-      saturation->set_value2(amount.y);
-      value->set_value2(amount.z);
+      if (node.links.contains("amount")) {
+        SeparateXYZNode *amount = graph->create_node<SeparateXYZNode>();
+        amount->name = node.name + ".amount";
+        lowered_nodes.emplace(amount->name, amount);
+      }
+      else {
+        const float3 amount = node.vector3_inputs.at("amount");
+        hue->set_value2(amount.x);
+        saturation->set_value2(amount.y);
+        value->set_value2(amount.z);
+      }
       lowered_nodes.emplace(rgb_to_hsv->name, rgb_to_hsv);
       lowered_nodes.emplace(hue->name, hue);
       lowered_nodes.emplace(hue_fract->name, hue_fract);
@@ -27935,6 +27947,14 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       graph->connect(rgb_to_hsv->output("Red"), hue->input("Value1"));
       graph->connect(rgb_to_hsv->output("Green"), saturation->input("Value1"));
       graph->connect(rgb_to_hsv->output("Blue"), value->input("Value1"));
+      if (const auto amount = node.links.find("amount"); amount != node.links.end()) {
+        ShaderNode *components = lowered_nodes.at(node.name + ".amount");
+        graph->connect(lowered_output(amount->second, nodes_by_name, lowered_nodes),
+                       components->input("Vector"));
+        graph->connect(components->output("X"), hue->input("Value2"));
+        graph->connect(components->output("Y"), saturation->input("Value2"));
+        graph->connect(components->output("Z"), value->input("Value2"));
+      }
       graph->connect(hue->output("Value"), lowered_nodes.at(node.name + ".hue.fract")->input("Value1"));
       graph->connect(lowered_nodes.at(node.name + ".hue.fract")->output("Value"), rgb->input("Red"));
       graph->connect(saturation->output("Value"), rgb->input("Green"));
