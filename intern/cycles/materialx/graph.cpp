@@ -15138,6 +15138,12 @@ ShaderOutput *lowered_output(const Link &link,
       {
         return lowered_nodes.at(link.source_node + ".fallback_result")->output("Value");
       }
+      /* ND_ifequal_booleanB has only Boolean predicate inputs. Its output is the
+       * live comparison, including connected constant and varying operands; the
+       * '.float' value node only carries the literal-literal result. */
+      if (source.nodedef == ifequal_boolean_b_id) {
+        return lowered_nodes.at(link.source_node + ".condition")->output("Value");
+      }
       return (source.nodedef == constant_boolean_id || is_logical_boolean(source.nodedef) ||
               source.nodedef == convert_integer_boolean_id || is_integer_predicate_conditional(source.nodedef) ||
               is_boolean_predicate_conditional(source.nodedef) ||

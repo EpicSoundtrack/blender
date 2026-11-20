@@ -7061,6 +7061,53 @@ TEST(materialx_graph, lowers_remaining_integer_and_boolean_result_conditionals)
   EXPECT_FLOAT_EQ(integer_predicate_boolean_condition->get_value(), 1.0f);
 }
 
+TEST(materialx_graph, ifequal_booleanB_with_linked_operand_outputs_live_comparison)
+{
+  /* ND_ifequal_booleanB outputs (value1 == value2). A linked operand must reach
+   * the consumer through the COMPARE node, not the literal-only '.float' value. */
+  class BooleanFoldGraph : public ShaderGraph {
+   public:
+    void fold_constants()
+    {
+      constant_fold(nullptr);
+    }
+  };
+  for (const int literal : {0, 1}) {
+    for (const int linked : {0, 1}) {
+      materialx::Node constant{"Linked", "ND_constant_boolean"};
+      constant.int_inputs["value"] = linked;
+      constant.outputs["out"] = materialx::Type::Boolean;
+      materialx::Node equal{"Equal", "ND_ifequal_booleanB"};
+      equal.links["value1"] = {"Linked", "out", materialx::Type::Boolean};
+      equal.int_inputs["value2"] = literal;
+      equal.outputs["out"] = materialx::Type::Boolean;
+      materialx::Node as_float{"AsFloat", "ND_convert_boolean_float"};
+      as_float.links["in"] = {"Equal", "out", materialx::Type::Boolean};
+      as_float.outputs["out"] = materialx::Type::Float;
+      materialx::Node color{"Color", "ND_convert_float_color3"};
+      color.links["in"] = {"AsFloat", "out", materialx::Type::Float};
+      color.outputs["out"] = materialx::Type::Color3;
+      materialx::Node surface{"Surface", "ND_surface_unlit"};
+      surface.inputs["emission"] = 1.0f;
+      surface.links["emission_color"] = {"Color", "out", materialx::Type::Color3};
+      surface.outputs["out"] = materialx::Type::SurfaceShader;
+      BooleanFoldGraph graph;
+      string error;
+      ASSERT_TRUE(materialx::lower({{constant, equal, as_float, color, surface}}, &graph, &error))
+          << error;
+      EmissionNode *emission = nullptr;
+      for (ShaderNode *node : graph.nodes) {
+        if (auto *candidate = dynamic_cast<EmissionNode *>(node)) emission = candidate;
+      }
+      ASSERT_NE(emission, nullptr);
+      graph.fold_constants();
+      ASSERT_EQ(emission->input("Color")->link, nullptr);
+      EXPECT_FLOAT_EQ(emission->get_color().x, linked == literal ? 1.0f : 0.0f)
+          << "linked " << linked << " literal " << literal;
+    }
+  }
+}
+
 TEST(materialx_graph, lowers_literal_owned_conditional_backlog_variants)
 {
   materialx::Graph source;
