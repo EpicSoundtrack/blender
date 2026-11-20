@@ -815,13 +815,20 @@ TEST(materialx_graph, connected_fractal_heighttonormal_keeps_height_and_uv_deriv
   EXPECT_EQ(uv_conversion->name, "convert_point_to_vector");
   ASSERT_NE(uv_conversion->inputs[0]->link, nullptr);
   EXPECT_EQ(uv_conversion->inputs[0]->link->parent->name, "UV0");
-  MaterialXNormalMapNode *native_normalmap = nullptr;
+  /* Batch 43: the encoded heighttonormal normal is in UV axes, so the
+   * normal map runs on the stock UV-tangent path (Tworld/Bworld), not the
+   * barycentric dPdu/dPdv frame of the former MaterialX-only node. */
+  NormalMapNode *native_normalmap = nullptr;
   for (ShaderNode *node : graph.nodes) {
     if (node->name == "NormalMap") {
-      native_normalmap = dynamic_cast<MaterialXNormalMapNode *>(node);
+      native_normalmap = dynamic_cast<NormalMapNode *>(node);
     }
+    EXPECT_EQ(dynamic_cast<MaterialXNormalMapNode *>(node), nullptr) << node->name;
   }
   ASSERT_NE(native_normalmap, nullptr);
+  EXPECT_EQ(native_normalmap->get_space(), NODE_NORMAL_MAP_TANGENT);
+  EXPECT_TRUE(native_normalmap->get_attribute().empty());
+  EXPECT_FLOAT_EQ(native_normalmap->get_strength(), 1.0f);
   ASSERT_NE(native_normalmap->input("Color")->link, nullptr);
   ShaderNode *color_conversion = native_normalmap->input("Color")->link->parent;
   EXPECT_EQ(color_conversion->name, "convert_vector_to_color");
@@ -1001,16 +1008,20 @@ TEST(materialx_graph, amber_two_unified_noises_lower_as_connected_heighttonormal
   string error;
   ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
   MaterialXHeightToNormalNode *native_height = nullptr;
-  MaterialXNormalMapNode *native_normal = nullptr;
+  NormalMapNode *native_normal = nullptr;
   for (ShaderNode *node : lowered.nodes) {
     native_height = node->name == "HeightToNormal" ?
                         dynamic_cast<MaterialXHeightToNormalNode *>(node) :
                         native_height;
-    native_normal = node->name == "NormalMap" ? dynamic_cast<MaterialXNormalMapNode *>(node) :
+    native_normal = node->name == "NormalMap" ? dynamic_cast<NormalMapNode *>(node) :
                                                   native_normal;
+    EXPECT_EQ(dynamic_cast<MaterialXNormalMapNode *>(node), nullptr) << node->name;
   }
   ASSERT_NE(native_height, nullptr);
   ASSERT_NE(native_normal, nullptr);
+  /* Batch 43: stock UV-tangent frame (see the countertop test above). */
+  EXPECT_EQ(native_normal->get_space(), NODE_NORMAL_MAP_TANGENT);
+  EXPECT_TRUE(native_normal->get_attribute().empty());
   ASSERT_NE(native_height->input("Height")->link, nullptr);
   EXPECT_EQ(native_height->input("Height")->link->parent->name, "HeightSum");
 }
@@ -1569,6 +1580,183 @@ TEST(materialx_graph, normalmap_uses_materialx_gram_schmidt_world_basis)
   EXPECT_NEAR(scaled.x, expected_scaled.x, 1.0e-6f);
   EXPECT_NEAR(scaled.y, expected_scaled.y, 1.0e-6f);
   EXPECT_NEAR(scaled.z, expected_scaled.z, 1.0e-6f);
+}
+
+/* Batch 43 (b49x packet n V0/V1, packet g3 T:V0). The packet tile is a unit
+ * quad in z=0 with loop UVs u = 0.25..0.75 along +x and v along +y; height =
+ * UV0.x, bump scale 8, so the MaterialX reference is
+ * normalize(N - 8/16 * T) = (-0.447, 0, 0.894) with T = Tworld = +x. This
+ * oracle evaluates the real kernel heighttonormal helper, then compares the
+ * UV-tangent frame (stock normal map at unit strength after the pre-scale)
+ * with the former dPdu/dPdv frame on both triangles of the quad: dPdu is
+ * p1 - p0 (triangle_dPdudv), which is +x on one triangle and the diagonal on
+ * the other, the "R mask high on ~50% of the tile" signature. */
+TEST(materialx_graph, bump_uv_ramp_needs_uv_tangent_frame_not_barycentric_dpdu)
+{
+  const float scale = 8.0f;
+  /* Screen pixel = 0.01 world units along x/y; du/dx = 0.5 per world unit. */
+  const float2 dUVdx = make_float2(0.005f, 0.0f);
+  const float2 dUVdy = make_float2(0.0f, 0.005f);
+  const float2 dH = make_float2(dUVdx.x, dUVdy.x); /* height = u */
+  const float3 encoded = materialx_heighttonormal(dH, dUVdx, dUVdy, 1.0f);
+  /* Pre-scale of the encoded sample (graph.cpp normalmap helpers). */
+  const float3 prescaled = make_float3(scale * encoded.x + 0.5f * (1.0f - scale),
+                                       scale * encoded.y + 0.5f * (1.0f - scale),
+                                       encoded.z);
+  const float3 decoded = 2.0f * (prescaled - make_float3(0.5f));
+  const float3 N = make_float3(0.0f, 0.0f, 1.0f);
+  const float3 T = make_float3(1.0f, 0.0f, 0.0f);
+  const float3 B = cross(N, T); /* stock: sign * cross(normal, tangent), sign +1 */
+  const float3 uv_frame = normalize(decoded.x * T + decoded.y * B + decoded.z * N);
+  const float3 expected = normalize(make_float3(-0.5f, 0.0f, 1.0f));
+  EXPECT_NEAR(uv_frame.x, expected.x, 1.0e-5f);
+  EXPECT_NEAR(uv_frame.y, expected.y, 1.0e-5f);
+  EXPECT_NEAR(uv_frame.z, expected.z, 1.0e-5f);
+
+  /* Former frame: unscaled decode, scale as strength, T/B from dPdu/dPdv. */
+  const float3 unscaled = 2.0f * (encoded - make_float3(0.5f));
+  const float3 p00 = make_float3(-0.5f, -0.5f, 0.0f);
+  const float3 p10 = make_float3(0.5f, -0.5f, 0.0f);
+  const float3 p11 = make_float3(0.5f, 0.5f, 0.0f);
+  const float3 p01 = make_float3(-0.5f, 0.5f, 0.0f);
+  const float3 first = materialx_normalmap_world(unscaled, N, p10 - p00, p11 - p00, scale);
+  EXPECT_NEAR(first.x, expected.x, 1.0e-5f);
+  EXPECT_NEAR(first.z, expected.z, 1.0e-5f);
+  const float3 second = materialx_normalmap_world(unscaled, N, p11 - p00, p01 - p00, scale);
+  EXPECT_GT(fabsf(second.y - expected.y), 0.1f) << "barycentric dPdu is the quad diagonal";
+}
+
+/* Batch 43 (b49x packet n K1): NG_bump_vector3 forwards a connected 'scale'
+ * to normalmap.scale. normalmap_float takes a runtime float scale through the
+ * pre-scale helpers: (sample - 0.5) * (s, s, 1) + 0.5, guarded so an
+ * all-black sample stays the flat normal, on the stock UV-tangent path. */
+static materialx::Graph bump_shaped_runtime_scale_graph()
+{
+  materialx::Node uv{"UV0", "ND_geompropvalue_vector2"};
+  uv.string_inputs["geomprop"] = "";
+  uv.outputs["out"] = materialx::Type::Vector2;
+  materialx::Node u{"U", "ND_extract_vector2"};
+  u.links["in"] = {"UV0", "out", materialx::Type::Vector2};
+  u.int_inputs["index"] = 0;
+  u.outputs["out"] = materialx::Type::Float;
+  materialx::Node k{"KScale", "ND_constant_float"};
+  k.inputs["value"] = 2.0f;
+  k.outputs["out"] = materialx::Type::Float;
+  materialx::Node height{"HeightToNormal", "ND_heighttonormal_vector3"};
+  height.links["in"] = {"U", "out", materialx::Type::Float};
+  height.links["texcoord"] = {"UV0", "out", materialx::Type::Vector2};
+  height.inputs["scale"] = 1.0f;
+  height.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node normalmap{"NormalMap", "ND_normalmap_float"};
+  normalmap.links["in"] = {"HeightToNormal", "out", materialx::Type::Vector3};
+  normalmap.links["scale"] = {"KScale", "out", materialx::Type::Float};
+  normalmap.outputs["out"] = materialx::Type::Vector3;
+  return materialx::Graph{{uv, u, k, height, normalmap}};
+}
+
+TEST(materialx_graph, normalmap_float_runtime_scale_prescales_on_uv_tangent_path)
+{
+  const materialx::Graph source = bump_shaped_runtime_scale_graph();
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+
+  const auto find = [&](const string &name) -> ShaderNode * {
+    for (ShaderNode *node : graph.nodes) {
+      if (node->name == name) {
+        return node;
+      }
+    }
+    return nullptr;
+  };
+  /* Follow a link, skipping automatic type conversions. */
+  const auto upstream = [](ShaderInput *input) -> ShaderNode * {
+    if (!input || !input->link) {
+      return nullptr;
+    }
+    ShaderNode *node = input->link->parent;
+    while (node && node->name.string().rfind("convert_", 0) == 0 && !node->inputs.empty() &&
+           node->inputs[0]->link)
+    {
+      node = node->inputs[0]->link->parent;
+    }
+    return node;
+  };
+  for (ShaderNode *node : graph.nodes) {
+    EXPECT_EQ(dynamic_cast<MaterialXNormalMapNode *>(node), nullptr) << node->name;
+  }
+  auto *normalmap = dynamic_cast<NormalMapNode *>(find("NormalMap"));
+  ASSERT_NE(normalmap, nullptr);
+  EXPECT_EQ(normalmap->get_space(), NODE_NORMAL_MAP_TANGENT);
+  EXPECT_TRUE(normalmap->get_attribute().empty());
+  EXPECT_FLOAT_EQ(normalmap->get_strength(), 1.0f);
+
+  auto *guard = dynamic_cast<MixNode *>(upstream(normalmap->input("Color")));
+  ASSERT_NE(guard, nullptr);
+  EXPECT_EQ(guard->get_color1(), make_float3(0.5f, 0.5f, 1.0f));
+  auto *scaled = dynamic_cast<VectorMathNode *>(upstream(guard->input("Color2")));
+  ASSERT_NE(scaled, nullptr);
+  EXPECT_EQ(scaled->get_math_type(), NODE_VECTOR_MATH_MULTIPLY_ADD);
+  EXPECT_EQ(scaled->get_vector3(), make_float3(0.5f, 0.5f, 0.5f));
+  auto *centered = dynamic_cast<VectorMathNode *>(upstream(scaled->input("Vector1")));
+  ASSERT_NE(centered, nullptr);
+  EXPECT_EQ(centered->get_math_type(), NODE_VECTOR_MATH_SUBTRACT);
+  EXPECT_EQ(centered->get_vector2(), make_float3(0.5f, 0.5f, 0.5f));
+  auto *height = dynamic_cast<MaterialXHeightToNormalNode *>(upstream(centered->input("Vector1")));
+  ASSERT_NE(height, nullptr);
+  EXPECT_EQ(height->name, "HeightToNormal");
+  auto *axis = dynamic_cast<CombineXYZNode *>(upstream(scaled->input("Vector2")));
+  ASSERT_NE(axis, nullptr);
+  EXPECT_FLOAT_EQ(axis->get_z(), 1.0f);
+  EXPECT_EQ(axis->input("Z")->link, nullptr);
+  ShaderNode *x_source = upstream(axis->input("X"));
+  ShaderNode *y_source = upstream(axis->input("Y"));
+  ASSERT_NE(x_source, nullptr);
+  EXPECT_EQ(x_source->name, "KScale");
+  EXPECT_EQ(y_source, x_source);
+  /* The black guard sees the raw encoded sample. */
+  auto *nonblack = dynamic_cast<MathNode *>(upstream(guard->input("Fac")));
+  ASSERT_NE(nonblack, nullptr);
+  auto *presence = dynamic_cast<VectorMathNode *>(upstream(nonblack->input("Value1")));
+  ASSERT_NE(presence, nullptr);
+  EXPECT_EQ(upstream(presence->input("Vector1")), height);
+  EXPECT_EQ(upstream(presence->input("Vector2")), height);
+}
+
+TEST(materialx_graph, normalmap_runtime_scale_rejects_malformed_forms)
+{
+  {
+    SCOPED_TRACE("runtime and literal scale");
+    materialx::Graph source = bump_shaped_runtime_scale_graph();
+    source.nodes.back().inputs["scale"] = 2.0f;
+    EXPECT_FALSE(materialx::validate(source));
+  }
+  {
+    SCOPED_TRACE("runtime scale with literal 'in'");
+    materialx::Graph source = bump_shaped_runtime_scale_graph();
+    source.nodes.back().links.erase("in");
+    source.nodes.back().vector3_inputs["in"] = make_float3(0.25f, 0.5f, 1.0f);
+    EXPECT_FALSE(materialx::validate(source));
+  }
+  {
+    SCOPED_TRACE("vector2-typed scale link");
+    materialx::Graph source = bump_shaped_runtime_scale_graph();
+    source.nodes.back().links["scale"] = {"UV0", "out", materialx::Type::Vector2};
+    EXPECT_FALSE(materialx::validate(source));
+  }
+  {
+    SCOPED_TRACE("runtime float scale on normalmap_vector2");
+    materialx::Graph source = bump_shaped_runtime_scale_graph();
+    source.nodes.back().nodedef = "ND_normalmap_vector2";
+    EXPECT_FALSE(materialx::validate(source));
+  }
+  {
+    SCOPED_TRACE("unrelated extra link");
+    materialx::Graph source = bump_shaped_runtime_scale_graph();
+    source.nodes.back().links["normal"] = {"HeightToNormal", "out", materialx::Type::Vector3};
+    EXPECT_FALSE(materialx::validate(source));
+  }
 }
 
 TEST(materialx_graph, rejects_connected_height_without_supported_derivative_chain)

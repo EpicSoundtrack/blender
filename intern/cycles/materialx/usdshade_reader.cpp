@@ -26818,16 +26818,24 @@ bool read_default_basis_bump_output(
               "ND_bump_vector3 requires a static float height (connected, finite literal or omitted)");
     return false;
   }
+  /* Batch 43 (b49x n K1): NG_bump_vector3 forwards 'scale' to
+   * normalmap.scale, which may be connected like any float input. A connected
+   * scale becomes a runtime link on the expanded normalmap; a literal or
+   * omitted one stays a finite literal (stdlib default 1). */
   float scale_value = 1.0f;
   const pxr::UsdShadeInput scale = bump.GetInput(pxr::TfToken("scale"));
+  const bool scale_linked = scale && scale.HasConnectedSource();
   if (scale) {
     if (scale.GetTypeName() != pxr::SdfValueTypeNames->Float ||
         scale.GetAttr().GetNumTimeSamples() != 0 ||
-        composed_connection_count(scale.GetAttr()) != 0 ||
-        (scale.GetAttr().HasAuthoredValueOpinion() && !scale.Get(&scale_value)) ||
+        (!scale_linked && composed_connection_count(scale.GetAttr()) != 0) ||
+        (!scale_linked && scale.GetAttr().HasAuthoredValueOpinion() &&
+         !scale.Get(&scale_value)) ||
         !std::isfinite(scale_value))
     {
-      set_error(error_message, "ND_bump_vector3 requires finite literal scale");
+      set_error(error_message,
+                "ND_bump_vector3 requires a static float scale (connected, finite literal or "
+                "omitted)");
       return false;
     }
   }
@@ -26844,6 +26852,18 @@ bool read_default_basis_bump_output(
                                           &emitted_color4_shaders,
                                           0,
                                           error_message))
+  {
+    return false;
+  }
+  Link scale_link;
+  if (scale_linked && !read_float_output(scale,
+                                         graph,
+                                         &scale_link,
+                                         &active_float_shaders,
+                                         &emitted_float_shaders,
+                                         &emitted_color4_shaders,
+                                         0,
+                                         error_message))
   {
     return false;
   }
@@ -26869,7 +26889,12 @@ bool read_default_basis_bump_output(
   normalmap.name = unique_node_name(*graph, bump.GetPrim().GetName().GetString() + ".normalmap", path + ".normalmap");
   normalmap.nodedef = normalmap_float_id;
   normalmap.links["in"] = {heighttonormal.name, "out", Type::Vector3};
-  normalmap.inputs["scale"] = scale_value;
+  if (scale_linked) {
+    normalmap.links["scale"] = scale_link;
+  }
+  else {
+    normalmap.inputs["scale"] = scale_value;
+  }
   normalmap.outputs["out"] = Type::Vector3;
   *result = {normalmap.name, "out", Type::Vector3};
   emitted_shaders->emplace(path, normalmap.name);

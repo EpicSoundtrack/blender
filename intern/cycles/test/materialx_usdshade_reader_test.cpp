@@ -36013,7 +36013,10 @@ TEST(materialx_usdshade_reader, standard_surface_bump_uses_materialx_default_bas
   bool found_normalmap = false;
   for (ShaderNode *node : lowered.nodes) {
     found_height |= dynamic_cast<MaterialXHeightToNormalNode *>(node) != nullptr;
-    found_normalmap |= dynamic_cast<MaterialXNormalMapNode *>(node) != nullptr;
+    /* Batch 43: bump's normalmap is on the stock UV-tangent path. */
+    const NormalMapNode *normalmap = dynamic_cast<NormalMapNode *>(node);
+    found_normalmap |= normalmap && normalmap->get_space() == NODE_NORMAL_MAP_TANGENT;
+    EXPECT_EQ(dynamic_cast<MaterialXNormalMapNode *>(node), nullptr) << node->name;
   }
   EXPECT_TRUE(found_height);
   EXPECT_TRUE(found_normalmap);
@@ -36277,9 +36280,14 @@ TEST(materialx_usdshade_reader, bump_lowers_as_ng_normalmap_of_heighttonormal_in
 
       ShaderGraph lowered;
       ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+      /* Batch 43: stock UV-tangent normal map, never the barycentric
+       * dPdu/dPdv MaterialX-only node. */
       bool found_normalmap = false;
       for (ShaderNode *node : lowered.nodes) {
-        found_normalmap |= dynamic_cast<MaterialXNormalMapNode *>(node) != nullptr;
+        const NormalMapNode *normalmap = dynamic_cast<NormalMapNode *>(node);
+        found_normalmap |= normalmap && normalmap->get_space() == NODE_NORMAL_MAP_TANGENT &&
+                           normalmap->get_attribute().empty();
+        EXPECT_EQ(dynamic_cast<MaterialXNormalMapNode *>(node), nullptr) << node->name;
       }
       EXPECT_TRUE(found_normalmap);
     }
@@ -36303,6 +36311,92 @@ TEST(materialx_usdshade_reader, bump_with_authored_basis_is_refused_without_muta
     ASSERT_EQ(source.nodes.size(), 1);
     EXPECT_EQ(source.nodes[0].name, "sentinel");
   }
+}
+
+/* Batch 43 (b49x packet n K1): NG_bump_vector3 forwards 'scale' to
+ * normalmap.scale, so a connected scale is legal. It is read as a runtime
+ * float link on the expanded normalmap (no literal scale) and lowers through
+ * the runtime pre-scale helpers on the stock UV-tangent normal map. A
+ * non-finite literal scale is still refused without mutating the graph. */
+TEST(materialx_usdshade_reader, bump_connected_scale_reads_and_lowers_runtime_normalmap_scale)
+{
+  for (const bool openpbr_normal : {false, true}) {
+    SCOPED_TRACE(openpbr_normal ? "openpbr geometry_normal" : "displacement_vector3");
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    ASSERT_TRUE(stage);
+    const pxr::UsdShadeMaterial material = make_bump_consumer_material(
+        stage, openpbr_normal, 2, false);
+    pxr::UsdShadeShader bump(stage->GetPrimAtPath(pxr::SdfPath("/Looks/TestMaterial/Bump")));
+    ASSERT_TRUE(bump);
+    pxr::UsdShadeShader scale_source = pxr::UsdShadeShader::Define(
+        stage, pxr::SdfPath("/Looks/TestMaterial/BumpScale"));
+    scale_source.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_float")));
+    scale_source.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float).Set(2.0f);
+    scale_source.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    pxr::UsdShadeInput scale = bump.GetInput(pxr::TfToken("scale"));
+    ASSERT_TRUE(scale);
+    ASSERT_TRUE(scale.GetAttr().Clear());
+    ASSERT_TRUE(scale.ConnectToSource(scale_source.ConnectableAPI(), pxr::TfToken("out")));
+
+    string before;
+    ASSERT_TRUE(stage->GetRootLayer()->ExportToString(&before));
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    string after;
+    ASSERT_TRUE(stage->GetRootLayer()->ExportToString(&after));
+    EXPECT_EQ(before, after);
+
+    const auto normalmap = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(), [](const materialx::Node &n) {
+          return n.nodedef == "ND_normalmap_float";
+        });
+    ASSERT_NE(normalmap, graph.nodes.end());
+    EXPECT_FALSE(normalmap->inputs.contains("scale"));
+    ASSERT_TRUE(normalmap->links.contains("scale"));
+    const string scale_node = normalmap->links.at("scale").source_node;
+    const auto scale_read = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &n) {
+          return n.name == scale_node;
+        });
+    ASSERT_NE(scale_read, graph.nodes.end());
+    EXPECT_EQ(scale_read->nodedef, "ND_constant_float");
+    EXPECT_FLOAT_EQ(scale_read->inputs.at("value"), 2.0f);
+    EXPECT_EQ(normalmap->links.at("scale").type, materialx::Type::Float);
+
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    NormalMapNode *native_normalmap = nullptr;
+    CombineXYZNode *axis = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      native_normalmap = native_normalmap ? native_normalmap : dynamic_cast<NormalMapNode *>(node);
+      if (node->name.string() == normalmap->name + ".axis") {
+        axis = dynamic_cast<CombineXYZNode *>(node);
+      }
+      EXPECT_EQ(dynamic_cast<MaterialXNormalMapNode *>(node), nullptr) << node->name;
+    }
+    ASSERT_NE(native_normalmap, nullptr);
+    EXPECT_EQ(native_normalmap->get_space(), NODE_NORMAL_MAP_TANGENT);
+    EXPECT_FLOAT_EQ(native_normalmap->get_strength(), 1.0f);
+    ASSERT_NE(axis, nullptr);
+    ASSERT_NE(axis->input("X")->link, nullptr);
+    ASSERT_NE(axis->input("Y")->link, nullptr);
+    EXPECT_EQ(axis->input("X")->link, axis->input("Y")->link);
+  }
+
+  /* A non-finite literal scale stays a refusal. */
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  const pxr::UsdShadeMaterial material = make_bump_consumer_material(stage, true, 2, false);
+  pxr::UsdShadeShader bump(stage->GetPrimAtPath(pxr::SdfPath("/Looks/TestMaterial/Bump")));
+  ASSERT_TRUE(bump.GetInput(pxr::TfToken("scale")).Set(std::numeric_limits<float>::infinity()));
+  materialx::Graph source;
+  source.nodes.push_back({"sentinel", "unsupported"});
+  string error;
+  EXPECT_FALSE(materialx::read_usdshade_graph(material, &source, &error));
+  EXPECT_NE(error.find("ND_bump_vector3 requires a static float scale"), string::npos) << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].name, "sentinel");
 }
 
 TEST(materialx_usdshade_reader, reads_constant_heighttonormal_as_flat_normal)

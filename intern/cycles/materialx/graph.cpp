@@ -11748,6 +11748,12 @@ bool validate(const Graph &source,
       const auto scale_vector = node.vector2_inputs.find("scale");
       const auto input_value = node.vector3_inputs.find("in");
       const auto input_link = node.links.find("in");
+      /* Batch 43: a runtime float 'scale' (ND_normalmap_float only, e.g. a
+       * connected NG_bump_vector3 scale) is applied by the runtime pre-scale
+       * helpers in lower(); it requires a linked 'in' and excludes a literal
+       * scale. */
+      const auto scale_link = node.links.find("scale");
+      const bool runtime_scale = scale_link != node.links.end();
       const auto output = node.outputs.find("out");
       const auto linked_source = input_link == node.links.end() ?
                                      nodes_by_name->end() :
@@ -11767,6 +11773,10 @@ bool validate(const Graph &source,
            0.5f + scale_vector->second.x * (input_value->second.x - 0.5f) == 0.0f &&
            0.5f + scale_vector->second.y * (input_value->second.y - 0.5f) == 0.0f) ||
           ((input_value != node.vector3_inputs.end()) == (input_link != node.links.end())) ||
+          (runtime_scale &&
+           (node.nodedef != normalmap_float_id || scale != node.inputs.end() ||
+            input_link == node.links.end() ||
+            !validate_link(scale_link->second, Type::Float, *nodes_by_name))) ||
           (input_link != node.links.end() &&
            !validate_link(input_link->second, Type::Vector3, *nodes_by_name)) ||
           (input_link != node.links.end() && !linked_image &&
@@ -11803,7 +11813,8 @@ bool validate(const Graph &source,
           output == node.outputs.end() || output->second != Type::Vector3 ||
           node.inputs.size() > size_t(node.nodedef == normalmap_float_id) ||
           node.vector2_inputs.size() > size_t(node.nodedef == normalmap_vector2_id) ||
-          node.vector3_inputs.size() > 1 || node.links.size() > 1 || node.outputs.size() != 1 ||
+          node.vector3_inputs.size() > 1 || node.links.size() > 1 + size_t(runtime_scale) ||
+          node.outputs.size() != 1 ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() ||
           !node.string_inputs.empty() || !node.asset_inputs.empty())
       {
@@ -16605,6 +16616,10 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     VectorMathNode *presence;
     MathNode *nonblack;
     MixNode *guard;
+    /* Batch 43: runtime float scale only (null for a literal scale):
+     * centered = sample - 0.5, axis = (scale, scale, 1). */
+    VectorMathNode *centered = nullptr;
+    CombineXYZNode *axis = nullptr;
   };
   unordered_map<string, NormalMapScaleNodes> normalmap_scale_nodes;
   for (const Node &node : source.nodes) {
@@ -24736,22 +24751,21 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       lowered = image;
     }
     else if (node.nodedef == normalmap_float_id || node.nodedef == normalmap_vector2_id) {
-      /* normalmap_float fed by heighttonormal uses the MaterialX-only
-       * mx_normalmap_float frame (dPdu/dPdv); everything else the stock node. */
-      const bool materialx_frame =
-          node.nodedef == normalmap_float_id && node.links.contains("in") &&
-          nodes_by_name.at(node.links.at("in").source_node)->nodedef == heighttonormal_vector3_id;
-      ShaderNode *normalmap = nullptr;
-      if (materialx_frame) {
-        normalmap = graph->create_node<MaterialXNormalMapNode>();
-      }
-      else {
-        NormalMapNode *stock_normalmap = graph->create_node<NormalMapNode>();
-        stock_normalmap->set_space(NODE_NORMAL_MAP_TANGENT);
-        stock_normalmap->set_convention(NODE_NORMAL_MAP_CONVENTION_OPENGL);
-        stock_normalmap->set_base(NODE_NORMAL_MAP_BASE_DISPLACED);
-        normalmap = stock_normalmap;
-      }
+      /* Batch 43 (b49x n V0/V1, g3 T:V0): normalmap_float fed by
+       * heighttonormal (NG_bump_vector3) also takes the stock UV-tangent path.
+       * Its former MaterialX-only frame built T/B from sd->dPdu/dPdv, which
+       * for Cycles triangles are barycentric edge vectors (triangle_dPdudv:
+       * dPdu = p1 - p0, dPdv = p2 - p0), not the UV tangent frame
+       * Tworld/Bworld that the nodedef defaults to (the defect batch 16 fixed
+       * for normalmap_vector2): a UV-ramp bump was right on one triangle of
+       * a quad and wrong on the other. heighttonormal encodes its normal in
+       * UV axes (x along +u, y along +v), so T/B must be the UV tangent
+       * frame. */
+      NormalMapNode *stock_normalmap = graph->create_node<NormalMapNode>();
+      stock_normalmap->set_space(NODE_NORMAL_MAP_TANGENT);
+      stock_normalmap->set_convention(NODE_NORMAL_MAP_CONVENTION_OPENGL);
+      stock_normalmap->set_base(NODE_NORMAL_MAP_BASE_DISPLACED);
+      ShaderNode *normalmap = stock_normalmap;
       /* Batch 16: ND_normalmap_vector2 no longer uses the MaterialX-frame
        * kernel path. That path builds T/B from sd->dPdu/dPdv, which for
        * Cycles meshes are the per-triangle barycentric derivatives, not the
@@ -24769,9 +24783,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       const float2 vector2_scale = node.vector2_inputs.contains("scale") ?
                                        node.vector2_inputs.at("scale") :
                                        make_float2(1.0f, 1.0f);
-      if (NormalMapNode *stock_normalmap = dynamic_cast<NormalMapNode *>(normalmap)) {
-        stock_normalmap->set_strength(1.0f);
-      }
+      stock_normalmap->set_strength(1.0f);
       if (const auto input = node.vector3_inputs.find("in"); input != node.vector3_inputs.end()) {
         float3 color = input->second;
         if (node.nodedef == normalmap_float_id) {
@@ -24796,17 +24808,15 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
                               vector2_scale.y * color.y + 0.5f * (1.0f - vector2_scale.y),
                               color.z);
         }
-        if (NormalMapNode *stock_normalmap = dynamic_cast<NormalMapNode *>(normalmap)) {
-          stock_normalmap->set_color(color);
-        }
-        else {
-          static_cast<MaterialXNormalMapNode *>(normalmap)->set_color(color);
-        }
+        stock_normalmap->set_color(color);
       }
       else if (node.nodedef == normalmap_float_id || prescale_vector2) {
         const float s = node.inputs.contains("scale") ? node.inputs.at("scale") : 1.0f;
         const float2 axis_scale = prescale_vector2 ? vector2_scale : make_float2(s, s);
-        if (axis_scale.x != 1.0f || axis_scale.y != 1.0f || prescale_vector2) {
+        /* Batch 43: a runtime scale (validate() admits it only for
+         * normalmap_float with a linked 'in') always takes the helpers. */
+        const bool runtime_scale = node.links.contains("scale");
+        if (axis_scale.x != 1.0f || axis_scale.y != 1.0f || prescale_vector2 || runtime_scale) {
           const auto unique_helper_name = [&](const string &base) {
             string name = base;
             for (size_t suffix = 1;
@@ -24837,7 +24847,24 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           guard->name = unique_helper_name(node.name + ".guard");
           guard->set_mix_type(NODE_MIX_BLEND);
           guard->set_color1(make_float3(0.5f, 0.5f, 1.0f));
-          normalmap_scale_nodes.emplace(node.name, NormalMapScaleNodes{scaled, presence, nonblack, guard});
+          NormalMapScaleNodes helpers{scaled, presence, nonblack, guard};
+          if (runtime_scale) {
+            /* scaled = (sample - 0.5) * (s, s, 1) + 0.5, i.e. decoded
+             * (s*dx, s*dy, dz); the connect pass wires s into axis X/Y. */
+            VectorMathNode *centered = graph->create_node<VectorMathNode>();
+            centered->name = unique_helper_name(node.name + ".centered");
+            centered->set_math_type(NODE_VECTOR_MATH_SUBTRACT);
+            centered->set_vector2(make_float3(0.5f, 0.5f, 0.5f));
+            CombineXYZNode *axis = graph->create_node<CombineXYZNode>();
+            axis->name = unique_helper_name(node.name + ".axis");
+            axis->set_x(1.0f);
+            axis->set_y(1.0f);
+            axis->set_z(1.0f);
+            scaled->set_vector3(make_float3(0.5f, 0.5f, 0.5f));
+            helpers.centered = centered;
+            helpers.axis = axis;
+          }
+          normalmap_scale_nodes.emplace(node.name, helpers);
         }
       }
       lowered = normalmap;
@@ -32186,7 +32213,20 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           auto *presence = helpers.presence;
           auto *nonblack = helpers.nonblack;
           auto *guard = helpers.guard;
-          graph->connect(source, scaled->input("Vector1"));
+          const auto scale_link = node.links.find("scale");
+          if (helpers.centered && scale_link != node.links.end()) {
+            /* Batch 43: runtime float scale. */
+            graph->connect(source, helpers.centered->input("Vector1"));
+            graph->connect(helpers.centered->output("Vector"), scaled->input("Vector1"));
+            ShaderOutput *runtime_scale = lowered_output(
+                scale_link->second, nodes_by_name, lowered_nodes);
+            graph->connect(runtime_scale, helpers.axis->input("X"));
+            graph->connect(runtime_scale, helpers.axis->input("Y"));
+            graph->connect(helpers.axis->output("Vector"), scaled->input("Vector2"));
+          }
+          else {
+            graph->connect(source, scaled->input("Vector1"));
+          }
           graph->connect(source, presence->input("Vector1"));
           graph->connect(source, presence->input("Vector2"));
           graph->connect(presence->output("Value"), nonblack->input("Value1"));
