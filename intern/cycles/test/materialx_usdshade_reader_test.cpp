@@ -48630,6 +48630,79 @@ TEST(materialx_usdshade_reader, reads_and_lowers_runtime_primvar_matrix33_divide
   EXPECT_EQ(observers, 3);
 }
 
+/* Batch 41: b51x tf2 ND_transformmatrix_vector3M4 contracts K0-K2
+ * (transform-v3m4-full10-v1.K0.usda shape): 'in' connected to an
+ * ND_constant_vector3 and 'mat' to an ND_constant_matrix44. The reader
+ * required a literal 'in' ("ND_transformmatrix_vector3M4 requires literal
+ * finite vector3 input 'in'"). It now keeps the 'in' link, and the graph
+ * lowers it per element against the static 'mat'. */
+TEST(materialx_usdshade_reader, reads_and_lowers_connected_in_transformmatrix_vector3m4)
+{
+  string usda =
+      "#usda 1.0\n"
+      "def Scope \"Looks\" {\n"
+      " def Material \"Material\" {\n"
+      "  token outputs:mtlx:surface.connect = </Looks/Material/Root.outputs:surface>\n"
+      "  def NodeGraph \"Root\" {\n"
+      "   token outputs:surface.connect = </Looks/Material/Root/surface.outputs:out>\n";
+  const string root = "</Looks/Material/Root/";
+  const auto shader = [&](const string &name, const string &id, const string &body) {
+    usda += "   def Shader \"" + name + "\" {\n    uniform token info:id = \"" + id + "\"\n" + body +
+            "   }\n";
+  };
+  shader("constant_in",
+         "ND_constant_vector3",
+         "    vector3f inputs:value = (0.25, -3, 2)\n    vector3f outputs:out\n");
+  shader("constant_mat",
+         "ND_constant_matrix44",
+         "    matrix4d inputs:value = ( (2, 0, 0, 0), (0, 3, 0, 0), (0, 0, 4, 0), (7, -8, 9, 1) )\n"
+         "    matrix4d outputs:out\n");
+  shader("under_test",
+         "ND_transformmatrix_vector3M4",
+         "    vector3f inputs:in.connect = " + root + "constant_in.outputs:out>\n"
+         "    matrix4d inputs:mat.connect = " + root + "constant_mat.outputs:out>\n"
+         "    vector3f outputs:out\n");
+  shader("extract",
+         "ND_extract_vector3",
+         "    vector3f inputs:in.connect = " + root + "under_test.outputs:out>\n"
+         "    uniform int inputs:index = 0\n    float outputs:out\n");
+  shader("surface",
+         "ND_convert_float_surfaceshader",
+         "    float inputs:in.connect = " + root + "extract.outputs:out>\n    token outputs:out\n");
+  usda += "  }\n }\n}\n";
+
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(usda));
+  const pxr::UsdShadeMaterial material(stage->GetPrimAtPath(pxr::SdfPath("/Looks/Material")));
+  ASSERT_TRUE(material);
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *transform = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_transformmatrix_vector3M4") {
+      transform = &node;
+    }
+  }
+  ASSERT_NE(transform, nullptr);
+  ASSERT_TRUE(transform->links.contains("in"));
+  EXPECT_EQ(transform->links.at("in").type, materialx::Type::Vector3);
+  EXPECT_FALSE(transform->vector3_inputs.contains("in"));
+  ASSERT_TRUE(materialx::validate(graph));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  CombineXYZNode *result = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (node->name == ustring(transform->name)) {
+      result = dynamic_cast<CombineXYZNode *>(node);
+    }
+  }
+  ASSERT_NE(result, nullptr);
+  /* x = 0.25 * 2 + 7 = 7.5, driven through the connected 'in'. */
+  EXPECT_NE(result->input("X")->link, nullptr);
+}
+
 
 /* Batch 10: tangent/viewdirection accept "object" space and uniform
  * space/index through ND_constant_string / ND_constant_integer. */

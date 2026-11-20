@@ -28031,6 +28031,120 @@ TEST(materialx_graph, divide_matrix33_runtime_operands_lower_as_inverse_product)
   EXPECT_FALSE(materialx::validate({{row_a, mat_a, div_v0, product}}));
 }
 
+/* Batch 41 (b51x tf2 K0-K2): ND_transformmatrix_vector3M4 with a connected
+ * 'in' was refused by the reader ("requires literal finite vector3 input
+ * 'in'") and had no graph route. It now lowers per element as the homogeneous
+ * point transform [x, y, z, 1] * M (MaterialX genglsl
+ * mx_transformmatrix_vector3M4: (transform * vec4(val, 1)).xyz), with a
+ * literal or static-linked 'mat'. A runtime 'mat' is still refused. */
+TEST(materialx_graph, transformmatrix_vector3m4_connected_in_lowers_homogeneous_point)
+{
+  /* Projective, every cell distinct, translation in the last row. */
+  const std::array<float, 16> m = {2.0f,  0.5f, -1.0f, 0.25f, 0.5f, 3.0f,  0.75f, -0.5f,
+                                   -1.0f, 0.25f, 4.0f, 1.0f,  7.0f, -8.0f, 9.0f,  1.5f};
+  /* ND_constant_matrix44 keeps an affine Transform carrier, so the linked
+   * source is affine (distinct cells, translation in the last row). */
+  const std::array<float, 16> affine = {2.0f, 0.5f, -1.0f, 0.0f, 0.5f,  3.0f, 0.75f, 0.0f,
+                                        -1.0f, 0.25f, 4.0f, 0.0f, 7.0f, -8.0f, 9.0f,  1.0f};
+  const float3 v = make_float3(0.25f, -3.0f, 2.0f);
+  const auto reference_of = [&](const std::array<float, 16> &x, const int col) {
+    return double(v.x) * x[size_t(col)] + double(v.y) * x[size_t(4 + col)] +
+           double(v.z) * x[size_t(8 + col)] + double(x[size_t(12 + col)]);
+  };
+  materialx::Node in{"In", "ND_constant_vector3"};
+  in.vector3_inputs["value"] = v;
+  in.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node constant_mat{"ConstantMat", "ND_constant_matrix44"};
+  constant_mat.matrix44_inputs["value"] = affine;
+  constant_mat.outputs["out"] = materialx::Type::Matrix44;
+  /* K2 shape: a static projective creatematrix (admitted only for consumers
+   * that fold all sixteen cells, which this route does). */
+  materialx::Node create_mat{"CreateMat", "ND_creatematrix_vector4_matrix44"};
+  const char *rows[] = {"in1", "in2", "in3", "in4"};
+  for (int r = 0; r < 4; r++) {
+    create_mat.vector4_inputs[rows[r]] = make_float4(
+        m[size_t(r * 4)], m[size_t(r * 4 + 1)], m[size_t(r * 4 + 2)], m[size_t(r * 4 + 3)]);
+  }
+  create_mat.outputs["out"] = materialx::Type::Matrix44;
+  const auto transform = [&](const char *name, const bool linked_mat, const char *source_mat = "ConstantMat") {
+    materialx::Node node{name, "ND_transformmatrix_vector3M4"};
+    node.links["in"] = {"In", "out", materialx::Type::Vector3};
+    if (linked_mat) {
+      node.links["mat"] = {source_mat, "out", materialx::Type::Matrix44};
+    }
+    else {
+      node.matrix44_inputs["mat"] = m;
+    }
+    node.outputs["out"] = materialx::Type::Vector3;
+    return node;
+  };
+  /* Literal 'in' keeps the static fold (control). */
+  materialx::Node literal{"Literal", "ND_transformmatrix_vector3M4"};
+  literal.vector3_inputs["in"] = v;
+  literal.matrix44_inputs["mat"] = m;
+  literal.outputs["out"] = materialx::Type::Vector3;
+
+  const materialx::Graph source{
+      {in, constant_mat, create_mat, transform("LiteralMat", false), transform("LinkedMat", true),
+       transform("CreateLinked", true, "CreateMat"), literal}};
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+  for (const char *name : {"LiteralMat", "LinkedMat", "CreateLinked", "Literal"}) {
+    ShaderNode *node = materialx_divide_named_node(graph, name);
+    ASSERT_NE(node, nullptr) << name;
+    const float3 out = materialx_round_test_vector(node->output("Vector"));
+    const std::array<float, 16> &x = string(name) == "LinkedMat" ? affine : m;
+    const auto reference = [&](const int col) { return reference_of(x, col); };
+    EXPECT_NEAR(out.x, reference(0), 1e-5 * (1.0 + std::fabs(reference(0)))) << name;
+    EXPECT_NEAR(out.y, reference(1), 1e-5 * (1.0 + std::fabs(reference(1)))) << name;
+    EXPECT_NEAR(out.z, reference(2), 1e-5 * (1.0 + std::fabs(reference(2)))) << name;
+    const bool linked = node->input("X")->link || node->input("Y")->link ||
+                        node->input("Z")->link;
+    EXPECT_EQ(linked, string(name) != "Literal") << name;
+  }
+
+  /* Fail closed: link plus literal 'in', a mistyped 'in' link, a missing
+   * 'mat', a non-finite literal 'mat', a Matrix33 'mat' link, and a runtime
+   * 'mat' (creatematrix with a connected row). */
+  materialx::Node both = transform("Both", false);
+  both.vector3_inputs["in"] = v;
+  EXPECT_FALSE(materialx::validate({{in, both}}));
+  materialx::Node in4{"In4", "ND_constant_vector4"};
+  in4.vector4_inputs["value"] = make_float4(1, 2, 3, 4);
+  in4.outputs["out"] = materialx::Type::Vector4;
+  materialx::Node mistyped = transform("Mistyped", false);
+  mistyped.links["in"] = {"In4", "out", materialx::Type::Vector4};
+  EXPECT_FALSE(materialx::validate({{in4, mistyped}}));
+  materialx::Node no_mat = transform("NoMat", false);
+  no_mat.matrix44_inputs.clear();
+  EXPECT_FALSE(materialx::validate({{in, no_mat}}));
+  materialx::Node nonfinite = transform("NonFinite", false);
+  nonfinite.matrix44_inputs["mat"][5] = std::numeric_limits<float>::quiet_NaN();
+  EXPECT_FALSE(materialx::validate({{in, nonfinite}}));
+  materialx::Node m33{"M33", "ND_constant_matrix33"};
+  m33.matrix33_inputs["value"] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  m33.outputs["out"] = materialx::Type::Matrix33;
+  materialx::Node mat33 = transform("Mat33", false);
+  mat33.matrix44_inputs.clear();
+  mat33.links["mat"] = {"M33", "out", materialx::Type::Matrix33};
+  EXPECT_FALSE(materialx::validate({{in, m33, mat33}}));
+  materialx::Node row{"Row", "ND_constant_vector4"};
+  row.vector4_inputs["value"] = make_float4(1, 0, 0, 0);
+  row.outputs["out"] = materialx::Type::Vector4;
+  materialx::Node runtime_mat{"RuntimeMat", "ND_creatematrix_vector4_matrix44"};
+  runtime_mat.links["in1"] = {"Row", "out", materialx::Type::Vector4};
+  runtime_mat.vector4_inputs["in2"] = make_float4(0, 1, 0, 0);
+  runtime_mat.vector4_inputs["in3"] = make_float4(0, 0, 1, 0);
+  runtime_mat.vector4_inputs["in4"] = make_float4(0, 0, 0, 1);
+  runtime_mat.outputs["out"] = materialx::Type::Matrix44;
+  materialx::Node runtime = transform("Runtime", false);
+  runtime.matrix44_inputs.clear();
+  runtime.links["mat"] = {"RuntimeMat", "out", materialx::Type::Matrix44};
+  EXPECT_FALSE(materialx::validate({{in, row, runtime_mat, runtime}}));
+}
+
 /* Batch 9, literal-operand class: ND_grid_color3 / ND_crosshatch_color3
  * 'thickness' and ND_time_float 'fps' accept a connected float (guard + seed +
  * wire). The connected value drives the same sockets the literal seeds. */

@@ -4485,6 +4485,16 @@ bool transformmatrix_vector4_is_runtime(const Node &node,
            !matrix44_link_has_static_value(node, "mat", nodes_by_name)));
 }
 
+/* ND_transformmatrix_vector3M4 with a connected 'in' (batch 41, b51x tf2
+ * K0-K2): [x, y, z, 1] * M per element in the runtime Matrix44 pass, the
+ * homogeneous point transform transformmatrix_vector3_value() folds for a
+ * literal 'in'. 'mat' must still have a static value (literal or a static
+ * link); a runtime 'mat' stays refused. */
+bool transformmatrix_vector3m4_is_runtime(const Node &node)
+{
+  return node.nodedef == transformmatrix_vector3m4_id && node.links.contains("in");
+}
+
 bool matrix44_node_is_runtime(const Node &node,
                               const unordered_map<string, const Node *> &nodes_by_name)
 {
@@ -14202,6 +14212,27 @@ bool validate(const Graph &source,
         }
         continue;
       }
+      if (transformmatrix_vector3m4_is_runtime(node)) {
+        /* Connected vector3 'in' (no literal), and a 'mat' that is a finite
+         * literal XOR a link with a static value (finite components; the
+         * product is folded per element, no Transform carrier is built). */
+        const bool has_literal_matrix = node.matrix44_inputs.contains("mat");
+        const bool valid_mat = has_literal_matrix != node.links.contains("mat") &&
+                               transformmatrix_matrix44_input_is_valid(node, *nodes_by_name);
+        if (output == node.outputs.end() || output->second != Type::Vector3 ||
+            node.outputs.size() != 1 ||
+            !validate_link(node.links.at("in"), Type::Vector3, *nodes_by_name) || !valid_mat ||
+            node.links.size() != 1 + size_t(!has_literal_matrix) ||
+            node.vector3_inputs.contains("in") || !node.vector3_inputs.empty() ||
+            node.matrix44_inputs.size() != size_t(has_literal_matrix) || !node.inputs.empty() ||
+            !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
+            !node.vector2_inputs.empty() || !node.vector4_inputs.empty() ||
+            !node.matrix33_inputs.empty() || !node.string_inputs.empty() || !node.asset_inputs.empty())
+        {
+          return false;
+        }
+        continue;
+      }
       if (output_type == Type::Vector4 && transformmatrix_vector4_is_runtime(node, *nodes_by_name)) {
         /* Runtime lowering (see matrix44_runtime_source_valid()): 'in' is a
          * finite literal XOR a vector4 link, 'mat' a static literal/link or a
@@ -16622,6 +16653,14 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       w->set_math_type(NODE_MATH_ADD);
       w->set_value2(0.0f);
       lowered_nodes.emplace(w->name, w);
+      lowered_nodes.emplace(node.name, vector);
+      continue;
+    }
+    if (transformmatrix_vector3m4_is_runtime(node)) {
+      /* Driven by the per-element [x, y, z, 1] * M expression built in the
+       * runtime Matrix44 pass after all producers are lowered. */
+      CombineXYZNode *vector = graph->create_node<CombineXYZNode>();
+      vector->name = node.name;
       lowered_nodes.emplace(node.name, vector);
       continue;
     }
@@ -34150,6 +34189,63 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         }
         else {
           static_cast<MathNode *>(w)->set_value1(sum.value);
+        }
+      }
+    }
+
+    /* ND_transformmatrix_vector3M4 with a connected 'in' (see
+     * transformmatrix_vector3m4_is_runtime()): out[col] = sum_row
+     * [x, y, z, 1][row] * M[row*4+col] for col 0..2, exactly the homogeneous
+     * point transform transformmatrix_vector3_value() folds for a literal
+     * 'in' (no divide by w). validate() admits only a static 'mat'. */
+    for (const Node &node : source.nodes) {
+      if (!transformmatrix_vector3m4_is_runtime(node)) {
+        continue;
+      }
+      ShaderOutput *xyz = lowered_output(node.links.at("in"), nodes_by_name, lowered_nodes);
+      Matrix matrix;
+      bool ok = xyz != nullptr;
+      if (ok) {
+        if (const auto mat = node.links.find("mat"); mat != node.links.end()) {
+          ok = matrix_value(mat->second, &matrix, 0);
+        }
+        else {
+          const std::array<float, 16> &literal = node.matrix44_inputs.at("mat");
+          for (int i = 0; i < 16; i++) {
+            matrix[size_t(i)] = constant(literal[size_t(i)]);
+          }
+        }
+      }
+      if (!ok) {
+        rollback();
+        return fail("MaterialX node '" + node.name +
+                    "' (ND_transformmatrix_vector3M4) has a connected 'in' without a lowered "
+                    "vector3 route");
+      }
+      SeparateXYZNode *separate = graph->create_node<SeparateXYZNode>();
+      graph->connect(xyz, separate->input("Vector"));
+      const std::array<Scalar, 4> vector = {Scalar{separate->output("X")},
+                                            Scalar{separate->output("Y")},
+                                            Scalar{separate->output("Z")},
+                                            constant(1.0f)};
+      CombineXYZNode *combine = static_cast<CombineXYZNode *>(lowered_nodes.at(node.name));
+      static const char *sockets[] = {"X", "Y", "Z"};
+      for (int col = 0; col < 3; col++) {
+        Scalar sum = constant(0.0f);
+        for (int row = 0; row < 4; row++) {
+          sum = add(sum, mul(vector[size_t(row)], matrix[size_t(row * 4 + col)]));
+        }
+        if (sum.output) {
+          graph->connect(sum.output, combine->input(sockets[col]));
+        }
+        else if (col == 0) {
+          combine->set_x(sum.value);
+        }
+        else if (col == 1) {
+          combine->set_y(sum.value);
+        }
+        else {
+          combine->set_z(sum.value);
         }
       }
     }

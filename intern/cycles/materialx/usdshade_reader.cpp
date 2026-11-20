@@ -24558,9 +24558,10 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
     const pxr::UsdShadeOutput output = source.GetOutput(pxr::TfToken("out"));
     if (!shader_has_exact_signature(source, {"in", "mat"}, {"out"}, error_message) ||
         !output || !is_usd_vector3_type(output.GetTypeName()) ||
-        !(matrix44 ? read_literal_vector3_input(source, nodedef, "in", &node, error_message) :
-                     read_vector3_operand(source, nodedef, "in", graph, &node, active_shaders,
-                                          depth + 1, error_message)) ||
+        /* 'in' is a literal XOR a connected vector3 for both matrix sizes
+         * (vector3M4 since batch 41: b51x tf2 K0-K2/V0-V2). */
+        !read_vector3_operand(source, nodedef, "in", graph, &node, active_shaders, depth + 1,
+                              error_message) ||
         !(matrix44 ? read_matrix44_conditional_operand(source,
                                                        nodedef,
                                                        "mat",
