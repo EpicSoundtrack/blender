@@ -34797,6 +34797,77 @@ TEST(materialx_usdshade_reader, ifequal_integerB_folds_constant_integer_arms)
   }
 }
 
+/* Batch 38 port (certified private host d5a060ca reflect-refract-nworld-v1): a
+ * declared, unvalued ND_reflect/refract_vector3 'normal' is the NodeDef's
+ * defaultgeomprop Nworld (the shading normal), not a refusal. */
+TEST(materialx_usdshade_reader, reflect_refract_unvalued_normal_is_nworld)
+{
+  for (const char *id : {"ND_reflect_vector3", "ND_refract_vector3"}) {
+    for (const bool unvalued : {true, false}) {
+      SCOPED_TRACE(string(id) + (unvalued ? " unvalued" : " literal"));
+      Batch38EmissionProbe probe;
+      const pxr::SdfValueTypeName vector3 = pxr::SdfValueTypeNames->Vector3f;
+      pxr::UsdShadeShader tested = probe.shader("Tested", id, vector3);
+      tested.CreateInput(pxr::TfToken("in"), vector3).Set(pxr::GfVec3f(1.0f, -1.0f, 0.0f));
+      pxr::UsdShadeInput normal = tested.CreateInput(pxr::TfToken("normal"), vector3);
+      if (!unvalued) {
+        normal.Set(pxr::GfVec3f(0.0f, 1.0f, 0.0f));
+      }
+      if (string(id) == "ND_refract_vector3") {
+        tested.CreateInput(pxr::TfToken("ior"), pxr::SdfValueTypeNames->Float).Set(1.0f);
+      }
+      pxr::UsdShadeShader color = probe.shader("Observed", "ND_convert_vector3_color3",
+                                               pxr::SdfValueTypeNames->Color3f);
+      color.CreateInput(pxr::TfToken("in"), vector3)
+          .ConnectToSource(tested.GetOutput(pxr::TfToken("out")));
+      probe.observe_color3(color);
+
+      materialx::Graph graph;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(probe.material, &graph, &error)) << error;
+      const auto it = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                   [](const materialx::Node &node) { return node.name == "Tested"; });
+      ASSERT_NE(it, graph.nodes.end());
+      if (unvalued) {
+        ASSERT_TRUE(it->links.count("in2"));
+        const auto normal_node = std::find_if(
+            graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+              return node.name == it->links.at("in2").source_node;
+            });
+        ASSERT_NE(normal_node, graph.nodes.end());
+        EXPECT_EQ(normal_node->nodedef, "ND_normal_vector3");
+        EXPECT_EQ(normal_node->string_inputs.at("space"), "world");
+        ShaderGraph lowered;
+        ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+      }
+      else if (string(id) == "ND_reflect_vector3") {
+        /* reflect(I, N) = I - 2 dot(N, I) N = (1, 1, 0) for the literal normal. */
+        float3 value;
+        ASSERT_TRUE(probe.evaluate(&value, &error)) << error;
+        EXPECT_NEAR(value.x, 1.0f, 1e-6f);
+        EXPECT_NEAR(value.y, 1.0f, 1e-6f);
+        EXPECT_NEAR(value.z, 0.0f, 1e-6f);
+      }
+    }
+  }
+
+  /* The Nworld default reaches the lowered reflect as a live shading normal. */
+  Batch38EmissionProbe probe;
+  const pxr::SdfValueTypeName vector3 = pxr::SdfValueTypeNames->Vector3f;
+  pxr::UsdShadeShader tested = probe.shader("Tested", "ND_reflect_vector3", vector3);
+  tested.CreateInput(pxr::TfToken("in"), vector3).Set(pxr::GfVec3f(1.0f, -1.0f, 0.0f));
+  tested.CreateInput(pxr::TfToken("normal"), vector3);
+  pxr::UsdShadeShader color = probe.shader("Observed", "ND_convert_vector3_color3",
+                                           pxr::SdfValueTypeNames->Color3f);
+  color.CreateInput(pxr::TfToken("in"), vector3)
+      .ConnectToSource(tested.GetOutput(pxr::TfToken("out")));
+  probe.observe_color3(color);
+  float3 value;
+  string error;
+  ASSERT_TRUE(probe.evaluate(&value, &error)) << error;
+  EXPECT_TRUE(std::isnan(value.x)) << "emission must stay linked to the shading normal";
+}
+
 /* Batch 38 port (certified private host def35d38): a geomcolor 'index' linked
  * to a uniform exact ND_constant_integer folds to that color-set index; other
  * producers and negative constants stay refused. */

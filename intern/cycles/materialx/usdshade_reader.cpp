@@ -25643,6 +25643,22 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
         set_error(error_message, "ND_reflect_vector3 requires vector3 input '" + string(source_name) + "'");
         return finish(false);
       }
+      if (string(source_name) == "normal" && !input.HasConnectedSource() &&
+          composed_connection_count(input.GetAttr()) == 0 &&
+          !input.GetAttr().HasAuthoredValueOpinion())
+      {
+        /* A declared, unvalued 'normal' keeps the NodeDef's defaultgeomprop
+         * Nworld (lineage: certified private host d5a060ca,
+         * reflect-refract-nworld-v1). */
+        Node geometric;
+        geometric.name = unique_node_name(*graph, node.name + "__Nworld", path + "/Nworld");
+        geometric.nodedef = normal_vector3_id;
+        geometric.string_inputs["space"] = "world";
+        geometric.outputs["out"] = Type::Vector3;
+        node.links[lowered_name] = {geometric.name, "out", Type::Vector3};
+        graph->nodes.push_back(std::move(geometric));
+        continue;
+      }
       if (input.HasConnectedSource()) {
         Link link;
         if (!read_vector3_output(input, graph, &link, active_shaders, depth + 1, error_message)) {
@@ -25670,6 +25686,22 @@ bool read_vector3_output(const pxr::UsdShadeInput &input,
       if (!input || !is_usd_vector3_type(input.GetTypeName())) {
         set_error(error_message, "ND_refract_vector3 requires vector3 input '" + string(source_name) + "'");
         return finish(false);
+      }
+      if (string(source_name) == "normal" && !input.HasConnectedSource() &&
+          composed_connection_count(input.GetAttr()) == 0 &&
+          !input.GetAttr().HasAuthoredValueOpinion())
+      {
+        /* A declared, unvalued 'normal' keeps the NodeDef's defaultgeomprop
+         * Nworld (lineage: certified private host d5a060ca,
+         * reflect-refract-nworld-v1). */
+        Node geometric;
+        geometric.name = unique_node_name(*graph, node.name + "__Nworld", path + "/Nworld");
+        geometric.nodedef = normal_vector3_id;
+        geometric.string_inputs["space"] = "world";
+        geometric.outputs["out"] = Type::Vector3;
+        node.links[lowered_name] = {geometric.name, "out", Type::Vector3};
+        graph->nodes.push_back(std::move(geometric));
+        continue;
       }
       if (input.HasConnectedSource()) {
         Link link;
