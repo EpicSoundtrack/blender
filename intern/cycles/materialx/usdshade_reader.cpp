@@ -12968,9 +12968,20 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
      * geomcolor_color3_id in read_color_output() for the same
      * index-to-geomprop-name mapping. graph.cpp lowers this to one
      * AttributeNode whose "Color" and "Alpha" outputs are both real reads of
-     * the named attribute. */
+     * the named attribute.
+     *
+     * Absent color set: stdlib_defs.mtlx (1.39.4) declares ND_geomcolor_color4
+     * output "out" default="0.0, 0.0, 0.0, 0.0". Without an explicit
+     * fallback the AttributeNode reads Cycles' missing-attribute sentinel,
+     * whose "Alpha" is 1 (kernel/svm/attribute.h svm_node_attr_surface_eval,
+     * NODE_ATTR_OUTPUT_FLOAT_ALPHA), so record the nodedef default as the
+     * ND_geompropvalue_color4 'default' -- the same fallback_float4_inputs
+     * path an authored geompropvalue default takes. A present set still
+     * passes its full RGBA through (the fallback applies only when the
+     * attribute is not found). */
     color.nodedef = geompropvalue_color4_id;
     color.string_inputs["geomprop"] = geomcolor_attribute_name(index);
+    color.fallback_float4_inputs["out"] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
     color.outputs["out"] = Type::Color4;
     *result = {color.name, "out", Type::Color4};
     emitted_shaders->emplace(shader_path, color.name);

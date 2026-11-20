@@ -35702,6 +35702,102 @@ TEST(materialx_usdshade_reader, geomcolor_color4_index_linked_uniform_constant_i
   }
 }
 
+/* Batch 45 (b59x gc4d: H_zero and P_component3 failed): an absent
+ * ND_geomcolor_color4 set must yield the nodedef output default
+ * (stdlib_defs.mtlx 1.39.4: default="0.0, 0.0, 0.0, 0.0"), not Cycles'
+ * missing-attribute sentinel whose Alpha is 1. The reader records that default
+ * as the folded ND_geompropvalue_color4 fallback, for a literal and a linked
+ * uniform-constant index alike, and lower() turns it into an AttributeNode
+ * fallback of exactly (0, 0, 0) / alpha 0. The kernel side (absent -> 0,
+ * present -> raw RGBA) is in materialx_principled_kernel_test.cpp. */
+TEST(materialx_usdshade_reader, geomcolor_color4_absent_set_falls_back_to_nodedef_default)
+{
+  auto bits = [](const float v) { return std::bit_cast<uint32_t>(v); };
+  for (const bool linked : {false, true}) {
+    for (const int constant : {0, 2}) {
+      SCOPED_TRACE(testing::Message() << "linked " << linked << " index " << constant);
+      const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+      const pxr::SdfPath root("/Looks/GeomColor4Absent");
+      const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+      const auto shader = [&](const char *name, const char *id,
+                              const pxr::SdfValueTypeName &type) {
+        pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+            stage, root.AppendChild(pxr::TfToken(name)));
+        node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+        node.CreateOutput(pxr::TfToken("out"), type);
+        return node;
+      };
+      pxr::UsdShadeShader geom = shader(
+          "GeomColor", "ND_geomcolor_color4", pxr::SdfValueTypeNames->Color4f);
+      if (linked) {
+        pxr::UsdShadeShader index = shader(
+            "Index", "ND_constant_integer", pxr::SdfValueTypeNames->Int);
+        index.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Int).Set(constant);
+        ASSERT_TRUE(geom.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int)
+                        .ConnectToSource(index.ConnectableAPI(), pxr::TfToken("out")));
+      }
+      else {
+        geom.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(constant);
+      }
+      pxr::UsdShadeShader extract = shader(
+          "Extract", "ND_extract_color4", pxr::SdfValueTypeNames->Float);
+      extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+      ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color4f)
+                      .ConnectToSource(geom.ConnectableAPI(), pxr::TfToken("out")));
+      pxr::UsdShadeShader surface = shader(
+          "Surface", "ND_convert_float_surfaceshader", pxr::SdfValueTypeNames->Token);
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                      .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+      ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx"))
+                      .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+      materialx::Graph source;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+      const auto node = std::find_if(
+          source.nodes.begin(), source.nodes.end(), [](const materialx::Node &candidate) {
+            return candidate.name == "GeomColor";
+          });
+      ASSERT_NE(node, source.nodes.end());
+      const string expected = constant == 0 ? string("displayColor") :
+                                              "displayColor" + std::to_string(constant);
+      EXPECT_EQ(node->nodedef, "ND_geompropvalue_color4");
+      EXPECT_EQ(node->string_inputs.at("geomprop"), expected);
+      EXPECT_TRUE(node->links.empty());
+      EXPECT_TRUE(node->int_inputs.empty());
+      ASSERT_EQ(node->fallback_float4_inputs.size(), 1u);
+      const auto fallback = node->fallback_float4_inputs.find("out");
+      ASSERT_NE(fallback, node->fallback_float4_inputs.end());
+      EXPECT_EQ(bits(fallback->second.x), 0u);
+      EXPECT_EQ(bits(fallback->second.y), 0u);
+      EXPECT_EQ(bits(fallback->second.z), 0u);
+      EXPECT_EQ(bits(fallback->second.w), 0u);
+      EXPECT_TRUE(node->fallback_inputs.empty() && node->fallback_color3_inputs.empty() &&
+                  node->fallback_vector4_inputs.empty());
+      ASSERT_TRUE(materialx::validate(source));
+
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+      AttributeNode *attribute = nullptr;
+      for (ShaderNode *candidate : lowered.nodes) {
+        if (candidate->name == "GeomColor") {
+          attribute = dynamic_cast<AttributeNode *>(candidate);
+        }
+      }
+      ASSERT_NE(attribute, nullptr);
+      EXPECT_EQ(attribute->get_attribute(), ustring(expected));
+      EXPECT_TRUE(attribute->get_use_materialx_exact());
+      EXPECT_TRUE(attribute->get_use_fallback());
+      EXPECT_EQ(bits(attribute->get_fallback_color().x), 0u);
+      EXPECT_EQ(bits(attribute->get_fallback_color().y), 0u);
+      EXPECT_EQ(bits(attribute->get_fallback_color().z), 0u);
+      EXPECT_EQ(bits(attribute->get_fallback_alpha()), 0u);
+      /* extract(index 3) reads this same node's Alpha socket. */
+      EXPECT_FALSE(attribute->output("Alpha")->links.empty());
+    }
+  }
+}
+
 
 TEST(materialx_usdshade_reader, reads_geomprop_and_primvar_fallback_inputs)
 {
