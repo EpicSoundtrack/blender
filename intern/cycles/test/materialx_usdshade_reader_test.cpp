@@ -48704,6 +48704,127 @@ TEST(materialx_usdshade_reader, reads_and_lowers_connected_in_transformmatrix_ve
 }
 
 
+/* Batch 42: b51x tf2 ND_transformmatrix_vector3M4 contract V0
+ * (transform-v3m4-full10-v1.V0.usda; V1/V2 differ only in the extract
+ * index): 'in' is an ND_geompropvalue_vector3 primvar and 'mat' an
+ * ND_creatematrix_vector4_matrix44 whose four rows are combine4s of sixteen
+ * ND_geompropvalue_float primvar cells, observed through extract_vector3 and
+ * the ifgreatereq/combine3 mask frame. validate() refused the runtime 'mat'.
+ * The same graph shape is generated here (Nested NodeGraph, same node names
+ * and geomprops). */
+TEST(materialx_usdshade_reader, reads_and_lowers_runtime_primvar_mat_transformmatrix_vector3m4)
+{
+  string usda =
+      "#usda 1.0\n"
+      "def Scope \"Looks\" {\n"
+      " def Material \"Material\" {\n"
+      "  token outputs:mtlx:surface.connect = </Looks/Material/Root.outputs:surface>\n"
+      "  def NodeGraph \"Root\" {\n"
+      "   token outputs:surface.connect = </Looks/Material/Root/Nested.outputs:surface>\n"
+      "   def NodeGraph \"Nested\" {\n"
+      "    token outputs:surface.connect = "
+      "</Looks/Material/Root/Nested/NG_NODE_UNDER_TEST___mask_surface.outputs:out>\n";
+  const string nested = "</Looks/Material/Root/Nested/NG_NODE_UNDER_TEST_";
+  const auto shader = [&](const string &name, const string &id, const string &body) {
+    usda += "    def Shader \"NG_NODE_UNDER_TEST_" + name + "\" {\n     uniform token info:id = \"" +
+            id + "\"\n" + body + "    }\n";
+  };
+  shader("_under_test",
+         "ND_transformmatrix_vector3M4",
+         "     vector3f inputs:in.connect = " + nested + "__varying_in.outputs:out>\n"
+         "     matrix4d inputs:mat.connect = " + nested + "__varying_mat.outputs:out>\n"
+         "     vector3f outputs:out\n");
+  shader("__extract_component",
+         "ND_extract_vector3",
+         "     vector3f inputs:in.connect = " + nested + "_under_test.outputs:out>\n"
+         "     uniform int inputs:index = 0\n     float outputs:out\n");
+  shader("__varying_in",
+         "ND_geompropvalue_vector3",
+         "     vector3f inputs:default = (0, 0, 0)\n"
+         "     uniform string inputs:geomprop = \"math_varying_in\"\n     vector3f outputs:out\n");
+  const auto primvar_float = [&](const string &name, const string &geomprop) {
+    shader(name,
+           "ND_geompropvalue_float",
+           "     float inputs:default = 0\n     uniform string inputs:geomprop = \"" + geomprop +
+               "\"\n     float outputs:out\n");
+  };
+  primvar_float("__varying_bound_lower", "math_varying_bound_lower");
+  primvar_float("__varying_bound_upper", "math_varying_bound_upper");
+  primvar_float("__varying_bound_negative", "math_varying_bound_negative");
+  const auto compare = [&](const string &name, const string &value1, const string &value2) {
+    shader(name,
+           "ND_ifgreatereq_float",
+           "     float inputs:in1 = 1\n     float inputs:in2 = 0\n     float inputs:value1.connect = " +
+               nested + value1 + ".outputs:out>\n     float inputs:value2.connect = " + nested +
+               value2 + ".outputs:out>\n     float outputs:out\n");
+  };
+  compare("__mask_lower", "__extract_component", "__varying_bound_lower");
+  compare("__mask_upper", "__varying_bound_upper", "__extract_component");
+  compare("__mask_negative", "__extract_component", "__varying_bound_negative");
+  shader("__mask_rgb",
+         "ND_combine3_color3",
+         "     float inputs:in1.connect = " + nested + "__mask_lower.outputs:out>\n"
+         "     float inputs:in2.connect = " + nested + "__mask_upper.outputs:out>\n"
+         "     float inputs:in3.connect = " + nested + "__mask_negative.outputs:out>\n"
+         "     color3f outputs:out\n");
+  shader("__mask_surface",
+         "ND_convert_color3_surfaceshader",
+         "     color3f inputs:in.connect = " + nested + "__mask_rgb.outputs:out>\n"
+         "     token outputs:out\n");
+  string create_body;
+  for (int r = 0; r < 4; r++) {
+    create_body += "     float4 inputs:in" + std::to_string(r + 1) + ".connect = " + nested +
+                   "__matrix_row" + std::to_string(r) + ".outputs:out>\n";
+  }
+  shader("__varying_mat", "ND_creatematrix_vector4_matrix44", create_body + "     matrix4d outputs:out\n");
+  for (int r = 0; r < 4; r++) {
+    string body;
+    for (int c = 0; c < 4; c++) {
+      const string cell = std::to_string(r) + std::to_string(c);
+      body += "     float inputs:in" + std::to_string(c + 1) + ".connect = " + nested +
+              "__matrix_cell" + cell + ".outputs:out>\n";
+      primvar_float("__matrix_cell" + cell, "math_varying_mat_" + cell);
+    }
+    shader("__matrix_row" + std::to_string(r), "ND_combine4_vector4", body + "     float4 outputs:out\n");
+  }
+  usda += "   }\n  }\n }\n}\n";
+
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(usda));
+  const pxr::UsdShadeMaterial material(stage->GetPrimAtPath(pxr::SdfPath("/Looks/Material")));
+  ASSERT_TRUE(material);
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *transform = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_transformmatrix_vector3M4") {
+      transform = &node;
+    }
+  }
+  ASSERT_NE(transform, nullptr);
+  ASSERT_EQ(transform->links.size(), 2u);
+  EXPECT_EQ(transform->links.at("in").type, materialx::Type::Vector3);
+  EXPECT_EQ(transform->links.at("mat").type, materialx::Type::Matrix44);
+  EXPECT_TRUE(transform->vector3_inputs.empty());
+  EXPECT_TRUE(transform->matrix44_inputs.empty());
+  ASSERT_TRUE(materialx::validate(graph));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  CombineXYZNode *result = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (node->name == ustring(transform->name)) {
+      result = dynamic_cast<CombineXYZNode *>(node);
+    }
+  }
+  ASSERT_NE(result, nullptr);
+  /* Every component driven per shading point by the primvar cells. */
+  EXPECT_NE(result->input("X")->link, nullptr);
+  EXPECT_NE(result->input("Y")->link, nullptr);
+  EXPECT_NE(result->input("Z")->link, nullptr);
+}
+
 /* Batch 10: tangent/viewdirection accept "object" space and uniform
  * space/index through ND_constant_string / ND_constant_integer. */
 /* Batch 11: space="model" lowers exactly like "object" (normalized by the

@@ -26038,19 +26038,27 @@ TEST(materialx_graph, transformmatrix_vector4_runtime_creatematrix_and_inverse)
    * carrier consumer of the product is rejected the same way.
    * ND_determinant_matrix44 is no longer a carrier consumer (batch 40: it is
    * built in the runtime Matrix44 pass, see
-   * determinant_matrix44_runtime_connected_matrix_and_static_fold);
-   * ND_transformmatrix_vector3M4 still requires a static 'mat'. */
+   * determinant_matrix44_runtime_connected_matrix_and_static_fold), and
+   * ND_transformmatrix_vector3M4 accepts a runtime 'mat' since batch 42 (see
+   * transformmatrix_vector3m4_runtime_mat_lowers_homogeneous_point). The
+   * static-only consumer is now the 'in2' divisor of ND_divide_matrix44,
+   * whose validate() requires a static nonsingular divisor; the static
+   * control below proves the rejection is the runtime source alone. */
   materialx::Node product{"Product", "ND_multiply_matrix44"};
   product.links["in1"] = {"VMat", "out", materialx::Type::Matrix44};
   product.matrix44_inputs["in2"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
   product.outputs["out"] = materialx::Type::Matrix44;
   const auto carrier_consumer = [](const char *name, const char *matrix) {
-    materialx::Node node{name, "ND_transformmatrix_vector3M4"};
-    node.vector3_inputs["in"] = make_float3(0.5f, -1.0f, 2.0f);
-    node.links["mat"] = {matrix, "out", materialx::Type::Matrix44};
-    node.outputs["out"] = materialx::Type::Vector3;
+    materialx::Node node{name, "ND_divide_matrix44"};
+    node.matrix44_inputs["in1"] = {2, 0, 0, 0, 0, 0.5f, 0, 0, 0, 0, 4, 0, 1, 2, 3, 1};
+    node.links["in2"] = {matrix, "out", materialx::Type::Matrix44};
+    node.outputs["out"] = materialx::Type::Matrix44;
     return node;
   };
+  materialx::Node static_divisor{"StaticDivisor", "ND_constant_matrix44"};
+  static_divisor.matrix44_inputs["value"] = {1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0.5f, 0, 0, 0, 0, 1};
+  static_divisor.outputs["out"] = materialx::Type::Matrix44;
+  EXPECT_TRUE(materialx::validate({{static_divisor, carrier_consumer("Control", "StaticDivisor")}}));
   EXPECT_FALSE(
       materialx::validate({{row, create, product, carrier_consumer("ProductProbe", "Product")}}));
   EXPECT_FALSE(materialx::validate({{row, create, carrier_consumer("Probe", "VMat")}}));
@@ -26318,11 +26326,13 @@ TEST(materialx_graph, matrix44_arithmetic_runtime_operands_lower_elementwise)
           mx44_lowered_vector4(graph, "ThroughInverse"), v, "v*op*inverse(op)");
 
       /* A carrier (static-only) consumer of the runtime result still fails
-       * closed (ND_determinant_matrix44 is runtime since batch 40). */
-      materialx::Node carrier{"Carrier", "ND_transformmatrix_vector3M4"};
-      carrier.vector3_inputs["in"] = make_float3(0.5f, -1.0f, 2.0f);
-      carrier.links["mat"] = {"Arith", "out", materialx::Type::Matrix44};
-      carrier.outputs["out"] = materialx::Type::Vector3;
+       * closed (ND_determinant_matrix44 is runtime since batch 40 and
+       * ND_transformmatrix_vector3M4 'mat' since batch 42): the 'in2'
+       * divisor of ND_divide_matrix44 requires a static nonsingular value. */
+      materialx::Node carrier{"Carrier", "ND_divide_matrix44"};
+      carrier.matrix44_inputs["in1"] = {2, 0, 0, 0, 0, 0.5f, 0, 0, 0, 0, 4, 0, 1, 2, 3, 1};
+      carrier.links["in2"] = {"Arith", "out", materialx::Type::Matrix44};
+      carrier.outputs["out"] = materialx::Type::Matrix44;
       EXPECT_FALSE(materialx::validate({{constant_row("RowA", row_a),
                                          constant_row("RowB", row_b),
                                          create("MatA", "in4", "RowA", a),
@@ -28036,7 +28046,8 @@ TEST(materialx_graph, divide_matrix33_runtime_operands_lower_as_inverse_product)
  * 'in'") and had no graph route. It now lowers per element as the homogeneous
  * point transform [x, y, z, 1] * M (MaterialX genglsl
  * mx_transformmatrix_vector3M4: (transform * vec4(val, 1)).xyz), with a
- * literal or static-linked 'mat'. A runtime 'mat' is still refused. */
+ * literal or static-linked 'mat'. (A runtime 'mat' is accepted since batch
+ * 42, see transformmatrix_vector3m4_runtime_mat_lowers_homogeneous_point.) */
 TEST(materialx_graph, transformmatrix_vector3m4_connected_in_lowers_homogeneous_point)
 {
   /* Projective, every cell distinct, translation in the last row. */
@@ -28106,8 +28117,9 @@ TEST(materialx_graph, transformmatrix_vector3m4_connected_in_lowers_homogeneous_
   }
 
   /* Fail closed: link plus literal 'in', a mistyped 'in' link, a missing
-   * 'mat', a non-finite literal 'mat', a Matrix33 'mat' link, and a runtime
-   * 'mat' (creatematrix with a connected row). */
+   * 'mat', a non-finite literal 'mat', a Matrix33 'mat' link, and a
+   * malformed runtime 'mat' (creatematrix row that is both a link and a
+   * literal). A well-formed runtime 'mat' validates since batch 42. */
   materialx::Node both = transform("Both", false);
   both.vector3_inputs["in"] = v;
   EXPECT_FALSE(materialx::validate({{in, both}}));
@@ -28142,7 +28154,164 @@ TEST(materialx_graph, transformmatrix_vector3m4_connected_in_lowers_homogeneous_
   materialx::Node runtime = transform("Runtime", false);
   runtime.matrix44_inputs.clear();
   runtime.links["mat"] = {"RuntimeMat", "out", materialx::Type::Matrix44};
-  EXPECT_FALSE(materialx::validate({{in, row, runtime_mat, runtime}}));
+  EXPECT_TRUE(materialx::validate({{in, row, runtime_mat, runtime}}));
+  materialx::Node malformed_mat = runtime_mat;
+  malformed_mat.vector4_inputs["in1"] = make_float4(1, 0, 0, 0);
+  EXPECT_FALSE(materialx::validate({{in, row, malformed_mat, runtime}}));
+}
+
+/* Batch 42 (b51x tf2 V0-V2): ND_transformmatrix_vector3M4 whose 'mat' is a
+ * runtime Matrix44 (V0: ND_creatematrix_vector4_matrix44 of four combine4
+ * rows of sixteen primvar cells) was refused by validate(): only a static
+ * 'mat' was admitted. It now lowers per element in the runtime Matrix44 pass
+ * as [x, y, z, 1] * M (MaterialX 1.39.4 genglsl mx_transformmatrix_vector3M4:
+ * (transform * vec4(val, 1.0)).xyz, no divide by w), with a connected or a
+ * literal 'in'. A literal 'in' with a static 'mat' keeps the static fold. */
+TEST(materialx_graph, transformmatrix_vector3m4_runtime_mat_lowers_homogeneous_point)
+{
+  /* Dense projective matrix (nonzero w column, so a divide by w or a
+   * transposed product would change every component). */
+  const MatrixRows a = {2.0f,  0.5f,  -1.0f, 0.25f, 0.5f, 3.0f,  0.75f, -0.5f,
+                        -1.0f, 0.25f, 4.0f,  1.0f,  0.5f, -1.0f, 2.0f,  1.5f};
+  const MatrixRows b = {1, 2, 0, 0.25f, -0.25f, 3, 0.75f, -2, 0, 0, 3, 4, 5, 6, 7, 1};
+  const float3 v = make_float3(0.25f, -3.0f, 2.0f);
+  const float3 lit = make_float3(-1.5f, 0.5f, 3.0f);
+  const auto reference = [](const float3 p, const std::array<double, 16> &m) {
+    const float4 out = mx44_reference_vm(make_float4(p.x, p.y, p.z, 1.0f), m);
+    return make_float3(out.x, out.y, out.z);
+  };
+  std::array<double, 16> product_ab{};
+  for (int r = 0; r < 4; r++) {
+    for (int c = 0; c < 4; c++) {
+      for (int k = 0; k < 4; k++) {
+        product_ab[size_t(r * 4 + c)] += double(a[size_t(r * 4 + k)]) * b[size_t(k * 4 + c)];
+      }
+    }
+  }
+
+  vector<materialx::Node> nodes;
+  materialx::Node in{"In", "ND_constant_vector3"};
+  in.vector3_inputs["value"] = v;
+  in.outputs["out"] = materialx::Type::Vector3;
+  nodes.push_back(in);
+  const char *rows[] = {"in1", "in2", "in3", "in4"};
+  materialx::Node create{"VMat", "ND_creatematrix_vector4_matrix44"};
+  for (int r = 0; r < 4; r++) {
+    materialx::Node row{string("Row") + std::to_string(r), "ND_constant_vector4"};
+    row.vector4_inputs["value"] = make_float4(
+        a[size_t(r * 4)], a[size_t(r * 4 + 1)], a[size_t(r * 4 + 2)], a[size_t(r * 4 + 3)]);
+    row.outputs["out"] = materialx::Type::Vector4;
+    create.links[rows[r]] = {row.name, "out", materialx::Type::Vector4};
+    nodes.push_back(row);
+  }
+  create.outputs["out"] = materialx::Type::Matrix44;
+  nodes.push_back(create);
+  materialx::Node inverse{"Inverse", "ND_invertmatrix_matrix44"};
+  inverse.links["in1"] = {"VMat", "out", materialx::Type::Matrix44};
+  inverse.outputs["out"] = materialx::Type::Matrix44;
+  nodes.push_back(inverse);
+  materialx::Node product{"Product", "ND_multiply_matrix44"};
+  product.links["in1"] = {"VMat", "out", materialx::Type::Matrix44};
+  product.matrix44_inputs["in2"] = b;
+  product.outputs["out"] = materialx::Type::Matrix44;
+  nodes.push_back(product);
+  /* Static control: a literal creatematrix linked as 'mat'. */
+  materialx::Node static_create{"StaticCreate", "ND_creatematrix_vector4_matrix44"};
+  for (int r = 0; r < 4; r++) {
+    static_create.vector4_inputs[rows[r]] = make_float4(
+        a[size_t(r * 4)], a[size_t(r * 4 + 1)], a[size_t(r * 4 + 2)], a[size_t(r * 4 + 3)]);
+  }
+  static_create.outputs["out"] = materialx::Type::Matrix44;
+  nodes.push_back(static_create);
+  const auto transform = [](const char *name, const char *mat, const float3 *literal_in) {
+    materialx::Node node{name, "ND_transformmatrix_vector3M4"};
+    if (literal_in) {
+      node.vector3_inputs["in"] = *literal_in;
+    }
+    else {
+      node.links["in"] = {"In", "out", materialx::Type::Vector3};
+    }
+    node.links["mat"] = {mat, "out", materialx::Type::Matrix44};
+    node.outputs["out"] = materialx::Type::Vector3;
+    return node;
+  };
+  nodes.push_back(transform("LinkedInRuntimeMat", "VMat", nullptr));
+  nodes.push_back(transform("LiteralInRuntimeMat", "VMat", &lit));
+  nodes.push_back(transform("LinkedInInverse", "Inverse", nullptr));
+  nodes.push_back(transform("LiteralInProduct", "Product", &lit));
+  nodes.push_back(transform("LiteralInStatic", "StaticCreate", &lit));
+
+  const materialx::Graph source{nodes};
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+  const auto expect_vector = [&](const char *name, const float3 expected, const bool driven) {
+    ShaderNode *node = materialx_divide_named_node(graph, name);
+    ASSERT_NE(node, nullptr) << name;
+    const float3 out = materialx_round_test_vector(node->output("Vector"));
+    EXPECT_NEAR(out.x, expected.x, 1e-4 * (1.0 + std::fabs(expected.x))) << name;
+    EXPECT_NEAR(out.y, expected.y, 1e-4 * (1.0 + std::fabs(expected.y))) << name;
+    EXPECT_NEAR(out.z, expected.z, 1e-4 * (1.0 + std::fabs(expected.z))) << name;
+    if (driven) {
+      /* Runtime: CombineXYZ carrier driven per element, not folded. */
+      ASSERT_NE(dynamic_cast<CombineXYZNode *>(node), nullptr) << name;
+      EXPECT_TRUE(node->input("X")->link && node->input("Y")->link && node->input("Z")->link)
+          << name;
+    }
+  };
+  expect_vector("LinkedInRuntimeMat", reference(v, mx44_as_double(a)), true);
+  expect_vector("LiteralInRuntimeMat", reference(lit, mx44_as_double(a)), true);
+  expect_vector("LinkedInInverse", reference(v, mx44_reference_inverse(a)), true);
+  expect_vector("LiteralInProduct", reference(lit, product_ab), true);
+  /* Literal 'in' over a static linked 'mat' still takes the static fold. */
+  expect_vector("LiteralInStatic", reference(lit, mx44_as_double(a)), false);
+  ShaderNode *folded = materialx_divide_named_node(graph, "LiteralInStatic");
+  ASSERT_NE(folded, nullptr);
+  EXPECT_EQ(folded->input("X")->link, nullptr);
+  EXPECT_EQ(folded->input("Y")->link, nullptr);
+  EXPECT_EQ(folded->input("Z")->link, nullptr);
+  /* The MaterialX result is not the w-divided point: w is far from 1 here. */
+  const float4 homogeneous = mx44_reference_vm(make_float4(v.x, v.y, v.z, 1.0f),
+                                               mx44_as_double(a));
+  ASSERT_GT(std::fabs(homogeneous.w - 1.0f), 1.0f);
+
+  /* Fail closed: link plus literal 'mat', link plus literal 'in', a
+   * non-finite literal 'in', a mistyped (Vector4) 'in', a malformed runtime
+   * row, and a runtime Matrix33 'mat'. The control validates. */
+  const vector<materialx::Node> base(nodes.begin(), nodes.begin() + 6);
+  const auto with = [&](const materialx::Node &extra) {
+    vector<materialx::Node> graph_nodes = base;
+    graph_nodes.push_back(extra);
+    return materialx::Graph{graph_nodes};
+  };
+  ASSERT_TRUE(materialx::validate(with(transform("Control", "VMat", &lit))));
+  materialx::Node both_mat = transform("BothMat", "VMat", &lit);
+  both_mat.matrix44_inputs["mat"] = a;
+  EXPECT_FALSE(materialx::validate(with(both_mat)));
+  materialx::Node both_in = transform("BothIn", "VMat", nullptr);
+  both_in.vector3_inputs["in"] = lit;
+  EXPECT_FALSE(materialx::validate(with(both_in)));
+  const float3 nan_in = make_float3(std::numeric_limits<float>::quiet_NaN(), 0.0f, 1.0f);
+  EXPECT_FALSE(materialx::validate(with(transform("NonFiniteIn", "VMat", &nan_in))));
+  materialx::Node mistyped = transform("Mistyped", "VMat", nullptr);
+  mistyped.links["in"] = {"Row0", "out", materialx::Type::Vector4};
+  EXPECT_FALSE(materialx::validate(with(mistyped)));
+  vector<materialx::Node> malformed = base;
+  malformed[5].vector4_inputs["in2"] = make_float4(0, 1, 0, 0);
+  malformed.push_back(transform("Malformed", "VMat", &lit));
+  EXPECT_FALSE(materialx::validate({malformed}));
+  materialx::Node row33{"Row33", "ND_constant_vector3"};
+  row33.vector3_inputs["value"] = make_float3(1, 2, 3);
+  row33.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node create33{"VMat33", "ND_creatematrix_vector3_matrix33"};
+  create33.links["in1"] = {"Row33", "out", materialx::Type::Vector3};
+  create33.vector3_inputs["in2"] = make_float3(0, 1, 0);
+  create33.vector3_inputs["in3"] = make_float3(0, 0, 1);
+  create33.outputs["out"] = materialx::Type::Matrix33;
+  materialx::Node mat33 = transform("Mat33", "VMat", &lit);
+  mat33.links["mat"] = {"VMat33", "out", materialx::Type::Matrix33};
+  EXPECT_FALSE(materialx::validate({{row33, create33, mat33}}));
 }
 
 /* Batch 9, literal-operand class: ND_grid_color3 / ND_crosshatch_color3
