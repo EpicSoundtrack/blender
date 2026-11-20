@@ -12955,14 +12955,10 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
 
   if (nodedef == geomcolor_color4_id) {
     int index = 0;
-    const pxr::UsdShadeInput index_input = source_shader.GetInput(pxr::TfToken("index"));
-    if (index_input) {
-      if (index_input.GetTypeName() != pxr::SdfValueTypeNames->Int ||
-          index_input.HasConnectedSource() || !index_input.Get(&index) || index < 0)
-      {
-        set_error(error_message, "ND_geomcolor_color4 'index' must be a literal non-negative integer");
-        return finish(false);
-      }
+    if (!read_geomcolor_index(source_shader.GetInput(pxr::TfToken("index")), nodedef, &index,
+                              error_message))
+    {
+      return finish(false);
     }
 
     Node color;
