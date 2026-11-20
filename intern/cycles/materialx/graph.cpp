@@ -3241,6 +3241,11 @@ bool integer_math_literal_result(const Node &node, int *result)
     const long long a = static_cast<long long>(node.int_inputs.at("in1"));
     const long long b = static_cast<long long>(node.int_inputs.at("in2"));
     const long long value = node.nodedef == add_integer_id ? a + b : a - b;
+    if (node.nodedef == add_integer_id) {
+      /* Batch 38: MaterialX Int32 add wraps (two's complement). */
+      *result = int32_t(uint32_t(node.int_inputs.at("in1")) + uint32_t(node.int_inputs.at("in2")));
+      return true;
+    }
     if (value < INT_MIN || value > INT_MAX) {
       return false;
     }

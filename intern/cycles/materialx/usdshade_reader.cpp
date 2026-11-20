@@ -9232,6 +9232,14 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
   return finish(false);
 }
 
+/* MaterialX Int32 add: two's-complement wrap of the exact sum (batch 38). */
+bool integer_add_wrap(const int a, const int b, int *result)
+{
+  const uint32_t bits = uint32_t(a) + uint32_t(b);
+  *result = int32_t(bits);
+  return true;
+}
+
 /* Exact Int32 constant fold of a result arm that is a literal or a direct static
  * ND_constant_integer (lineage: native-windows private-host reader c8ee21c3). */
 bool read_integer_b_constant_arm(const pxr::UsdShadeInput &input,
@@ -9490,12 +9498,89 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
     const bool binary_int = nodedef == add_integer_id || nodedef == subtract_integer_id;
     if (!source_shader.GetOutput(pxr::TfToken("out")) ||
         source_shader.GetOutput(pxr::TfToken("out")).GetTypeName() != pxr::SdfValueTypeNames->Int ||
-        source_shader.GetInputs().size() != size_t(binary_int ? 2 : (source_shader.GetInput(pxr::TfToken("in")) ? 1 : 0)) || source_shader.GetOutputs().size() != 1)
+        (nodedef == add_integer_id ? source_shader.GetInputs().size() > 2 :
+         source_shader.GetInputs().size() != size_t(binary_int ? 2 : (source_shader.GetInput(pxr::TfToken("in")) ? 1 : 0))) ||
+        source_shader.GetOutputs().size() != 1)
     {
       set_error(error_message, nodedef + " requires exact integer math signature");
       return finish(false);
     }
-    if (binary_int) {
+    if (nodedef == add_integer_id) {
+      /* Batch 38 (lineage: certified private host 1d8236a9, add-wrap-shapes-disconnect
+       * reader): absent or unvalued operands are the NodeDef default 0, a connected
+       * operand folds a direct static ND_constant_integer or an all-literal
+       * ND_add_integer, and the Int32 sum wraps (two's complement). Connected
+       * varying operands are not lowered here. */
+      for (const auto &port : source_shader.GetInputs()) {
+        const string port_name = port.GetBaseName().GetString();
+        if (port_name != "in1" && port_name != "in2") {
+          set_error(error_message, nodedef + " has an unexpected input");
+          return finish(false);
+        }
+      }
+      for (const char *name : {"in1", "in2"}) {
+        const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
+        integer.int_inputs[name] = 0;
+        if (!operand) {
+          continue;
+        }
+        if (operand.GetTypeName() != pxr::SdfValueTypeNames->Int ||
+            operand.GetAttr().GetNumTimeSamples() != 0)
+        {
+          set_error(error_message, nodedef + " requires unsampled Int operands");
+          return finish(false);
+        }
+        if (operand.HasConnectedSource() || composed_connection_count(operand.GetAttr()) != 0) {
+          pxr::UsdShadeShader producer;
+          pxr::TfToken producer_id;
+          if (composed_connection_count(operand.GetAttr()) != 1 ||
+              !connected_shader(operand, nullptr, &producer, error_message) ||
+              !producer.GetShaderId(&producer_id))
+          {
+            return finish(false);
+          }
+          if (producer_id.GetString() == constant_integer_id) {
+            if (!read_integer_b_constant_arm(
+                    operand, nodedef, name, &integer.int_inputs[name], error_message)) {
+              return finish(false);
+            }
+            continue;
+          }
+          Link link;
+          if (producer_id.GetString() != add_integer_id ||
+              !read_integer_output(operand, graph, &link, active_shaders, emitted_shaders,
+                                   depth + 1, error_message))
+          {
+            set_error(error_message,
+                      nodedef + " connected '" + name +
+                          "' must be a static ND_constant_integer or literal ND_add_integer");
+            return finish(false);
+          }
+          bool folded = false;
+          for (const Node &upstream : graph->nodes) {
+            if (upstream.name == link.source_node && upstream.nodedef == add_integer_id &&
+                upstream.links.empty())
+            {
+              folded = integer_add_wrap(upstream.int_inputs.at("in1"),
+                                        upstream.int_inputs.at("in2"),
+                                        &integer.int_inputs[name]);
+            }
+          }
+          if (!folded) {
+            set_error(error_message, nodedef + " connected '" + name + "' did not fold");
+            return finish(false);
+          }
+          continue;
+        }
+        int value = 0;
+        if (!operand.Get(&value) && operand.GetAttr().HasAuthoredValueOpinion()) {
+          set_error(error_message, nodedef + " has an invalid Integer literal");
+          return finish(false);
+        }
+        integer.int_inputs[name] = value;
+      }
+    }
+    else if (binary_int) {
       for (const char *name : {"in1", "in2"}) {
         const pxr::UsdShadeInput operand = source_shader.GetInput(pxr::TfToken(name));
         if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Int ||

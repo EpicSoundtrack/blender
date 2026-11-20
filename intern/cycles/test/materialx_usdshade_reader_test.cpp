@@ -35393,6 +35393,68 @@ TEST(materialx_usdshade_reader, tiled_circles_hexagons_connected_controls)
   EXPECT_LT(lit[1], 48);
 }
 
+/* Batch 38 partial port (certified private host 1d8236a9 add-wrap-shapes-disconnect):
+ * ND_add_integer operands may be absent/unvalued (0), a static ND_constant_integer,
+ * or an all-literal ND_add_integer; the Int32 sum wraps. Varying operands stay
+ * refused. */
+TEST(materialx_usdshade_reader, add_integer_constant_default_operands_wrap)
+{
+  enum Kind { LITERAL, CONSTANT, NESTED, UNVALUED, ABSENT, VARYING };
+  const struct {
+    Kind kind1, kind2;
+    int in1, in2;
+    double expected;
+  } cases[] = {{CONSTANT, CONSTANT, 7, 3, 10.0},
+               {UNVALUED, UNVALUED, 0, 0, 0.0},
+               {ABSENT, LITERAL, 0, -5, -5.0},
+               {LITERAL, LITERAL, INT_MAX, 1, double(INT_MIN)},
+               {LITERAL, LITERAL, INT_MIN, -1, double(INT_MAX)},
+               {CONSTANT, CONSTANT, INT_MAX, 1, double(INT_MIN)},
+               {CONSTANT, CONSTANT, INT_MIN, -1, double(INT_MAX)},
+               {NESTED, CONSTANT, INT_MAX, 2, double(INT_MIN) + 1.0},
+               {VARYING, LITERAL, 0, 1, 0.0}};
+  for (const auto &test : cases) {
+    SCOPED_TRACE(std::to_string(test.kind1) + "/" + std::to_string(test.kind2) + " " +
+                 std::to_string(test.in1) + " + " + std::to_string(test.in2));
+    Batch38EmissionProbe probe;
+    const pxr::SdfValueTypeName integer = pxr::SdfValueTypeNames->Int;
+    pxr::UsdShadeShader add = probe.shader("Add", "ND_add_integer", integer);
+    const auto operand = [&](const char *name, const Kind kind, const int value) {
+      if (kind == ABSENT) return;
+      pxr::UsdShadeInput input = add.CreateInput(pxr::TfToken(name), integer);
+      if (kind == LITERAL) input.Set(value);
+      if (kind == CONSTANT) {
+        input.ConnectToSource(probe.constant_integer((string("K_") + name).c_str(), value)
+                                  .GetOutput(pxr::TfToken("out")));
+      }
+      if (kind == NESTED) {
+        pxr::UsdShadeShader inner = probe.shader("Inner", "ND_add_integer", integer);
+        inner.CreateInput(pxr::TfToken("in1"), integer).Set(value);
+        inner.CreateInput(pxr::TfToken("in2"), integer).Set(0);
+        input.ConnectToSource(inner.GetOutput(pxr::TfToken("out")));
+      }
+      if (kind == VARYING) {
+        pxr::UsdShadeShader reader = probe.shader("Reader", "ND_geompropvalue_integer", integer);
+        reader.CreateInput(pxr::TfToken("geomprop"), pxr::SdfValueTypeNames->String)
+            .Set(string("math_varying_in1"));
+        reader.CreateInput(pxr::TfToken("default"), integer).Set(0);
+        input.ConnectToSource(reader.GetOutput(pxr::TfToken("out")));
+      }
+    };
+    operand("in1", test.kind1, test.in1);
+    operand("in2", test.kind2, test.in2);
+    probe.observe_integer(add);
+    float3 color;
+    string error;
+    if (test.kind1 == VARYING) {
+      EXPECT_FALSE(probe.evaluate(&color, &error));
+      continue;
+    }
+    ASSERT_TRUE(probe.evaluate(&color, &error)) << error;
+    EXPECT_EQ(color.x, float(test.expected));
+  }
+}
+
 /* Batch 38 port (certified private host def35d38): a geomcolor 'index' linked
  * to a uniform exact ND_constant_integer folds to that color-set index; other
  * producers and negative constants stay refused. */
