@@ -9268,6 +9268,46 @@ bool read_integer_b_constant_arm(const pxr::UsdShadeInput &input,
   return true;
 }
 
+/* Connected color4 range/remap operand (bound or gamma): a Color4 link, or a
+ * Float link for the FA scalar-bound variants (batch 38). */
+bool read_range4_linked_operand(const pxr::UsdShadeInput &input,
+                                const string &nodedef,
+                                const char *name,
+                                const bool scalar,
+                                Graph *graph,
+                                Node *node,
+                                std::unordered_set<string> *active_shaders,
+                                std::unordered_map<string, string> *emitted_shaders,
+                                const int depth,
+                                string *error_message)
+{
+  if (input.GetTypeName() !=
+          (scalar ? pxr::SdfValueTypeNames->Float : pxr::SdfValueTypeNames->Color4f) ||
+      input.GetAttr().GetNumTimeSamples() != 0 || composed_connection_count(input.GetAttr()) != 1)
+  {
+    set_error(error_message, nodedef + " requires a single connected " +
+                                 (scalar ? "float" : "color4") + " input '" + name + "'");
+    return false;
+  }
+  Link link;
+  if (scalar) {
+    std::unordered_set<string> active_float_shaders;
+    std::unordered_map<string, string> emitted_float_shaders;
+    if (!read_float_output(input, graph, &link, &active_float_shaders, &emitted_float_shaders,
+                           emitted_shaders, depth + 1, error_message))
+    {
+      return false;
+    }
+  }
+  else if (!read_color4_output(input, graph, &link, active_shaders, emitted_shaders, depth + 1,
+                               error_message))
+  {
+    return false;
+  }
+  node->links[name] = link;
+  return true;
+}
+
 /* ND_hsvadjust_color3/color4 'amount' connected to a vector3 producer: the
  * hue offset / saturation / value multipliers are read at shader evaluation
  * (lineage: certified private host 8191182a norm2-bf4-v2). Leaves the node
@@ -11204,8 +11244,14 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         continue;
       }
       if (bound.HasConnectedSource()) {
-        set_error(error_message, nodedef + " requires literal bounds");
-        return finish(false);
+        /* Batch 38: connected bounds evaluate per channel at shader time
+         * (lineage: certified private host 737e664d, windows-range4-v5). */
+        if (!read_range4_linked_operand(bound, nodedef, name, scalar_bounds, graph, &range,
+                                        active_shaders, emitted_shaders, depth, error_message))
+        {
+          return finish(false);
+        }
+        continue;
       }
       if (scalar_bounds) {
         float value;
@@ -11224,11 +11270,13 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         range.float4_inputs[name] = make_float4(value[0], value[1], value[2], value[3]);
       }
     }
-    if (scalar_bounds ? range.inputs.at("inlow") == range.inputs.at("inhigh") :
+    const bool linked_in_bounds = range.links.contains("inlow") || range.links.contains("inhigh");
+    if (!linked_in_bounds &&
+        (scalar_bounds ? range.inputs.at("inlow") == range.inputs.at("inhigh") :
                         (range.float4_inputs.at("inlow").x == range.float4_inputs.at("inhigh").x ||
                          range.float4_inputs.at("inlow").y == range.float4_inputs.at("inhigh").y ||
                          range.float4_inputs.at("inlow").z == range.float4_inputs.at("inhigh").z ||
-                         range.float4_inputs.at("inlow").w == range.float4_inputs.at("inhigh").w))
+                         range.float4_inputs.at("inlow").w == range.float4_inputs.at("inhigh").w)))
     {
       set_error(error_message, nodedef + " requires inlow != inhigh in every component");
       return finish(false);
@@ -11241,6 +11289,14 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
         }
         else {
           range.float4_inputs["gamma"] = make_float4(1.0f);
+        }
+      }
+      else if (gamma_input.HasConnectedSource()) {
+        if (!read_range4_linked_operand(gamma_input, nodedef, "gamma", scalar_bounds, graph,
+                                        &range, active_shaders, emitted_shaders, depth,
+                                        error_message))
+        {
+          return finish(false);
         }
       }
       else if (scalar_bounds) {
@@ -11270,17 +11326,39 @@ bool read_color4_output(const pxr::UsdShadeInput &input,
       }
       const pxr::UsdShadeInput clamp_input = source_shader.GetInput(pxr::TfToken("doclamp"));
       bool do_clamp = false;
-      if (clamp_input && (clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool || clamp_input.HasConnectedSource() || !clamp_input.Get(&do_clamp))) {
+      if (clamp_input && clamp_input.HasConnectedSource()) {
+        if (clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+            clamp_input.GetAttr().GetNumTimeSamples() != 0 ||
+            composed_connection_count(clamp_input.GetAttr()) != 1)
+        {
+          set_error(error_message, nodedef + " requires a single connected boolean 'doclamp'");
+          return finish(false);
+        }
+        Link link;
+        std::unordered_set<string> active_boolean_shaders;
+        std::unordered_map<string, string> emitted_boolean_shaders;
+        if (!read_boolean_output(clamp_input, graph, &link, &active_boolean_shaders,
+                                 &emitted_boolean_shaders, depth + 1, error_message))
+        {
+          return finish(false);
+        }
+        range.links["doclamp"] = link;
+      }
+      else if (clamp_input && (clamp_input.GetTypeName() != pxr::SdfValueTypeNames->Bool || !clamp_input.Get(&do_clamp))) {
         set_error(error_message, nodedef + " requires literal boolean 'doclamp'");
         return finish(false);
       }
-      const float4 outlow = scalar_bounds ? make_float4(range.inputs.at("outlow")) : range.float4_inputs.at("outlow");
-      const float4 outhigh = scalar_bounds ? make_float4(range.inputs.at("outhigh")) : range.float4_inputs.at("outhigh");
-      if (do_clamp && (outlow.x > outhigh.x || outlow.y > outhigh.y || outlow.z > outhigh.z || outlow.w > outhigh.w)) {
+      const bool runtime_clamp = range.links.contains("doclamp") || range.links.contains("outlow") ||
+                                 range.links.contains("outhigh");
+      const float4 outlow = runtime_clamp ? zero_float4() : scalar_bounds ? make_float4(range.inputs.at("outlow")) : range.float4_inputs.at("outlow");
+      const float4 outhigh = runtime_clamp ? zero_float4() : scalar_bounds ? make_float4(range.inputs.at("outhigh")) : range.float4_inputs.at("outhigh");
+      if (!runtime_clamp && do_clamp && (outlow.x > outhigh.x || outlow.y > outhigh.y || outlow.z > outhigh.z || outlow.w > outhigh.w)) {
         set_error(error_message, nodedef + " requires outlow <= outhigh in every component when clamped");
         return finish(false);
       }
-      range.int_inputs["doclamp"] = do_clamp ? 1 : 0;
+      if (!range.links.contains("doclamp")) {
+        range.int_inputs["doclamp"] = do_clamp ? 1 : 0;
+      }
     }
     const pxr::UsdShadeInput value_input = source_shader.GetInput(pxr::TfToken("in"));
     if (!value_input) {

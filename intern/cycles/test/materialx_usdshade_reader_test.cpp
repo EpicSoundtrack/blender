@@ -34617,6 +34617,113 @@ class Batch38FoldGraph : public ShaderGraph {
   }
 };
 
+/* Minimal CPU interpreter for the lowered node kinds the batch-38 tests read
+ * (no constant folding needed). Unknown node kinds fail the test by name. */
+float3 batch38_eval(ShaderOutput *output);
+
+float3 batch38_input(ShaderNode *node, const char *name)
+{
+  ShaderInput *input = node->input(name);
+  if (input == nullptr) {
+    ADD_FAILURE() << node->type->name << " has no input " << name;
+    return zero_float3();
+  }
+  if (input->link) {
+    return batch38_eval(input->link);
+  }
+  if (input->type() == SocketType::FLOAT) {
+    return make_float3(node->get_float(input->socket_type));
+  }
+  if (input->type() == SocketType::BOOLEAN) {
+    return make_float3(node->get_bool(input->socket_type) ? 1.0f : 0.0f);
+  }
+  return node->get_float3(input->socket_type);
+}
+
+float batch38_scalar(ShaderNode *node, const char *name)
+{
+  ShaderInput *input = node->input(name);
+  const float3 value = batch38_input(node, name);
+  if (input && input->link && input->link->type() != SocketType::FLOAT &&
+      input->type() == SocketType::FLOAT)
+  {
+    ADD_FAILURE() << "implicit vector->float conversion into " << node->name << "." << name;
+  }
+  return value.x;
+}
+
+float3 batch38_eval(ShaderOutput *output)
+{
+  ShaderNode *node = output->parent;
+  const string socket = output->name().string();
+  if (auto *math = dynamic_cast<MathNode *>(node)) {
+    const float a = batch38_scalar(node, "Value1");
+    const float b = batch38_scalar(node, "Value2");
+    float r = 0.0f;
+    switch (math->get_math_type()) {
+      case NODE_MATH_ADD: r = a + b; break;
+      case NODE_MATH_SUBTRACT: r = a - b; break;
+      case NODE_MATH_MULTIPLY: r = a * b; break;
+      case NODE_MATH_DIVIDE: r = b == 0.0f ? 0.0f : a / b; break;
+      case NODE_MATH_POWER: r = (a < 0.0f && b != floorf(b)) ? 0.0f : powf(a, b); break;
+      case NODE_MATH_ABSOLUTE: r = fabsf(a); break;
+      case NODE_MATH_SIGN: r = a > 0.0f ? 1.0f : a < 0.0f ? -1.0f : 0.0f; break;
+      case NODE_MATH_MINIMUM: r = fminf(a, b); break;
+      case NODE_MATH_MAXIMUM: r = fmaxf(a, b); break;
+      case NODE_MATH_FRACTION: r = a - floorf(a); break;
+      case NODE_MATH_FLOOR: r = floorf(a); break;
+      default: ADD_FAILURE() << "unsupported math type " << int(math->get_math_type());
+    }
+    return make_float3(r);
+  }
+  if (auto *range = dynamic_cast<MapRangeNode *>(node)) {
+    EXPECT_EQ(range->get_range_type(), NODE_MAP_RANGE_LINEAR);
+    const float v = batch38_scalar(node, "Value");
+    const float from_min = batch38_scalar(node, "From Min");
+    const float from_max = batch38_scalar(node, "From Max");
+    const float to_min = batch38_scalar(node, "To Min");
+    const float to_max = batch38_scalar(node, "To Max");
+    const float factor = from_max != from_min ? (v - from_min) / (from_max - from_min) : 0.0f;
+    float r = to_min + factor * (to_max - to_min);
+    if (range->get_clamp()) {
+      r = to_max > to_min ? fminf(fmaxf(r, to_min), to_max) : fminf(fmaxf(r, to_max), to_min);
+    }
+    return make_float3(r);
+  }
+  if (auto *mix = dynamic_cast<MixFloatNode *>(node)) {
+    float factor = batch38_scalar(node, "Factor");
+    if (mix->get_use_clamp()) {
+      factor = fminf(fmaxf(factor, 0.0f), 1.0f);
+    }
+    const float a = batch38_scalar(node, "A");
+    const float b = batch38_scalar(node, "B");
+    return make_float3(a + (b - a) * factor);
+  }
+  if (auto *separate = dynamic_cast<SeparateColorNode *>(node)) {
+    EXPECT_EQ(separate->get_color_type(), NODE_COMBSEP_COLOR_RGB);
+    const float3 color = batch38_input(node, "Color");
+    return make_float3(socket == "Red" ? color.x : socket == "Green" ? color.y : color.z);
+  }
+  if (auto *separate = dynamic_cast<SeparateXYZNode *>(node)) {
+    const float3 vector = batch38_input(node, "Vector");
+    return make_float3(socket == "X" ? vector.x : socket == "Y" ? vector.y : vector.z);
+  }
+  if (auto *combine = dynamic_cast<CombineColorNode *>(node)) {
+    EXPECT_EQ(combine->get_color_type(), NODE_COMBSEP_COLOR_RGB);
+    return make_float3(batch38_scalar(node, "Red"), batch38_scalar(node, "Green"),
+                       batch38_scalar(node, "Blue"));
+  }
+  if (auto *value = dynamic_cast<ValueNode *>(node)) {
+    return make_float3(value->get_value());
+  }
+  if (auto *color = dynamic_cast<ColorNode *>(node)) {
+    return color->get_value();
+  }
+  ADD_FAILURE() << "batch38 interpreter: unsupported node " << node->type->name << " ("
+                << node->name << "." << socket << ")";
+  return zero_float3();
+}
+
 struct Batch38EmissionProbe {
   pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage,
@@ -34678,6 +34785,26 @@ struct Batch38EmissionProbe {
       if (auto *emission = dynamic_cast<EmissionNode *>(node)) {
         *color = emission->input("Color")->link ? make_float3(std::nanf("")) :
                                                   emission->get_color();
+        return true;
+      }
+    }
+    *error = "no emission";
+    return false;
+  }
+  /* As evaluate(), but interprets the unfolded lowered graph on the CPU. */
+  bool interpret(float3 *color, string *error)
+  {
+    materialx::Graph graph;
+    if (!materialx::read_usdshade_graph(material, &graph, error)) {
+      return false;
+    }
+    ShaderGraph lowered;
+    if (!materialx::lower(graph, &lowered, error)) {
+      return false;
+    }
+    for (ShaderNode *node : lowered.nodes) {
+      if (auto *emission = dynamic_cast<EmissionNode *>(node)) {
+        *color = batch38_input(emission, "Color");
         return true;
       }
     }
@@ -34946,6 +35073,122 @@ TEST(materialx_usdshade_reader, hsvadjust_linked_amount_matches_literal_amount)
   EXPECT_NEAR(value.x, 0.0f, 1e-5f);
   EXPECT_NEAR(value.y, 1.0f, 1e-5f);
   EXPECT_NEAR(value.z, 0.0f, 1e-5f);
+}
+
+/* Batch 38 port (certified private host 737e664d windows-range4-v5): ND_range/remap
+ * color4(FA) with every operand connected to a constant producer lower per channel
+ * at shader evaluation and match the literal-operand lowering, RGB and alpha. */
+TEST(materialx_usdshade_reader, range_remap_color4_linked_operands_match_literal)
+{
+  struct Case {
+    const char *id;
+    pxr::GfVec4f in, inlow, inhigh, gamma, outlow, outhigh;
+    bool doclamp;
+  };
+  const Case cases[] = {
+      {"ND_range_color4", {0.25f, 0.5f, 0.75f, 1.25f}, {-0.5f, -0.25f, 0.0f, 0.25f},
+       {1.5f, 1.75f, 2.0f, 2.25f}, {2.0f, 0.5f, 1.5f, 1.0f}, {0.0f, 0.1f, 0.2f, 0.3f},
+       {1.0f, 1.1f, 1.2f, 1.3f}, false},
+      {"ND_range_color4", {-1.0f, 0.125f, 2.0f, 0.5f}, {-2.0f, -1.0f, 0.0f, -0.5f},
+       {2.0f, 1.0f, 4.0f, 1.5f}, {0.5f, 2.0f, 1.0f, 4.0f}, {-2.0f, -1.0f, 0.0f, 1.0f},
+       {2.0f, 3.0f, 4.0f, 5.0f}, true},
+      {"ND_range_color4", {-0.5f, 0.25f, 1.5f, 0.75f}, {0.0f, 0.0f, 0.0f, 0.0f},
+       {1.0f, 1.0f, 1.0f, 1.0f}, {1.0f, 1.0f, 1.0f, 1.0f}, {-1.0f, -1.0f, -1.0f, -1.0f},
+       {1.0f, 1.0f, 1.0f, 1.0f}, true},
+      {"ND_remap_color4", {-1.0f, 0.125f, 2.0f, 0.5f}, {-2.0f, -1.0f, 0.0f, -0.5f},
+       {2.0f, 1.0f, 4.0f, 1.5f}, {}, {-2.0f, -1.0f, 0.0f, 1.0f}, {2.0f, 3.0f, 4.0f, 5.0f},
+       false},
+      {"ND_range_color4FA", {0.25f, 0.5f, 1.75f, -0.25f}, {-0.5f, 0, 0, 0}, {1.5f, 0, 0, 0},
+       {2.0f, 0, 0, 0}, {0.25f, 0, 0, 0}, {1.0f, 0, 0, 0}, true},
+      {"ND_remap_color4FA", {0.25f, 0.5f, 1.75f, -0.25f}, {-0.5f, 0, 0, 0}, {1.5f, 0, 0, 0},
+       {}, {0.25f, 0, 0, 0}, {1.0f, 0, 0, 0}, false},
+  };
+  for (const Case &test : cases) {
+    const bool scalar = string(test.id).find("FA") != string::npos;
+    const bool range = string(test.id).find("range") != string::npos;
+    for (const bool alpha : {false, true}) {
+      float3 results[2];
+      for (const bool linked : {false, true}) {
+        SCOPED_TRACE(string(test.id) + (alpha ? " alpha" : " rgb") +
+                     (linked ? " linked" : " literal") + (test.doclamp ? " clamp" : ""));
+        Batch38EmissionProbe probe;
+        const pxr::SdfValueTypeName color4 = pxr::SdfValueTypeNames->Color4f;
+        const pxr::SdfValueTypeName boundtype = scalar ? pxr::SdfValueTypeNames->Float : color4;
+        pxr::UsdShadeShader tested = probe.shader("Tested", test.id, color4);
+        const auto operand = [&](const char *name, const pxr::GfVec4f &value, const bool bound) {
+          const pxr::SdfValueTypeName type = bound ? boundtype : color4;
+          pxr::UsdShadeInput input = tested.CreateInput(pxr::TfToken(name), type);
+          if (!linked) {
+            if (type == color4) input.Set(value);
+            else input.Set(value[0]);
+            return;
+          }
+          pxr::UsdShadeShader constant = probe.shader(
+              (string("K_") + name).c_str(),
+              type == color4 ? "ND_constant_color4" : "ND_constant_float", type);
+          if (type == color4) constant.CreateInput(pxr::TfToken("value"), type).Set(value);
+          else constant.CreateInput(pxr::TfToken("value"), type).Set(value[0]);
+          input.ConnectToSource(constant.GetOutput(pxr::TfToken("out")));
+        };
+        operand("in", test.in, false);
+        operand("inlow", test.inlow, true);
+        operand("inhigh", test.inhigh, true);
+        operand("outlow", test.outlow, true);
+        operand("outhigh", test.outhigh, true);
+        if (range) {
+          operand("gamma", test.gamma, true);
+          pxr::UsdShadeInput doclamp = tested.CreateInput(pxr::TfToken("doclamp"),
+                                                          pxr::SdfValueTypeNames->Bool);
+          if (linked) {
+            doclamp.ConnectToSource(
+                probe.constant_boolean("K_doclamp", test.doclamp).GetOutput(pxr::TfToken("out")));
+          }
+          else {
+            doclamp.Set(test.doclamp);
+          }
+        }
+        if (alpha) {
+          pxr::UsdShadeShader extract = probe.shader("ExtractA", "ND_extract_color4",
+                                                     pxr::SdfValueTypeNames->Float);
+          extract.CreateInput(pxr::TfToken("in"), color4)
+              .ConnectToSource(tested.GetOutput(pxr::TfToken("out")));
+          extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+          pxr::UsdShadeShader observed = probe.shader("Observed", "ND_convert_float_color3",
+                                                      pxr::SdfValueTypeNames->Color3f);
+          observed.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+              .ConnectToSource(extract.GetOutput(pxr::TfToken("out")));
+          probe.observe_color3(observed);
+        }
+        else {
+          pxr::UsdShadeShader observed = probe.shader("Observed", "ND_convert_color4_color3",
+                                                      pxr::SdfValueTypeNames->Color3f);
+          observed.CreateInput(pxr::TfToken("in"), color4)
+              .ConnectToSource(tested.GetOutput(pxr::TfToken("out")));
+          probe.observe_color3(observed);
+        }
+        string error;
+        ASSERT_TRUE(probe.interpret(&results[linked], &error)) << error;
+      }
+      EXPECT_NEAR(results[1].x, results[0].x, 1e-5f);
+      EXPECT_NEAR(results[1].y, results[0].y, 1e-5f);
+      EXPECT_NEAR(results[1].z, results[0].z, 1e-5f);
+      /* Absolute check against the MaterialX formula for the first channel. */
+      const int c = alpha ? 3 : 0;
+      const float bound_c = scalar ? 0 : c;
+      const float inlow = test.inlow[int(bound_c)], inhigh = test.inhigh[int(bound_c)];
+      const float outlow = test.outlow[int(bound_c)], outhigh = test.outhigh[int(bound_c)];
+      float t = (test.in[c] - inlow) / (inhigh - inlow);
+      if (range) {
+        const float gamma = test.gamma[int(bound_c)];
+        t = (t < 0.0f ? -1.0f : t > 0.0f ? 1.0f : 0.0f) * powf(fabsf(t), 1.0f / gamma);
+      }
+      float expected = outlow + t * (outhigh - outlow);
+      if (range && test.doclamp) {
+        expected = fminf(fmaxf(expected, outlow), outhigh);
+      }
+      EXPECT_NEAR(results[1].x, expected, 1e-5f);
+    }
+  }
 }
 
 /* Batch 38 port (certified private host def35d38): a geomcolor 'index' linked
