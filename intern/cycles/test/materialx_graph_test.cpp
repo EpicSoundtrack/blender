@@ -7108,6 +7108,61 @@ TEST(materialx_graph, ifequal_booleanB_with_linked_operand_outputs_live_comparis
   }
 }
 
+TEST(materialx_graph, booleanI_with_linked_integer_operand_outputs_runtime_condition)
+{
+  /* ND_if*_booleanI outputs value1 (>, >=, ==) value2 for Int32 operands. A
+   * connected operand compares at shader evaluation; the Boolean consumer reads
+   * the runtime condition, not a literal-only fold. */
+  class BooleanFoldGraph : public ShaderGraph {
+   public:
+    void fold_constants()
+    {
+      constant_fold(nullptr);
+    }
+  };
+  const struct {
+    const char *id;
+    int linked;
+    int literal;
+    float expected;
+  } cases[] = {{"ND_ifequal_booleanI", 3, 3, 1.0f},     {"ND_ifequal_booleanI", 2, 3, 0.0f},
+               {"ND_ifgreater_booleanI", 4, 3, 1.0f},   {"ND_ifgreater_booleanI", 3, 3, 0.0f},
+               {"ND_ifgreatereq_booleanI", 3, 3, 1.0f}, {"ND_ifgreatereq_booleanI", 2, 3, 0.0f}};
+  for (const auto &test : cases) {
+    SCOPED_TRACE(string(test.id) + " " + std::to_string(test.linked) + " " +
+                 std::to_string(test.literal));
+    materialx::Node constant{"Linked", "ND_constant_integer"};
+    constant.int_inputs["value"] = test.linked;
+    constant.outputs["out"] = materialx::Type::Integer;
+    materialx::Node predicate{"Predicate", test.id};
+    predicate.links["value1"] = {"Linked", "out", materialx::Type::Integer};
+    predicate.int_inputs["value2"] = test.literal;
+    predicate.outputs["out"] = materialx::Type::Boolean;
+    materialx::Node as_float{"AsFloat", "ND_convert_boolean_float"};
+    as_float.links["in"] = {"Predicate", "out", materialx::Type::Boolean};
+    as_float.outputs["out"] = materialx::Type::Float;
+    materialx::Node color{"Color", "ND_convert_float_color3"};
+    color.links["in"] = {"AsFloat", "out", materialx::Type::Float};
+    color.outputs["out"] = materialx::Type::Color3;
+    materialx::Node surface{"Surface", "ND_surface_unlit"};
+    surface.inputs["emission"] = 1.0f;
+    surface.links["emission_color"] = {"Color", "out", materialx::Type::Color3};
+    surface.outputs["out"] = materialx::Type::SurfaceShader;
+    BooleanFoldGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{constant, predicate, as_float, color, surface}}, &graph, &error))
+        << error;
+    EmissionNode *emission = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      if (auto *candidate = dynamic_cast<EmissionNode *>(node)) emission = candidate;
+    }
+    ASSERT_NE(emission, nullptr);
+    graph.fold_constants();
+    ASSERT_EQ(emission->input("Color")->link, nullptr);
+    EXPECT_FLOAT_EQ(emission->get_color().x, test.expected);
+  }
+}
+
 TEST(materialx_graph, lowers_literal_owned_conditional_backlog_variants)
 {
   materialx::Graph source;
@@ -26210,7 +26265,8 @@ TEST(materialx_graph, integer_predicate_conditional_connected_operands_compare_a
     EXPECT_EQ(materialx_round_test_scalar(result->output("Value")), 5.0f);
   }
 
-  /* Boolean-output predicates keep requiring literal predicate operands. */
+  /* Batch 37: Boolean-output predicates also compare connected operands at
+   * runtime (booleanI_with_linked_integer_operand_outputs_runtime_condition). */
   for (const char *nodedef : {"ND_ifequal_booleanI"}) {
     SCOPED_TRACE(nodedef);
     materialx::Node k1{"K1", "ND_constant_integer"};
@@ -26225,7 +26281,13 @@ TEST(materialx_graph, integer_predicate_conditional_connected_operands_compare_a
       conditional.int_inputs["in2"] = 0;
     }
     conditional.outputs["out"] = integer ? materialx::Type::Integer : materialx::Type::Boolean;
-    EXPECT_FALSE(materialx::validate({{k1, conditional}}));
+    EXPECT_TRUE(materialx::validate({{k1, conditional}}));
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{k1, conditional}}, &graph, &error)) << error;
+    ShaderNode *result = materialx_divide_named_node(graph, "Cond.float");
+    ASSERT_NE(result, nullptr);
+    EXPECT_EQ(materialx_round_test_scalar(result->output("Value")), 1.0f);
   }
 
   /* A link and a literal for the same predicate operand is ambiguous. */

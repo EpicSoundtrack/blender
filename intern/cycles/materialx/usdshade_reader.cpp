@@ -9189,7 +9189,11 @@ bool read_boolean_output(const pxr::UsdShadeInput &input,
       }
     }
     else if (is_integer_predicate_conditional(nodedef)) {
-      if (!read_integer_predicate_operands(source_shader, nodedef, &conditional, error_message)) {
+      /* ND_if*_booleanI: literal, connected or private-word Int32 operands; a
+       * connected operand compares at shader evaluation (graph.cpp
+       * integer_predicate_accepts_runtime_boolean_result). */
+      if (!read_integer_predicate_operands(
+              source_shader, nodedef, graph, &conditional, depth, error_message)) {
         return finish(false);
       }
     }

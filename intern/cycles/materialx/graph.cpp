@@ -3341,6 +3341,14 @@ bool integer_predicate_accepts_runtime_integer_result(const Type output_type)
   return output_type == Type::Integer;
 }
 
+/* Batch 37: a Boolean-output integer predicate (ND_if*_booleanI) with a connected
+ * or private-word predicate operand. Its result is the runtime condition itself
+ * (exactly 0 or 1) on the ".float" route consumed by Boolean links. */
+bool integer_predicate_accepts_runtime_boolean_result(const Type output_type)
+{
+  return output_type == Type::Boolean;
+}
+
 /* Batch 13: number of integer predicate operands carried as the add-on's
  * private exact Int32 word attribute ("mx_private_words_value1/2"). */
 size_t integer_predicate_private_words(const Node &node)
@@ -7631,7 +7639,8 @@ bool validate(const Graph &source,
             const auto original = node.string_inputs.find(string("mx_public_geomprop_") + name);
             return literal == node.int_inputs.end() && link == node.links.end() &&
                    (integer_predicate_accepts_runtime_condition(output_type) ||
-                    integer_predicate_accepts_runtime_integer_result(output_type)) &&
+                    integer_predicate_accepts_runtime_integer_result(output_type) ||
+                    integer_predicate_accepts_runtime_boolean_result(output_type)) &&
                    words->second.rfind("__mx_private_i32_words_", 0) == 0 &&
                    original != node.string_inputs.end() && !original->second.empty();
           }
@@ -7648,7 +7657,8 @@ bool validate(const Graph &source,
              * evaluation; only value-arm outputs mixed by the condition accept it. */
             return literal == node.int_inputs.end() &&
                    (integer_predicate_accepts_runtime_condition(output_type) ||
-                    integer_predicate_accepts_runtime_integer_result(output_type)) &&
+                    integer_predicate_accepts_runtime_integer_result(output_type) ||
+                    integer_predicate_accepts_runtime_boolean_result(output_type)) &&
                    validate_link(link->second, Type::Integer, *nodes_by_name);
           }
           return literal != node.int_inputs.end();
@@ -16666,6 +16676,21 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           integer_predicate_accepts_runtime_integer_result(output_type) &&
           (node.links.contains("value1") || node.links.contains("value2") ||
            integer_predicate_private_words(node) != 0);
+      if (integer_predicate_accepts_runtime_boolean_result(output_type) &&
+          (node.links.contains("value1") || node.links.contains("value2") ||
+           integer_predicate_private_words(node) != 0))
+      {
+        /* Batch 37: the Boolean result is the runtime condition; the connect pass
+         * wires "<name>.condition" into Value1 (+ 0). */
+        MathNode *as_float = graph->create_node<MathNode>();
+        as_float->name = node.name + ".float";
+        as_float->set_math_type(NODE_MATH_ADD);
+        as_float->set_use_clamp(false);
+        as_float->set_value2(0.0f);
+        lowered_nodes.emplace(as_float->name, as_float);
+        lowered_nodes.emplace(node.name, as_float);
+        continue;
+      }
       if (runtime_integer_result) {
         /* Batch 30: see integer_predicate_accepts_runtime_integer_result(). The
          * connect pass wires "<name>.condition" into Value1. */
@@ -27202,7 +27227,8 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       const Type output_type = is_integer_predicate_conditional(node.nodedef) ?
                                    integer_predicate_conditional_output_type(node.nodedef) :
                                    boolean_predicate_conditional_output_type(node.nodedef);
-      if (output_type == Type::Integer && is_integer_predicate_conditional(node.nodedef) &&
+      if ((output_type == Type::Integer || output_type == Type::Boolean) &&
+          is_integer_predicate_conditional(node.nodedef) &&
           (node.links.contains("value1") || node.links.contains("value2") ||
            integer_predicate_private_words(node) != 0))
       {
