@@ -3757,6 +3757,23 @@ bool read_four_component_attribute_fallback_input(const pxr::UsdShadeShader &sou
 
   const pxr::UsdShadeInput fallback = source.GetInput(pxr::TfToken("fallback"));
   if (!fallback) {
+    if (!canonical) {
+      /* No default authored under either spelling: the result for an absent
+       * primvar is the NodeDef default, (0, 0, 0, 0) for ND_geompropvalue_color4
+       * and ND_geompropvalue_vector4 (stdlib_defs.mtlx 1.39.4) and for
+       * ND_UsdPrimvarReader_vector4 (usd_preview_surface.mtlx). Without an
+       * explicit fallback the AttributeNode reads Cycles' missing-attribute
+       * sentinel, whose "Alpha" (the fourth component) is 1
+       * (kernel/svm/attribute.h svm_node_attr_surface_eval,
+       * NODE_ATTR_OUTPUT_FLOAT_ALPHA). A present primvar is unaffected: the
+       * fallback applies only when the attribute is not found. */
+      if (type == Type::Color4) {
+        node->fallback_float4_inputs["out"] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+      }
+      else {
+        node->fallback_vector4_inputs["out"] = make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+      }
+    }
     return true;
   }
   if (fallback.HasConnectedSource()) {

@@ -35798,6 +35798,114 @@ TEST(materialx_usdshade_reader, geomcolor_color4_absent_set_falls_back_to_nodede
   }
 }
 
+/* Batch 46: a four-component attribute reader with NO authored default must
+ * record its NodeDef default (0, 0, 0, 0) as the fallback -- stdlib_defs.mtlx
+ * 1.39.4 ND_geompropvalue_color4 / ND_geompropvalue_vector4 'default', and
+ * usd_preview_surface.mtlx ND_UsdPrimvarReader_vector4 'fallback'. Without it
+ * the lowered AttributeNode has no fallback and an absent primvar reads Cycles'
+ * missing-attribute sentinel, whose fourth component (Alpha) is 1. An authored
+ * default still wins. The kernel side is in materialx_principled_kernel_test.cpp. */
+TEST(materialx_usdshade_reader, four_component_reader_without_default_records_nodedef_default)
+{
+  auto bits = [](const float v) { return std::bit_cast<uint32_t>(v); };
+  struct Case {
+    const char *nodedef;
+    const char *name_input;
+    const char *default_input;
+    bool color4;
+  };
+  const Case cases[] = {
+      {"ND_geompropvalue_color4", "geomprop", "default", true},
+      {"ND_geompropvalue_vector4", "geomprop", "default", false},
+      {"ND_UsdPrimvarReader_vector4", "varname", "fallback", false},
+  };
+  const float4 authored = make_float4(0.5f, -0.25f, 2.0f, 0.75f);
+  for (const Case &c : cases) {
+    for (const bool author_default : {false, true}) {
+      SCOPED_TRACE(testing::Message() << c.nodedef << " authored default " << author_default);
+      const pxr::SdfValueTypeName type = c.color4 ? pxr::SdfValueTypeNames->Color4f :
+                                                    pxr::SdfValueTypeNames->Float4;
+      const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+      const pxr::SdfPath root("/Looks/FourComponentNoDefault");
+      const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(stage, root);
+      const auto shader = [&](const char *name, const char *id,
+                              const pxr::SdfValueTypeName &output_type) {
+        pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+            stage, root.AppendChild(pxr::TfToken(name)));
+        node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+        node.CreateOutput(pxr::TfToken("out"), output_type);
+        return node;
+      };
+      pxr::UsdShadeShader reader = shader("Reader", c.nodedef, type);
+      reader.CreateInput(pxr::TfToken(c.name_input), pxr::SdfValueTypeNames->String)
+          .Set(string("materialx_absent_primvar"));
+      if (author_default) {
+        reader.CreateInput(pxr::TfToken(c.default_input), type)
+            .Set(pxr::GfVec4f(authored.x, authored.y, authored.z, authored.w));
+      }
+      pxr::UsdShadeShader extract = shader(
+          "Extract", c.color4 ? "ND_extract_color4" : "ND_extract_vector4",
+          pxr::SdfValueTypeNames->Float);
+      extract.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+      ASSERT_TRUE(extract.CreateInput(pxr::TfToken("in"), type)
+                      .ConnectToSource(reader.ConnectableAPI(), pxr::TfToken("out")));
+      pxr::UsdShadeShader surface = shader(
+          "Surface", "ND_convert_float_surfaceshader", pxr::SdfValueTypeNames->Token);
+      ASSERT_TRUE(surface.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                      .ConnectToSource(extract.ConnectableAPI(), pxr::TfToken("out")));
+      ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx"))
+                      .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+      materialx::Graph source;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+      const auto node = std::find_if(
+          source.nodes.begin(), source.nodes.end(), [](const materialx::Node &candidate) {
+            return candidate.name == "Reader";
+          });
+      ASSERT_NE(node, source.nodes.end());
+      EXPECT_EQ(node->nodedef, c.nodedef);
+      EXPECT_EQ(node->string_inputs.at(c.name_input), "materialx_absent_primvar");
+      EXPECT_TRUE(node->links.empty());
+      const auto &recorded = c.color4 ? node->fallback_float4_inputs :
+                                        node->fallback_vector4_inputs;
+      const auto &other = c.color4 ? node->fallback_vector4_inputs :
+                                     node->fallback_float4_inputs;
+      ASSERT_EQ(recorded.size(), 1u);
+      const auto fallback = recorded.find("out");
+      ASSERT_NE(fallback, recorded.end());
+      const float4 expected = author_default ? authored : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+      EXPECT_EQ(bits(fallback->second.x), bits(expected.x));
+      EXPECT_EQ(bits(fallback->second.y), bits(expected.y));
+      EXPECT_EQ(bits(fallback->second.z), bits(expected.z));
+      EXPECT_EQ(bits(fallback->second.w), bits(expected.w));
+      EXPECT_TRUE(other.empty() && node->fallback_inputs.empty() &&
+                  node->fallback_color3_inputs.empty() && node->fallback_vector2_inputs.empty() &&
+                  node->fallback_vector3_inputs.empty() && node->fallback_int_inputs.empty());
+      ASSERT_TRUE(materialx::validate(source));
+
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+      AttributeNode *attribute = nullptr;
+      for (ShaderNode *candidate : lowered.nodes) {
+        if (candidate->name == "Reader") {
+          attribute = dynamic_cast<AttributeNode *>(candidate);
+        }
+      }
+      ASSERT_NE(attribute, nullptr);
+      EXPECT_EQ(attribute->get_attribute(), ustring("materialx_absent_primvar"));
+      EXPECT_TRUE(attribute->get_use_materialx_exact());
+      EXPECT_TRUE(attribute->get_use_fallback());
+      EXPECT_EQ(bits(attribute->get_fallback_color().x), bits(expected.x));
+      EXPECT_EQ(bits(attribute->get_fallback_color().y), bits(expected.y));
+      EXPECT_EQ(bits(attribute->get_fallback_color().z), bits(expected.z));
+      EXPECT_EQ(bits(attribute->get_fallback_alpha()), bits(expected.w));
+      /* extract(index 3) reads this same node's Alpha socket. */
+      EXPECT_FALSE(attribute->output("Alpha")->links.empty());
+    }
+  }
+}
+
 
 TEST(materialx_usdshade_reader, reads_geomprop_and_primvar_fallback_inputs)
 {

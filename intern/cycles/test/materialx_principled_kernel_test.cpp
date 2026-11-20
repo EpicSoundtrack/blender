@@ -2042,6 +2042,214 @@ TEST_F(materialx_principled_kernel, geomcolor_color4_absent_set_reads_default_pr
     globals.attributes_float4 = {};
   }
 }
+
+/* Batch 46: ND_geompropvalue_color4, ND_geompropvalue_vector4 and
+ * ND_UsdPrimvarReader_vector4 with NO authored default must read their NodeDef
+ * default (0, 0, 0, 0) for an ABSENT primvar -- stdlib_defs.mtlx 1.39.4 and
+ * usd_preview_surface.mtlx -- through the actual reader -> lower() ->
+ * AttributeNode::compile -> svm_node_attr_* path. Without a fallback the
+ * missing-attribute sentinel gives the fourth component (Alpha) 1. An authored
+ * default still wins, and a PRESENT primvar passes its stored four components
+ * through bit-exactly, negative fourth component included. */
+TEST_F(materialx_principled_kernel, four_component_reader_absent_primvar_reads_nodedef_default)
+{
+  auto bits = [](const float v) { return std::bit_cast<uint>(v); };
+  struct Case {
+    const char *nodedef;
+    const char *name_input;
+    const char *default_input;
+    bool color4;
+  };
+  const Case cases[] = {
+      {"ND_geompropvalue_color4", "geomprop", "default", true},
+      {"ND_geompropvalue_vector4", "geomprop", "default", false},
+      {"ND_UsdPrimvarReader_vector4", "varname", "fallback", false},
+  };
+  const float4 stored = make_float4(0.25f, -0.5f, 1.75f, -0.375f);
+  const float4 authored = make_float4(0.5f, -0.25f, 2.0f, 0.75f);
+  for (const Case &c : cases) {
+    for (const bool author_default : {false, true}) {
+      SCOPED_TRACE(testing::Message() << c.nodedef << " authored default " << author_default);
+      const pxr::SdfValueTypeName type = c.color4 ? pxr::SdfValueTypeNames->Color4f :
+                                                    pxr::SdfValueTypeNames->Float4;
+      const auto stage = pxr::UsdStage::CreateInMemory();
+      const pxr::SdfPath root("/Material");
+      const auto material = pxr::UsdShadeMaterial::Define(stage, root);
+      const auto shader = [&](const char *name, const char *id,
+                              const pxr::SdfValueTypeName &output_type) {
+        pxr::UsdShadeShader node = pxr::UsdShadeShader::Define(
+            stage, root.AppendChild(pxr::TfToken(name)));
+        node.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+        node.CreateOutput(pxr::TfToken("out"), output_type);
+        return node;
+      };
+      pxr::UsdShadeShader reader = shader("Reader", c.nodedef, type);
+      reader.CreateInput(pxr::TfToken(c.name_input), pxr::SdfValueTypeNames->String)
+          .Set(string("materialx_primvar"));
+      if (author_default) {
+        reader.CreateInput(pxr::TfToken(c.default_input), type)
+            .Set(pxr::GfVec4f(authored.x, authored.y, authored.z, authored.w));
+      }
+      pxr::UsdShadeShader surface = shader(
+          "OpenPBR", "ND_open_pbr_surface_surfaceshader", pxr::SdfValueTypeNames->Token);
+      /* First three components feed base_color (color4) or base_weight
+       * (vector4 extract index 0) from the AttributeNode's three-component
+       * socket; extract(index 3) feeds specular_roughness from "Alpha". */
+      if (c.color4) {
+        pxr::UsdShadeShader to_color3 = shader(
+            "ToColor3", "ND_convert_color4_color3", pxr::SdfValueTypeNames->Color3f);
+        ASSERT_TRUE(to_color3.CreateInput(pxr::TfToken("in"), type)
+                        .ConnectToSource(reader.ConnectableAPI(), pxr::TfToken("out")));
+        ASSERT_TRUE(
+            surface.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+                .ConnectToSource(to_color3.ConnectableAPI(), pxr::TfToken("out")));
+      }
+      else {
+        pxr::UsdShadeShader extract_x = shader(
+            "ExtractX", "ND_extract_vector4", pxr::SdfValueTypeNames->Float);
+        extract_x.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(0);
+        ASSERT_TRUE(extract_x.CreateInput(pxr::TfToken("in"), type)
+                        .ConnectToSource(reader.ConnectableAPI(), pxr::TfToken("out")));
+        ASSERT_TRUE(
+            surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                .ConnectToSource(extract_x.ConnectableAPI(), pxr::TfToken("out")));
+      }
+      pxr::UsdShadeShader extract_w = shader(
+          "ExtractW", c.color4 ? "ND_extract_color4" : "ND_extract_vector4",
+          pxr::SdfValueTypeNames->Float);
+      extract_w.CreateInput(pxr::TfToken("index"), pxr::SdfValueTypeNames->Int).Set(3);
+      ASSERT_TRUE(extract_w.CreateInput(pxr::TfToken("in"), type)
+                      .ConnectToSource(reader.ConnectableAPI(), pxr::TfToken("out")));
+      ASSERT_TRUE(
+          surface.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+              .ConnectToSource(extract_w.ConnectableAPI(), pxr::TfToken("out")));
+      ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx"))
+                      .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+      materialx::Graph source;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+      ASSERT_TRUE(materialx::validate(source));
+      ShaderGraph graph;
+      ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+      /* The vector4 readers reach the surface twice (the extract(index 0)
+       * read and the extract(index 3) W read), and the reader emits one
+       * AttributeNode per read of the same shader; every one of them reads the
+       * same primvar and must carry the same fallback. */
+      std::vector<AttributeNode *> attributes;
+      for (ShaderNode *candidate : graph.nodes) {
+        if (AttributeNode *attribute = dynamic_cast<AttributeNode *>(candidate)) {
+          EXPECT_EQ(attribute->get_attribute(), ustring("materialx_primvar"));
+          attributes.push_back(attribute);
+        }
+      }
+      ASSERT_FALSE(attributes.empty());
+      ASSERT_LE(attributes.size(), 2u);
+
+      /* The actual compiled attribute bytecode: one record per linked output. */
+      struct Record {
+        uint opcode;
+        SVMNodeAttr data;
+      };
+      std::vector<Record> records;
+      for (AttributeNode *attribute : attributes) {
+        CapturePrincipledSVM compiler(scene.get(), progress, &graph);
+        const std::vector<uint> words = compiler.capture(attribute);
+        for (size_t i = 0; i < words.size(); i += 1 + sizeof(SVMNodeAttr) / sizeof(uint)) {
+          ASSERT_TRUE(words[i] == uint(NODE_ATTR) || words[i] == uint(NODE_ATTR_DERIVATIVE));
+          ASSERT_LE(i + 1 + sizeof(SVMNodeAttr) / sizeof(uint), words.size());
+          Record record{words[i], {}};
+          memcpy(&record.data, words.data() + i + 1, sizeof(SVMNodeAttr));
+          records.push_back(record);
+        }
+      }
+      int three_records = 0, alpha_records = 0;
+      for (const Record &record : records) {
+        three_records += record.data.output_type == NODE_ATTR_OUTPUT_FLOAT3;
+        alpha_records += record.data.output_type == NODE_ATTR_OUTPUT_FLOAT_ALPHA;
+        EXPECT_TRUE(record.data.materialx_flags & NODE_ATTR_MATERIALX_EXACT);
+        ASSERT_LT(record.data.out_offset + 2, SVM_STACK_SIZE);
+      }
+      ASSERT_EQ(alpha_records, 1);
+      ASSERT_EQ(three_records, 1);
+      ASSERT_EQ(records.size(), 2u);
+
+      /* One object, one triangle; the attribute map either holds the primvar
+       * as a per-face float4 (exact, no interpolation) or is empty. */
+      KernelObject object{};
+      object.attribute_map_offset = 0;
+      float4 face_values[1] = {stored};
+      globals.objects.data = &object;
+      globals.objects.width = 1;
+      globals.attributes_float4.data = face_values;
+      globals.attributes_float4.width = 1;
+      ShaderData sd{};
+      sd.object = 0;
+      sd.prim = 0;
+      sd.type = PRIMITIVE_TRIANGLE;
+      sd.u = 0.3f;
+      sd.v = 0.2f;
+      const auto run = [&](const Record &record, const bool present, const bool drop_fallback) {
+        AttributeMap map[2 * ATTR_PRIM_TYPES] = {};
+        if (present) {
+          for (int prim_type = 0; prim_type < ATTR_PRIM_TYPES; prim_type++) {
+            map[prim_type].id = uint64_t(record.data.attr);
+            map[prim_type].offset = 0;
+            map[prim_type].element = ATTR_ELEMENT_FACE;
+            map[prim_type].type = NODE_ATTR_FLOAT4;
+          }
+        }
+        /* Terminator: id ATTR_STD_NONE with element 0. */
+        globals.attributes_map.data = map;
+        globals.attributes_map.width = int(std::size(map));
+        ThreadKernelGlobalsCPU kg(globals, nullptr, profiler, 0);
+        SVMNodeAttr data = record.data;
+        if (drop_fallback) {
+          data.materialx_flags &= ~uint8_t(NODE_ATTR_MATERIALX_FALLBACK);
+        }
+        std::array<float, SVM_STACK_SIZE> stack{};
+        stack.fill(NAN);
+        if (record.opcode == uint(NODE_ATTR)) {
+          svm_node_attr_surface(&kg, &sd, stack.data(), data);
+        }
+        else {
+          svm_node_attr_derivative(&kg, &sd, stack.data(), data);
+        }
+        globals.attributes_map = {};
+        return std::array<float, 3>{stack[data.out_offset], stack[data.out_offset + 1],
+                                    stack[data.out_offset + 2]};
+      };
+      const float4 expected = author_default ? authored : make_float4(0.0f, 0.0f, 0.0f, 0.0f);
+      for (const Record &record : records) {
+        const bool alpha = record.data.output_type == NODE_ATTR_OUTPUT_FLOAT_ALPHA;
+        SCOPED_TRACE(alpha ? "Alpha" : "three components");
+        EXPECT_TRUE(record.data.materialx_flags & NODE_ATTR_MATERIALX_FALLBACK);
+        EXPECT_EQ(bits(record.data.fallback.x), bits(expected.x));
+        EXPECT_EQ(bits(record.data.fallback.y), bits(expected.y));
+        EXPECT_EQ(bits(record.data.fallback.z), bits(expected.z));
+        EXPECT_EQ(bits(record.data.fallback.w), bits(expected.w));
+        const auto absent = run(record, false, false);
+        const auto present = run(record, true, false);
+        if (alpha) {
+          EXPECT_EQ(bits(absent[0]), bits(expected.w));
+          EXPECT_EQ(bits(present[0]), bits(stored.w));
+          /* The missing-attribute sentinel without a fallback: Alpha 1. */
+          EXPECT_EQ(bits(run(record, false, true)[0]), bits(1.0f));
+        }
+        else {
+          EXPECT_EQ(bits(absent[0]), bits(expected.x));
+          EXPECT_EQ(bits(absent[1]), bits(expected.y));
+          EXPECT_EQ(bits(absent[2]), bits(expected.z));
+          EXPECT_EQ(bits(present[0]), bits(stored.x));
+          EXPECT_EQ(bits(present[1]), bits(stored.y));
+          EXPECT_EQ(bits(present[2]), bits(stored.z));
+        }
+      }
+      globals.objects = {};
+      globals.attributes_float4 = {};
+    }
+  }
+}
 #endif
 
 CCL_NAMESPACE_END
