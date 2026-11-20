@@ -9619,6 +9619,14 @@ bool read_integer_output(const pxr::UsdShadeInput &input,
           return finish(false);
         }
       }
+      else if (nodedef == ifequal_integer_b_id) {
+        /* Literal or direct static ND_constant_integer arms (lineage: certified
+         * private host c49a83ee, ifequal-integerB-constant-arm-v1 reader). */
+        if (!read_integer_b_constant_arm(
+                operand, nodedef, name, &conditional.int_inputs[name], error_message)) {
+          return finish(false);
+        }
+      }
       else if (!operand || operand.GetTypeName() != pxr::SdfValueTypeNames->Int ||
                operand.HasConnectedSource() || !operand.Get(&conditional.int_inputs[name]))
       {

@@ -34756,6 +34756,47 @@ TEST(materialx_usdshade_reader, integerI_predicates_fold_constant_integer_arms)
   EXPECT_FALSE(probe.evaluate(&color, &error));
 }
 
+/* Batch 38 port (certified private host c49a83ee ifequal-integerB-constant-arm-v1):
+ * ND_ifequal_integerB result arms may be direct static ND_constant_integer
+ * producers; linked ND_constant_boolean selectors pick the arm. */
+TEST(materialx_usdshade_reader, ifequal_integerB_folds_constant_integer_arms)
+{
+  for (const bool linked_selector : {true, false}) {
+    for (const bool value2 : {true, false}) {
+      SCOPED_TRACE(string(linked_selector ? "linked" : "literal") +
+                   (value2 ? " equal" : " different"));
+      Batch38EmissionProbe probe;
+      pxr::UsdShadeShader predicate = probe.shader(
+          "Predicate", "ND_ifequal_integerB", pxr::SdfValueTypeNames->Int);
+      const pxr::SdfValueTypeName integer = pxr::SdfValueTypeNames->Int;
+      const pxr::SdfValueTypeName boolean = pxr::SdfValueTypeNames->Bool;
+      ASSERT_TRUE(predicate.CreateInput(pxr::TfToken("in1"), integer)
+                      .ConnectToSource(probe.constant_integer("K1", 11).ConnectableAPI(),
+                                       pxr::TfToken("out")));
+      ASSERT_TRUE(predicate.CreateInput(pxr::TfToken("in2"), integer)
+                      .ConnectToSource(probe.constant_integer("K2", -11).ConnectableAPI(),
+                                       pxr::TfToken("out")));
+      if (linked_selector) {
+        ASSERT_TRUE(predicate.CreateInput(pxr::TfToken("value1"), boolean)
+                        .ConnectToSource(probe.constant_boolean("B1", true).ConnectableAPI(),
+                                         pxr::TfToken("out")));
+        ASSERT_TRUE(predicate.CreateInput(pxr::TfToken("value2"), boolean)
+                        .ConnectToSource(probe.constant_boolean("B2", value2).ConnectableAPI(),
+                                         pxr::TfToken("out")));
+      }
+      else {
+        predicate.CreateInput(pxr::TfToken("value1"), boolean).Set(true);
+        predicate.CreateInput(pxr::TfToken("value2"), boolean).Set(value2);
+      }
+      probe.observe_integer(predicate);
+      float3 color;
+      string error;
+      ASSERT_TRUE(probe.evaluate(&color, &error)) << error;
+      EXPECT_EQ(color, make_float3(value2 ? 11.0f : -11.0f)) << color.x;
+    }
+  }
+}
+
 /* Batch 38 port (certified private host def35d38): a geomcolor 'index' linked
  * to a uniform exact ND_constant_integer folds to that color-set index; other
  * producers and negative constants stay refused. */
