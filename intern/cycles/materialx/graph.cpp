@@ -4505,6 +4505,17 @@ bool matrix44_node_is_runtime(const Node &node,
   return false;
 }
 
+/* ND_determinant_matrix44 over a connected 'in' (static or runtime Matrix44
+ * source): built per element in the runtime Matrix44 pass with the same
+ * first-row cofactor expansion as determinant_matrix44_value(), so a static
+ * source folds to a constant and a varying one (creatematrix rows from
+ * primvars, an inverse or element-wise arithmetic of such) is evaluated per
+ * shading point. A literal 'in' keeps the ValueNode fold in lower(). */
+bool matrix44_consumer_is_runtime(const Node &node)
+{
+  return node.nodedef == determinant_matrix44_id && node.links.contains("in");
+}
+
 /* Runtime (varying) Matrix33 values, the Matrix33 counterpart of the runtime
  * Matrix44 route above. A ND_creatematrix_vector3_matrix33 with a connected
  * row has no static value; ND_invertmatrix_matrix33 / ND_transpose_matrix33
@@ -14242,6 +14253,23 @@ bool validate(const Graph &source,
         }
         continue;
       }
+      if (matrix44_consumer_is_runtime(node)) {
+        /* Connected Matrix44 (static or runtime): evaluated by the runtime
+         * Matrix44 pass, which folds a static source to a constant. Exactly
+         * one source: a link and no literal. */
+        if (output == node.outputs.end() || output->second != Type::Float ||
+            node.outputs.size() != 1 || node.links.size() != 1 ||
+            !matrix44_runtime_source_valid(node.links.at("in"), *nodes_by_name) ||
+            !node.inputs.empty() || !node.int_inputs.empty() || !node.color3_inputs.empty() ||
+            !node.float4_inputs.empty() || !node.vector2_inputs.empty() ||
+            !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+            !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
+            !node.string_inputs.empty() || !node.asset_inputs.empty())
+        {
+          return false;
+        }
+        continue;
+      }
       const auto finite33 = [&]() {
         const auto value = node.matrix33_inputs.find("in");
         return value != node.matrix33_inputs.end() &&
@@ -16522,6 +16550,16 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         vector->set_z(0.0f);
         lowered_nodes.emplace(node.name, vector);
       }
+      continue;
+    }
+    if (matrix44_consumer_is_runtime(node)) {
+      /* Value1 is driven (or set, for a static source) by the runtime
+       * Matrix44 pass after all producers are lowered. */
+      MathNode *value = graph->create_node<MathNode>();
+      value->name = node.name;
+      value->set_math_type(NODE_MATH_ADD);
+      value->set_value2(0.0f);
+      lowered_nodes.emplace(node.name, value);
       continue;
     }
     if (matrix44_node_is_runtime(node, nodes_by_name)) {
@@ -34075,6 +34113,51 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         else {
           static_cast<MathNode *>(w)->set_value1(sum.value);
         }
+      }
+    }
+
+    /* ND_determinant_matrix44 over a connected Matrix44 (see
+     * matrix44_consumer_is_runtime()): first-row cofactor expansion of the
+     * row-major matrix, term for term as determinant_matrix44_value(), so a
+     * static source folds to the same constant the literal path produces. */
+    for (const Node &node : source.nodes) {
+      if (!matrix44_consumer_is_runtime(node)) {
+        continue;
+      }
+      Matrix matrix;
+      const auto in = node.links.find("in");
+      if (in == node.links.end() || !matrix_value(in->second, &matrix, 0)) {
+        rollback();
+        return fail("MaterialX node '" + node.name +
+                    "' (ND_determinant_matrix44) has a runtime Matrix44 operand without a "
+                    "lowered component route");
+      }
+      const auto det33 = [&](const std::array<Scalar, 9> &m) {
+        return add(sub(mul(m[0], sub(mul(m[4], m[8]), mul(m[5], m[7]))),
+                       mul(m[1], sub(mul(m[3], m[8]), mul(m[5], m[6])))),
+                   mul(m[2], sub(mul(m[3], m[7]), mul(m[4], m[6]))));
+      };
+      const auto minor3 = [&](const int skip_col) {
+        std::array<Scalar, 9> minor;
+        int dst = 0;
+        for (int row = 1; row < 4; row++) {
+          for (int col = 0; col < 4; col++) {
+            if (col != skip_col) {
+              minor[size_t(dst++)] = matrix[size_t(row * 4 + col)];
+            }
+          }
+        }
+        return det33(minor);
+      };
+      const Scalar det = sub(add(sub(mul(matrix[0], minor3(0)), mul(matrix[1], minor3(1))),
+                                 mul(matrix[2], minor3(2))),
+                             mul(matrix[3], minor3(3)));
+      MathNode *result = static_cast<MathNode *>(lowered_nodes.at(node.name));
+      if (det.output) {
+        graph->connect(det.output, result->input("Value1"));
+      }
+      else {
+        result->set_value1(det.value);
       }
     }
 

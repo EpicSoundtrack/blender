@@ -48395,6 +48395,126 @@ TEST(materialx_usdshade_reader, reads_connected_matrix33_rows_and_folds_projecti
   ASSERT_TRUE(materialx::lower(graph, &lowered));
 }
 
+/* Batch 40: cx48 ND_determinant_matrix44 contract V0
+ * (determinant2-observer-v2.ND_determinant_matrix44.V0.public.usda, sha256
+ * a6b8e1d0...732c9): a creatematrix_vector4_matrix44 whose four rows are combine4s of
+ * sixteen ND_geompropvalue_float primvars feeds the determinant, observed by
+ * the ifgreatereq/combine3 frame. The reader keeps the runtime link, and
+ * validate() used to reject it ("MaterialX node 'determinant'
+ * (ND_determinant_matrix44) was rejected by validate()"). The same graph
+ * shape is generated here, authored defaults beside every connection. */
+TEST(materialx_usdshade_reader, reads_and_lowers_runtime_primvar_matrix44_determinant)
+{
+  string usda =
+      "#usda 1.0\n"
+      "def Scope \"Looks\" {\n"
+      " def Material \"Material\" {\n"
+      "  token outputs:mtlx:surface.connect = </Looks/Material/Root.outputs:surface>\n"
+      "  def NodeGraph \"Root\" {\n"
+      "   token outputs:surface.connect = </Looks/Material/Root/Nested.outputs:surface>\n"
+      "   def NodeGraph \"Nested\" {\n"
+      "    token outputs:surface.connect = </Looks/Material/Root/Nested/det_observer_convert.outputs:out>\n";
+  const string nested = "</Looks/Material/Root/Nested/";
+  const auto shader = [&](const string &name, const string &id, const string &body) {
+    usda += "    def Shader \"" + name + "\" {\n     uniform token info:id = \"" + id + "\"\n" + body +
+            "    }\n";
+  };
+  shader("determinant",
+         "ND_determinant_matrix44",
+         "     matrix4d inputs:in = ( (1, 0, 0, 0), (0, 1, 0, 0), (0, 0, 1, 0), (0, 0, 0, 1) )\n"
+         "     matrix4d inputs:in.connect = " + nested + "creatematrix.outputs:out>\n"
+         "     float outputs:out\n");
+  const char *identity_rows[] = {"(1, 0, 0, 0)", "(0, 1, 0, 0)", "(0, 0, 1, 0)", "(0, 0, 0, 1)"};
+  const char *combines[] = {"combine4", "combine4_2", "combine4_3", "combine4_4"};
+  string create_body;
+  for (int r = 0; r < 4; r++) {
+    const string port = "in" + std::to_string(r + 1);
+    create_body += "     float4 inputs:" + port + " = " + identity_rows[r] + "\n     float4 inputs:" +
+                   port + ".connect = " + nested + combines[r] + ".outputs:out>\n";
+  }
+  shader("creatematrix", "ND_creatematrix_vector4_matrix44", create_body + "     matrix4d outputs:out\n");
+  for (int r = 0; r < 4; r++) {
+    string body;
+    for (int c = 0; c < 4; c++) {
+      const int index = r * 4 + c;
+      const string leaf = index == 0 ? "geompropvalue" : "geompropvalue_" + std::to_string(index + 1);
+      const string port = "in" + std::to_string(c + 1);
+      body += "     float inputs:" + port + " = 0\n     float inputs:" + port + ".connect = " +
+              nested + leaf + ".outputs:out>\n";
+      shader(leaf,
+             "ND_geompropvalue_float",
+             "     float inputs:default = 0\n     uniform string inputs:geomprop = \"det_m_" +
+                 std::to_string(r) + std::to_string(c) + "\"\n     float outputs:out\n");
+    }
+    shader(combines[r], "ND_combine4_vector4", body + "     float4 outputs:out\n");
+  }
+  const auto bound = [&](const char *name, const char *geomprop, const char *fallback) {
+    shader(name,
+           "ND_geompropvalue_float",
+           string("     float inputs:default = ") + fallback +
+               "\n     uniform string inputs:geomprop = \"" + geomprop +
+               "\"\n     float outputs:out\n");
+  };
+  bound("det_observer_lower_bound", "det_observer_lower", "0.9998999");
+  bound("det_observer_upper_bound", "det_observer_upper", "1.0001001");
+  bound("det_observer_negative_bound", "det_observer_negative", "1.0101001");
+  const auto compare = [&](const char *name, const string &value1, const string &value2) {
+    shader(name,
+           "ND_ifgreatereq_float",
+           "     float inputs:in1 = 1\n     float inputs:in2 = 0\n     float inputs:value1.connect = " +
+               nested + value1 + ".outputs:out>\n     float inputs:value2.connect = " + nested +
+               value2 + ".outputs:out>\n     float outputs:out\n");
+  };
+  compare("det_observer_ifgreatereq", "determinant", "det_observer_lower_bound");
+  compare("det_observer_ifgreatereq_2", "det_observer_upper_bound", "determinant");
+  compare("det_observer_ifgreatereq_3", "determinant", "det_observer_negative_bound");
+  shader("det_observer_combine3",
+         "ND_combine3_color3",
+         "     float inputs:in1.connect = " + nested + "det_observer_ifgreatereq.outputs:out>\n"
+         "     float inputs:in2.connect = " + nested + "det_observer_ifgreatereq_2.outputs:out>\n"
+         "     float inputs:in3.connect = " + nested + "det_observer_ifgreatereq_3.outputs:out>\n"
+         "     color3f outputs:out\n");
+  shader("det_observer_convert",
+         "ND_convert_color3_surfaceshader",
+         "     color3f inputs:in.connect = " + nested + "det_observer_combine3.outputs:out>\n"
+         "     token outputs:out\n");
+  usda += "   }\n  }\n }\n}\n";
+
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(usda));
+  const pxr::UsdShadeMaterial material(stage->GetPrimAtPath(pxr::SdfPath("/Looks/Material")));
+  ASSERT_TRUE(material);
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *determinant = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_determinant_matrix44") {
+      determinant = &node;
+    }
+  }
+  ASSERT_NE(determinant, nullptr);
+  /* The authored identity default beside the connection is not a literal. */
+  ASSERT_EQ(determinant->links.size(), 1u);
+  EXPECT_EQ(determinant->links.at("in").type, materialx::Type::Matrix44);
+  EXPECT_TRUE(determinant->matrix44_inputs.empty());
+  ASSERT_TRUE(materialx::validate(graph));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  MathNode *result = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    if (node->name == ustring(determinant->name)) {
+      result = dynamic_cast<MathNode *>(node);
+    }
+  }
+  ASSERT_NE(result, nullptr);
+  /* Driven per shading point by the primvar cells, not folded. */
+  EXPECT_NE(result->input("Value1")->link, nullptr);
+  EXPECT_EQ(result->get_math_type(), NODE_MATH_ADD);
+  EXPECT_EQ(result->get_value2(), 0.0f);
+}
+
 
 /* Batch 10: tangent/viewdirection accept "object" space and uniform
  * space/index through ND_constant_string / ND_constant_integer. */

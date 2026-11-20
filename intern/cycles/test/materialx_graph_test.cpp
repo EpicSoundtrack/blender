@@ -26035,19 +26035,178 @@ TEST(materialx_graph, transformmatrix_vector4_runtime_creatematrix_and_inverse)
   /* A runtime matrix has no static value: carrier consumers reject it
    * (rather than throwing on the missing literal row). A runtime product is
    * itself a runtime matrix (element-wise route, t2v2-20261114), so a
-   * carrier consumer of the product is rejected the same way. */
+   * carrier consumer of the product is rejected the same way.
+   * ND_determinant_matrix44 is no longer a carrier consumer (batch 40: it is
+   * built in the runtime Matrix44 pass, see
+   * determinant_matrix44_runtime_connected_matrix_and_static_fold);
+   * ND_transformmatrix_vector3M4 still requires a static 'mat'. */
   materialx::Node product{"Product", "ND_multiply_matrix44"};
   product.links["in1"] = {"VMat", "out", materialx::Type::Matrix44};
   product.matrix44_inputs["in2"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
   product.outputs["out"] = materialx::Type::Matrix44;
-  materialx::Node product_determinant{"ProductDeterminant", "ND_determinant_matrix44"};
-  product_determinant.links["in"] = {"Product", "out", materialx::Type::Matrix44};
-  product_determinant.outputs["out"] = materialx::Type::Float;
-  EXPECT_FALSE(materialx::validate({{row, create, product, product_determinant}}));
-  materialx::Node determinant{"Determinant", "ND_determinant_matrix44"};
-  determinant.links["in"] = {"VMat", "out", materialx::Type::Matrix44};
-  determinant.outputs["out"] = materialx::Type::Float;
-  EXPECT_FALSE(materialx::validate({{row, create, determinant}}));
+  const auto carrier_consumer = [](const char *name, const char *matrix) {
+    materialx::Node node{name, "ND_transformmatrix_vector3M4"};
+    node.vector3_inputs["in"] = make_float3(0.5f, -1.0f, 2.0f);
+    node.links["mat"] = {matrix, "out", materialx::Type::Matrix44};
+    node.outputs["out"] = materialx::Type::Vector3;
+    return node;
+  };
+  EXPECT_FALSE(
+      materialx::validate({{row, create, product, carrier_consumer("ProductProbe", "Product")}}));
+  EXPECT_FALSE(materialx::validate({{row, create, carrier_consumer("Probe", "VMat")}}));
+}
+
+/* Batch 40 (cx48 det V0): ND_determinant_matrix44 over a connected Matrix44
+ * was rejected by validate() whenever the source was runtime (creatematrix
+ * rows from POINT primvars). It is now built in the runtime Matrix44 pass:
+ * a runtime source (creatematrix with connected rows, its general inverse,
+ * runtime element-wise arithmetic) is evaluated per element, and a static
+ * connected source folds to the literal path's constant. */
+TEST(materialx_graph, determinant_matrix44_runtime_connected_matrix_and_static_fold)
+{
+  /* Dense projective matrix, every cell nonzero, all four rows connected. */
+  const MatrixRows a = {2.0f, 0.5f,  -1.0f, 0.25f, 0.5f, 3.0f,  0.75f, -0.5f,
+                        -1.0f, 0.25f, 4.0f,  1.0f,  0.5f, -1.0f, 2.0f,  1.5f};
+  const MatrixRows b = {1, 2, 0, 0.25f, -0.25f, 3, 0.75f, -2, 0, 0, 3, 4, 5, 6, 7, 1};
+  /* Independent reference: Gaussian elimination with partial pivoting in double. */
+  const auto reference_det = [](const std::array<double, 16> &m) {
+    double x[4][4];
+    for (int r = 0; r < 4; r++) {
+      for (int c = 0; c < 4; c++) x[r][c] = m[size_t(r * 4 + c)];
+    }
+    double det = 1.0;
+    for (int c = 0; c < 4; c++) {
+      int pivot = c;
+      for (int r = c + 1; r < 4; r++) {
+        if (std::fabs(x[r][c]) > std::fabs(x[pivot][c])) pivot = r;
+      }
+      if (pivot != c) {
+        for (int k = 0; k < 4; k++) std::swap(x[c][k], x[pivot][k]);
+        det = -det;
+      }
+      det *= x[c][c];
+      for (int r = c + 1; r < 4; r++) {
+        const double f = x[r][c] / x[c][c];
+        for (int k = c; k < 4; k++) x[r][k] -= f * x[c][k];
+      }
+    }
+    return det;
+  };
+  const double det_a = reference_det(mx44_as_double(a));
+  const double det_b = reference_det(mx44_as_double(b));
+  ASSERT_GT(std::fabs(det_a), 1.0);
+  ASSERT_GT(std::fabs(det_b), 1.0);
+
+  vector<materialx::Node> nodes;
+  const char *rows[] = {"in1", "in2", "in3", "in4"};
+  materialx::Node create{"VMat", "ND_creatematrix_vector4_matrix44"};
+  for (int r = 0; r < 4; r++) {
+    materialx::Node row{string("Row") + std::to_string(r), "ND_constant_vector4"};
+    row.vector4_inputs["value"] = make_float4(
+        a[size_t(r * 4)], a[size_t(r * 4 + 1)], a[size_t(r * 4 + 2)], a[size_t(r * 4 + 3)]);
+    row.outputs["out"] = materialx::Type::Vector4;
+    create.links[rows[r]] = {row.name, "out", materialx::Type::Vector4};
+    nodes.push_back(row);
+  }
+  create.outputs["out"] = materialx::Type::Matrix44;
+  nodes.push_back(create);
+  materialx::Node inverse{"Inverse", "ND_invertmatrix_matrix44"};
+  inverse.links["in1"] = {"VMat", "out", materialx::Type::Matrix44};
+  inverse.outputs["out"] = materialx::Type::Matrix44;
+  nodes.push_back(inverse);
+  materialx::Node product{"Product", "ND_multiply_matrix44"};
+  product.links["in1"] = {"VMat", "out", materialx::Type::Matrix44};
+  product.matrix44_inputs["in2"] = b;
+  product.outputs["out"] = materialx::Type::Matrix44;
+  nodes.push_back(product);
+  /* Static connected sources: an affine constant and a literal creatematrix. */
+  const MatrixRows affine = {2, 0.5f, 0, 0, -1, 3, 0, 0, 0.25f, 0, 4, 0, 7, -8, 9, 1};
+  materialx::Node static_constant{"StaticConstant", "ND_constant_matrix44"};
+  static_constant.matrix44_inputs["value"] = affine;
+  static_constant.outputs["out"] = materialx::Type::Matrix44;
+  nodes.push_back(static_constant);
+  materialx::Node static_create{"StaticCreate", "ND_creatematrix_vector4_matrix44"};
+  for (int r = 0; r < 4; r++) {
+    static_create.vector4_inputs[rows[r]] = make_float4(affine[size_t(r * 4)],
+                                                         affine[size_t(r * 4 + 1)],
+                                                         affine[size_t(r * 4 + 2)],
+                                                         affine[size_t(r * 4 + 3)]);
+  }
+  static_create.outputs["out"] = materialx::Type::Matrix44;
+  nodes.push_back(static_create);
+  const auto determinant = [](const char *name, const char *source) {
+    materialx::Node node{name, "ND_determinant_matrix44"};
+    node.links["in"] = {source, "out", materialx::Type::Matrix44};
+    node.outputs["out"] = materialx::Type::Float;
+    return node;
+  };
+  nodes.push_back(determinant("DetRuntime", "VMat"));
+  nodes.push_back(determinant("DetInverse", "Inverse"));
+  nodes.push_back(determinant("DetProduct", "Product"));
+  nodes.push_back(determinant("DetStaticConstant", "StaticConstant"));
+  nodes.push_back(determinant("DetStaticCreate", "StaticCreate"));
+  materialx::Node literal{"DetLiteral", "ND_determinant_matrix44"};
+  literal.matrix44_inputs["in"] = affine;
+  literal.outputs["out"] = materialx::Type::Float;
+  nodes.push_back(literal);
+
+  const materialx::Graph source{nodes};
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+
+  const auto lowered_math = [&](const char *name) {
+    MathNode *node = dynamic_cast<MathNode *>(materialx_divide_named_node(graph, name));
+    EXPECT_NE(node, nullptr) << name;
+    return node;
+  };
+  const auto expect_value = [&](const char *name, const double expected) {
+    ShaderNode *node = materialx_divide_named_node(graph, name);
+    ASSERT_NE(node, nullptr) << name;
+    const float actual = materialx_round_test_scalar(node->output("Value"));
+    EXPECT_NEAR(actual, expected, 1.0e-4 * (1.0 + std::fabs(expected))) << name;
+  };
+  /* Runtime sources are driven per element (Value1 linked), not folded. */
+  for (const char *name : {"DetRuntime", "DetInverse", "DetProduct"}) {
+    MathNode *node = lowered_math(name);
+    ASSERT_NE(node, nullptr);
+    EXPECT_NE(node->input("Value1")->link, nullptr) << name;
+    EXPECT_EQ(node->get_math_type(), NODE_MATH_ADD) << name;
+    EXPECT_EQ(node->get_value2(), 0.0f) << name;
+  }
+  expect_value("DetRuntime", det_a);
+  expect_value("DetInverse", 1.0 / det_a);
+  expect_value("DetProduct", det_a * det_b);
+  /* Static connected sources fold to the literal path's constant. */
+  const double det_affine = reference_det(mx44_as_double(affine));
+  ShaderNode *literal_node = materialx_divide_named_node(graph, "DetLiteral");
+  ASSERT_NE(literal_node, nullptr);
+  const float literal_value = materialx_round_test_scalar(literal_node->output("Value"));
+  EXPECT_NEAR(literal_value, det_affine, 1.0e-4 * (1.0 + std::fabs(det_affine)));
+  for (const char *name : {"DetStaticConstant", "DetStaticCreate"}) {
+    MathNode *node = lowered_math(name);
+    ASSERT_NE(node, nullptr);
+    EXPECT_EQ(node->input("Value1")->link, nullptr) << name;
+    EXPECT_FLOAT_EQ(node->get_value1(), literal_value) << name;
+    expect_value(name, det_affine);
+  }
+
+  /* Fail closed: a link plus a literal, a malformed runtime row, a Matrix33 link. */
+  materialx::Node both = determinant("Both", "VMat");
+  both.matrix44_inputs["in"] = affine;
+  EXPECT_FALSE(materialx::validate({{nodes[0], nodes[1], nodes[2], nodes[3], create, both}}));
+  materialx::Node bad_create = create;
+  bad_create.vector4_inputs["in1"] = make_float4(1.0f, 0.0f, 0.0f, 0.0f);
+  EXPECT_FALSE(materialx::validate(
+      {{nodes[0], nodes[1], nodes[2], nodes[3], bad_create, determinant("Det", "VMat")}}));
+  materialx::Node matrix33{"M33", "ND_constant_matrix33"};
+  matrix33.matrix33_inputs["value"] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  matrix33.outputs["out"] = materialx::Type::Matrix33;
+  materialx::Node mistyped{"Mistyped", "ND_determinant_matrix44"};
+  mistyped.links["in"] = {"M33", "out", materialx::Type::Matrix33};
+  mistyped.outputs["out"] = materialx::Type::Float;
+  EXPECT_FALSE(materialx::validate({{matrix33, mistyped}}));
 }
 
 /* t2v2-20261114 regression (certified on f376839a): ND_add/subtract/
@@ -26158,16 +26317,18 @@ TEST(materialx_graph, matrix44_arithmetic_runtime_operands_lower_elementwise)
       expect_mx44_vector4_near(
           mx44_lowered_vector4(graph, "ThroughInverse"), v, "v*op*inverse(op)");
 
-      /* A carrier (static-only) consumer of the runtime result still fails closed. */
-      materialx::Node determinant{"Det", "ND_determinant_matrix44"};
-      determinant.links["in"] = {"Arith", "out", materialx::Type::Matrix44};
-      determinant.outputs["out"] = materialx::Type::Float;
+      /* A carrier (static-only) consumer of the runtime result still fails
+       * closed (ND_determinant_matrix44 is runtime since batch 40). */
+      materialx::Node carrier{"Carrier", "ND_transformmatrix_vector3M4"};
+      carrier.vector3_inputs["in"] = make_float3(0.5f, -1.0f, 2.0f);
+      carrier.links["mat"] = {"Arith", "out", materialx::Type::Matrix44};
+      carrier.outputs["out"] = materialx::Type::Vector3;
       EXPECT_FALSE(materialx::validate({{constant_row("RowA", row_a),
                                          constant_row("RowB", row_b),
                                          create("MatA", "in4", "RowA", a),
                                          create("MatB", "in2", "RowB", b),
                                          arith,
-                                         determinant}}));
+                                         carrier}}));
     }
   }
 
