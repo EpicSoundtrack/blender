@@ -11025,28 +11025,50 @@ bool validate(const Graph &source,
     if (node.nodedef == tiledcircles_color3_id || node.nodedef == tiledcloverleafs_color3_id ||
         node.nodedef == tiledhexagons_color3_id)
     {
+      /* Batch 38: circles/hexagons also take connected uvtiling, uvoffset, size
+       * and staggered, and circles a literal true staggered. */
+      const bool connected_controls = node.nodedef == tiledcircles_color3_id ||
+                                      node.nodedef == tiledhexagons_color3_id;
       const auto tiling = node.vector2_inputs.find("uvtiling");
       const auto offset = node.vector2_inputs.find("uvoffset");
+      const bool tiling_literal = tiling != node.vector2_inputs.end();
+      const bool offset_literal = offset != node.vector2_inputs.end();
+      const bool tiling_link = node.links.contains("uvtiling");
+      const bool offset_link = node.links.contains("uvoffset");
       const bool texcoord_literal = node.vector2_inputs.contains("texcoord");
       const bool texcoord_link = node.links.contains("texcoord");
       const auto size = node.inputs.find("size");
+      const bool size_literal = size != node.inputs.end();
+      const bool size_link = node.links.contains("size");
       const auto staggered = node.int_inputs.find("staggered");
+      const bool staggered_literal = staggered != node.int_inputs.end();
+      const bool staggered_link = node.links.contains("staggered");
       const auto output = node.outputs.find("out");
-      if (tiling == node.vector2_inputs.end() || offset == node.vector2_inputs.end() ||
-          !finite_value(tiling->second) || !finite_value(offset->second) ||
+      if (tiling_literal == tiling_link || offset_literal == offset_link ||
+          (tiling_literal && !finite_value(tiling->second)) ||
+          (offset_literal && !finite_value(offset->second)) ||
+          (tiling_link && (!connected_controls ||
+                           !validate_link(node.links.at("uvtiling"), Type::Vector2, *nodes_by_name))) ||
+          (offset_link && (!connected_controls ||
+                           !validate_link(node.links.at("uvoffset"), Type::Vector2, *nodes_by_name))) ||
           texcoord_literal == texcoord_link ||
           (texcoord_literal && !finite_value(node.vector2_inputs.at("texcoord"))) ||
           (texcoord_link && !validate_link(node.links.at("texcoord"), Type::Vector2, *nodes_by_name)) ||
-          size == node.inputs.end() || !std::isfinite(size->second) || size->second < 0.0f ||
-          staggered == node.int_inputs.end() ||
-          (staggered->second != 0 &&
-           !((node.nodedef == tiledhexagons_color3_id ||
-              node.nodedef == tiledcloverleafs_color3_id) &&
-             staggered->second == 1)) ||
+          size_literal == size_link ||
+          (size_literal && (!std::isfinite(size->second) || size->second < 0.0f)) ||
+          (size_link && (!connected_controls ||
+                         !validate_link(node.links.at("size"), Type::Float, *nodes_by_name))) ||
+          staggered_literal == staggered_link ||
+          (staggered_literal && staggered->second != 0 && staggered->second != 1) ||
+          (staggered_link && (!connected_controls ||
+                              !validate_link(node.links.at("staggered"), Type::Boolean, *nodes_by_name))) ||
           output == node.outputs.end() || output->second != Type::Color3 ||
-          node.vector2_inputs.size() != 2 + size_t(texcoord_literal) ||
-          node.links.size() != size_t(texcoord_link) || node.inputs.size() != 1 ||
-          node.int_inputs.size() != 1 || node.outputs.size() != 1 ||
+          node.vector2_inputs.size() != size_t(tiling_literal) + size_t(offset_literal) +
+                                            size_t(texcoord_literal) ||
+          node.links.size() != size_t(texcoord_link) + size_t(tiling_link) + size_t(offset_link) +
+                                   size_t(size_link) + size_t(staggered_link) ||
+          node.inputs.size() != size_t(size_literal) ||
+          node.int_inputs.size() != size_t(staggered_literal) || node.outputs.size() != 1 ||
           !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
           !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
           !node.matrix33_inputs.empty() || !node.matrix44_inputs.empty() ||
@@ -16057,6 +16079,75 @@ void connect_regular_tiled_cloverleaf_nodes(const string &prefix,
   graph->connect(lowered_nodes.at(prefix + ".circle4.mask")->output("Value"), max2->input("Value2"));
   graph->connect(max1->output("Value"), result->input("Value1"));
   graph->connect(max2->output("Value"), result->input("Value2"));
+}
+
+/* Batch 38: one tiled circle cell, 1 - (dot(p, p) > radius^2), the regular
+ * NG_tiledcircles shape (lineage: tiledcircles-staggered-v1 candidate). */
+void add_regular_tiled_circle_nodes(const string &prefix,
+                                    const float radius,
+                                    ShaderGraph *graph,
+                                    unordered_map<string, ShaderNode *> &lowered_nodes)
+{
+  VectorMathNode *square = graph->create_node<VectorMathNode>();
+  square->name = prefix + ".square";
+  square->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+  MathNode *condition = graph->create_node<MathNode>();
+  condition->name = prefix + ".condition";
+  condition->set_math_type(NODE_MATH_GREATER_THAN);
+  condition->set_value2(radius * radius);
+  MathNode *mask = graph->create_node<MathNode>();
+  mask->name = prefix;
+  mask->set_math_type(NODE_MATH_SUBTRACT);
+  mask->set_value1(1.0f);
+  lowered_nodes.emplace(square->name, square);
+  lowered_nodes.emplace(condition->name, condition);
+  lowered_nodes.emplace(mask->name, mask);
+}
+
+void connect_regular_tiled_circle_nodes(const string &prefix,
+                                        ShaderOutput *coordinate,
+                                        ShaderGraph *graph,
+                                        unordered_map<string, ShaderNode *> &lowered_nodes)
+{
+  ShaderNode *square = lowered_nodes.at(prefix + ".square");
+  ShaderNode *condition = lowered_nodes.at(prefix + ".condition");
+  ShaderNode *mask = lowered_nodes.at(prefix);
+  graph->connect(coordinate, square->input("Vector1"));
+  graph->connect(coordinate, square->input("Vector2"));
+  graph->connect(square->output("Value"), condition->input("Value1"));
+  graph->connect(condition->output("Value"), mask->input("Value2"));
+}
+
+/* Batch 38: a connected tiled-hexagon radius drives the clamp bounds
+ * (+/-0.57735 r) and the clamp-radius Y (lineage: tiledhexagons-full-controls-v1). */
+void add_tiled_hexagon_linked_radius_nodes(const string &prefix,
+                                           ShaderGraph *graph,
+                                           unordered_map<string, ShaderNode *> &lowered_nodes)
+{
+  for (const auto &[suffix, coefficient] :
+       {std::pair{"min", -0.57735f}, std::pair{"max", 0.57735f}})
+  {
+    MathNode *bound = graph->create_node<MathNode>();
+    bound->name = prefix + ".radius_" + suffix;
+    bound->set_math_type(NODE_MATH_MULTIPLY);
+    bound->set_value2(coefficient);
+    lowered_nodes.emplace(bound->name, bound);
+  }
+}
+
+void connect_tiled_hexagon_linked_radius_nodes(const string &prefix,
+                                               ShaderOutput *radius,
+                                               ShaderGraph *graph,
+                                               unordered_map<string, ShaderNode *> &lowered_nodes)
+{
+  ShaderNode *minimum = lowered_nodes.at(prefix + ".radius_min");
+  ShaderNode *maximum = lowered_nodes.at(prefix + ".radius_max");
+  ShaderNode *clamp = lowered_nodes.at(prefix + ".clamp");
+  graph->connect(radius, minimum->input("Value1"));
+  graph->connect(radius, maximum->input("Value1"));
+  graph->connect(minimum->output("Value"), clamp->input("Min"));
+  graph->connect(maximum->output("Value"), clamp->input("Max"));
+  graph->connect(radius, lowered_nodes.at(prefix + ".combine_clamp_rad")->input("Y"));
 }
 
 void add_regular_tiled_hexagon_nodes(const string &prefix,
@@ -22695,8 +22786,11 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       MathNode *radius_square = graph->create_node<MathNode>();
       radius_square->name = node.name + ".radius_square";
       radius_square->set_math_type(NODE_MATH_MULTIPLY);
-      radius_square->set_value1(node.inputs.at("size"));
-      radius_square->set_value2(node.inputs.at("size"));
+      const float size = node.inputs.contains("size") ? node.inputs.at("size") : 0.0f;
+      const bool staggered_net = node.links.contains("staggered") ||
+                                 node.int_inputs.at("staggered") != 0;
+      radius_square->set_value1(size);
+      radius_square->set_value2(size);
       MathNode *condition = graph->create_node<MathNode>();
       condition->name = node.name + ".condition";
       condition->set_math_type(NODE_MATH_GREATER_THAN);
@@ -22720,23 +22814,22 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       }
       if (node.nodedef == tiledcloverleafs_color3_id) {
         add_regular_tiled_cloverleaf_nodes(
-            node.name + ".cloverleaf_regular", node.inputs.at("size"), graph, lowered_nodes);
+            node.name + ".cloverleaf_regular", size, graph, lowered_nodes);
       }
       if (node.nodedef == tiledhexagons_color3_id) {
         add_regular_tiled_hexagon_nodes(
-            node.name + ".hexagon_regular", node.inputs.at("size"), graph, lowered_nodes);
+            node.name + ".hexagon_regular", size, graph, lowered_nodes);
       }
-      if ((node.nodedef == tiledhexagons_color3_id ||
-           node.nodedef == tiledcloverleafs_color3_id) &&
-          node.int_inputs.at("staggered") != 0)
-      {
+      if (staggered_net) {
         /* NG_tiledhexagons/NG_tiledcloverleafs_color3 staggered branch: rows of
          * period 1.73205 / 1 shifted by 0.5 above half a period, three
          * size/2 shapes at the cell corners, max-combined. Batch 16 adds the
          * cloverleaf constants (stagg_Y mod 1, > 0.5; mod_Y_1 mod 0.5). */
         const bool hexagons = node.nodedef == tiledhexagons_color3_id;
-        const float row_period = hexagons ? 1.73205f : 1.0f;
-        const float half_row = hexagons ? 0.866025f : 0.5f;
+        const bool circles = node.nodedef == tiledcircles_color3_id;
+        /* NG_tiledcircles_color3 staggers with the hexagon row constants. */
+        const float row_period = hexagons || circles ? 1.73205f : 1.0f;
+        const float half_row = hexagons || circles ? 0.866025f : 0.5f;
         {
           SeparateXYZNode *staggered_separate = graph->create_node<SeparateXYZNode>();
           staggered_separate->name = node.name + ".staggered.separate";
@@ -22787,13 +22880,19 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           for (const char *suffix : {"1", "2", "3"}) {
             if (hexagons) {
               add_regular_tiled_hexagon_nodes(node.name + ".hexagon_staggered" + suffix,
-                                              node.inputs.at("size") * 0.5f,
+                                              size * 0.5f,
                                               graph,
                                               lowered_nodes);
             }
+            else if (circles) {
+              add_regular_tiled_circle_nodes(node.name + ".circle_staggered" + suffix,
+                                             size * 0.5f,
+                                             graph,
+                                             lowered_nodes);
+            }
             else {
               add_regular_tiled_cloverleaf_nodes(node.name + ".cloverleaf_staggered" + suffix,
-                                                 node.inputs.at("size") * 0.5f,
+                                                 size * 0.5f,
                                                  graph,
                                                  lowered_nodes);
             }
@@ -22823,6 +22922,38 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
             lowered_nodes.emplace(created->name, created);
           }
         }
+      }
+      if (node.links.contains("size")) {
+        const bool hexagons = node.nodedef == tiledhexagons_color3_id;
+        if (hexagons) {
+          add_tiled_hexagon_linked_radius_nodes(node.name + ".hexagon_regular", graph,
+                                                lowered_nodes);
+        }
+        if (staggered_net) {
+          MathNode *half = graph->create_node<MathNode>();
+          half->name = node.name + ".staggered.radius_half";
+          half->set_math_type(NODE_MATH_MULTIPLY);
+          half->set_value2(0.5f);
+          lowered_nodes.emplace(half->name, half);
+          if (hexagons) {
+            for (const char *suffix : {"1", "2", "3"}) {
+              add_tiled_hexagon_linked_radius_nodes(node.name + ".hexagon_staggered" + suffix,
+                                                    graph, lowered_nodes);
+            }
+          }
+          else {
+            MathNode *half_square = graph->create_node<MathNode>();
+            half_square->name = node.name + ".staggered.radius_half_square";
+            half_square->set_math_type(NODE_MATH_MULTIPLY);
+            lowered_nodes.emplace(half_square->name, half_square);
+          }
+        }
+      }
+      if (node.links.contains("staggered")) {
+        MixFloatNode *select = graph->create_node<MixFloatNode>();
+        select->name = node.name + ".staggered.select";
+        select->set_use_clamp(true);
+        lowered_nodes.emplace(select->name, select);
       }
       lowered = color;
     }
@@ -29044,11 +29175,24 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         graph->connect(lowered_output(texcoord->second, nodes_by_name, lowered_nodes),
                        scale->input("Vector1"));
       }
+      if (const auto tiling = node.links.find("uvtiling"); tiling != node.links.end()) {
+        graph->connect(lowered_output(tiling->second, nodes_by_name, lowered_nodes),
+                       scale->input("Vector2"));
+      }
+      if (const auto bias = node.links.find("uvoffset"); bias != node.links.end()) {
+        graph->connect(lowered_output(bias->second, nodes_by_name, lowered_nodes),
+                       offset->input("Vector2"));
+      }
+      const auto staggered_link = node.links.find("staggered");
+      const bool staggered_net = staggered_link != node.links.end() ||
+                                 node.int_inputs.at("staggered") != 0;
+      const bool hexagons = node.nodedef == tiledhexagons_color3_id;
+      const bool circles = node.nodedef == tiledcircles_color3_id;
       graph->connect(scale->output("Vector"), offset->input("Vector1"));
       graph->connect(offset->output("Vector"), wrap->input("Vector1"));
       graph->connect(wrap->output("Vector"), double_coord->input("Vector1"));
       graph->connect(double_coord->output("Vector"), recenter->input("Vector1"));
-      if (node.nodedef == tiledcloverleafs_color3_id && node.int_inputs.at("staggered") == 0) {
+      if (node.nodedef == tiledcloverleafs_color3_id && !staggered_net) {
         connect_regular_tiled_cloverleaf_nodes(
             node.name + ".cloverleaf_regular", recenter->output("Vector"), graph, lowered_nodes);
         ShaderNode *shape = lowered_nodes.at(node.name + ".cloverleaf_regular");
@@ -29057,81 +29201,130 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         }
         continue;
       }
-      if (node.nodedef == tiledhexagons_color3_id || node.nodedef == tiledcloverleafs_color3_id) {
-        if (node.int_inputs.at("staggered") != 0) {
-          const bool hexagons = node.nodedef == tiledhexagons_color3_id;
-          const string shape_prefix = node.name +
-                                      (hexagons ? ".hexagon_staggered" : ".cloverleaf_staggered");
-          const auto connect_shape = [&](const string &prefix, ShaderOutput *texcoord) {
+      if (const auto size = node.links.find("size"); size != node.links.end()) {
+        ShaderOutput *radius = lowered_output(size->second, nodes_by_name, lowered_nodes);
+        if (circles) {
+          graph->connect(radius, radius_square->input("Value1"));
+          graph->connect(radius, radius_square->input("Value2"));
+        }
+        if (hexagons) {
+          connect_tiled_hexagon_linked_radius_nodes(node.name + ".hexagon_regular", radius, graph,
+                                                    lowered_nodes);
+        }
+        if (staggered_net) {
+          ShaderNode *half = lowered_nodes.at(node.name + ".staggered.radius_half");
+          graph->connect(radius, half->input("Value1"));
+          for (const char *suffix : {"1", "2", "3"}) {
             if (hexagons) {
-              connect_regular_tiled_hexagon_nodes(prefix, texcoord, graph, lowered_nodes);
+              connect_tiled_hexagon_linked_radius_nodes(node.name + ".hexagon_staggered" + suffix,
+                                                        half->output("Value"), graph,
+                                                        lowered_nodes);
             }
-            else {
-              connect_regular_tiled_cloverleaf_nodes(prefix, texcoord, graph, lowered_nodes);
+          }
+          if (circles) {
+            ShaderNode *half_square = lowered_nodes.at(node.name +
+                                                       ".staggered.radius_half_square");
+            graph->connect(half->output("Value"), half_square->input("Value1"));
+            graph->connect(half->output("Value"), half_square->input("Value2"));
+            for (const char *suffix : {"1", "2", "3"}) {
+              graph->connect(half_square->output("Value"),
+                             lowered_nodes.at(node.name + ".circle_staggered" + suffix +
+                                              ".condition")
+                                 ->input("Value2"));
             }
-          };
-          ShaderNode *staggered_separate = lowered_nodes.at(node.name + ".staggered.separate");
-          ShaderNode *staggered_row = lowered_nodes.at(node.name + ".staggered.row");
-          ShaderNode *staggered_gate = lowered_nodes.at(node.name + ".staggered.gate");
-          ShaderNode *delta_x = lowered_nodes.at(node.name + ".staggered.delta_x");
-          ShaderNode *shift_x = lowered_nodes.at(node.name + ".staggered.shift_x");
-          ShaderNode *mod_x = lowered_nodes.at(node.name + ".staggered.mod_x");
-          ShaderNode *mod_y = lowered_nodes.at(node.name + ".staggered.mod_y");
-          ShaderNode *coord_adj1 = lowered_nodes.at(node.name + ".staggered.coord_adj1");
-          ShaderNode *coord_adj2 = lowered_nodes.at(node.name + ".staggered.coord_adj2");
-          ShaderNode *coord_adj3 = lowered_nodes.at(node.name + ".staggered.coord_adj3");
-          ShaderNode *coord1 = lowered_nodes.at(node.name + ".staggered.coord1");
-          ShaderNode *coord2 = lowered_nodes.at(node.name + ".staggered.coord2");
-          ShaderNode *coord3 = lowered_nodes.at(node.name + ".staggered.coord3");
-          graph->connect(offset->output("Vector"), staggered_separate->input("Vector"));
-          graph->connect(staggered_separate->output("Y"), staggered_row->input("Value1"));
-          graph->connect(staggered_row->output("Value"), staggered_gate->input("Value1"));
-          graph->connect(staggered_gate->output("Value"), delta_x->input("Value1"));
-          graph->connect(staggered_separate->output("X"), shift_x->input("Value1"));
-          graph->connect(delta_x->output("Value"), shift_x->input("Value2"));
-          graph->connect(shift_x->output("Value"), mod_x->input("Value1"));
-          graph->connect(staggered_separate->output("Y"), mod_y->input("Value1"));
-          graph->connect(mod_x->output("Value"), coord_adj1->input("Value2"));
-          graph->connect(mod_x->output("Value"), coord_adj2->input("Value1"));
-          graph->connect(mod_y->output("Value"), coord_adj3->input("Value2"));
-          graph->connect(mod_x->output("Value"), coord1->input("X"));
-          graph->connect(mod_y->output("Value"), coord1->input("Y"));
-          graph->connect(coord_adj1->output("Value"), coord2->input("X"));
-          graph->connect(mod_y->output("Value"), coord2->input("Y"));
-          graph->connect(coord_adj2->output("Value"), coord3->input("X"));
-          graph->connect(coord_adj3->output("Value"), coord3->input("Y"));
-          connect_shape(shape_prefix + "1", coord1->output("Vector"));
-          connect_shape(shape_prefix + "2", coord2->output("Vector"));
-          connect_shape(shape_prefix + "3", coord3->output("Vector"));
-          ShaderNode *max1 = lowered_nodes.at(node.name + ".staggered.max1");
-          ShaderNode *maximum = lowered_nodes.at(node.name + ".staggered.max");
-          graph->connect(lowered_nodes.at(shape_prefix + "1")->output("Value"),
-                         max1->input("Value1"));
-          graph->connect(lowered_nodes.at(shape_prefix + "2")->output("Value"),
-                         max1->input("Value2"));
-          graph->connect(max1->output("Value"), maximum->input("Value1"));
-          graph->connect(lowered_nodes.at(shape_prefix + "3")->output("Value"),
-                         maximum->input("Value2"));
+          }
+        }
+      }
+      ShaderOutput *staggered_pattern = nullptr;
+      if (staggered_net) {
+        const string shape_prefix = node.name + (hexagons ? ".hexagon_staggered" :
+                                                 circles  ? ".circle_staggered" :
+                                                            ".cloverleaf_staggered");
+        const auto connect_shape = [&](const string &prefix, ShaderOutput *texcoord) {
+          if (hexagons) {
+            connect_regular_tiled_hexagon_nodes(prefix, texcoord, graph, lowered_nodes);
+          }
+          else if (circles) {
+            connect_regular_tiled_circle_nodes(prefix, texcoord, graph, lowered_nodes);
+          }
+          else {
+            connect_regular_tiled_cloverleaf_nodes(prefix, texcoord, graph, lowered_nodes);
+          }
+        };
+        ShaderNode *staggered_separate = lowered_nodes.at(node.name + ".staggered.separate");
+        ShaderNode *staggered_row = lowered_nodes.at(node.name + ".staggered.row");
+        ShaderNode *staggered_gate = lowered_nodes.at(node.name + ".staggered.gate");
+        ShaderNode *delta_x = lowered_nodes.at(node.name + ".staggered.delta_x");
+        ShaderNode *shift_x = lowered_nodes.at(node.name + ".staggered.shift_x");
+        ShaderNode *mod_x = lowered_nodes.at(node.name + ".staggered.mod_x");
+        ShaderNode *mod_y = lowered_nodes.at(node.name + ".staggered.mod_y");
+        ShaderNode *coord_adj1 = lowered_nodes.at(node.name + ".staggered.coord_adj1");
+        ShaderNode *coord_adj2 = lowered_nodes.at(node.name + ".staggered.coord_adj2");
+        ShaderNode *coord_adj3 = lowered_nodes.at(node.name + ".staggered.coord_adj3");
+        ShaderNode *coord1 = lowered_nodes.at(node.name + ".staggered.coord1");
+        ShaderNode *coord2 = lowered_nodes.at(node.name + ".staggered.coord2");
+        ShaderNode *coord3 = lowered_nodes.at(node.name + ".staggered.coord3");
+        graph->connect(offset->output("Vector"), staggered_separate->input("Vector"));
+        graph->connect(staggered_separate->output("Y"), staggered_row->input("Value1"));
+        graph->connect(staggered_row->output("Value"), staggered_gate->input("Value1"));
+        graph->connect(staggered_gate->output("Value"), delta_x->input("Value1"));
+        graph->connect(staggered_separate->output("X"), shift_x->input("Value1"));
+        graph->connect(delta_x->output("Value"), shift_x->input("Value2"));
+        graph->connect(shift_x->output("Value"), mod_x->input("Value1"));
+        graph->connect(staggered_separate->output("Y"), mod_y->input("Value1"));
+        graph->connect(mod_x->output("Value"), coord_adj1->input("Value2"));
+        graph->connect(mod_x->output("Value"), coord_adj2->input("Value1"));
+        graph->connect(mod_y->output("Value"), coord_adj3->input("Value2"));
+        graph->connect(mod_x->output("Value"), coord1->input("X"));
+        graph->connect(mod_y->output("Value"), coord1->input("Y"));
+        graph->connect(coord_adj1->output("Value"), coord2->input("X"));
+        graph->connect(mod_y->output("Value"), coord2->input("Y"));
+        graph->connect(coord_adj2->output("Value"), coord3->input("X"));
+        graph->connect(coord_adj3->output("Value"), coord3->input("Y"));
+        connect_shape(shape_prefix + "1", coord1->output("Vector"));
+        connect_shape(shape_prefix + "2", coord2->output("Vector"));
+        connect_shape(shape_prefix + "3", coord3->output("Vector"));
+        ShaderNode *max1 = lowered_nodes.at(node.name + ".staggered.max1");
+        ShaderNode *maximum = lowered_nodes.at(node.name + ".staggered.max");
+        graph->connect(lowered_nodes.at(shape_prefix + "1")->output("Value"),
+                       max1->input("Value1"));
+        graph->connect(lowered_nodes.at(shape_prefix + "2")->output("Value"),
+                       max1->input("Value2"));
+        graph->connect(max1->output("Value"), maximum->input("Value1"));
+        graph->connect(lowered_nodes.at(shape_prefix + "3")->output("Value"),
+                       maximum->input("Value2"));
+        staggered_pattern = maximum->output("Value");
+        if (staggered_link == node.links.end()) {
           for (const char *channel : {"Red", "Green", "Blue"}) {
-            graph->connect(maximum->output("Value"), color->input(channel));
+            graph->connect(staggered_pattern, color->input(channel));
           }
           continue;
         }
+      }
+      ShaderOutput *pattern = nullptr;
+      if (hexagons) {
         connect_regular_tiled_hexagon_nodes(
             node.name + ".hexagon_regular", recenter->output("Vector"), graph, lowered_nodes);
-        ShaderNode *shape = lowered_nodes.at(node.name + ".hexagon_regular");
-        for (const char *channel : {"Red", "Green", "Blue"}) {
-          graph->connect(shape->output("Value"), color->input(channel));
-        }
-        continue;
+        pattern = lowered_nodes.at(node.name + ".hexagon_regular")->output("Value");
       }
-      graph->connect(recenter->output("Vector"), dist_square->input("Vector1"));
-      graph->connect(recenter->output("Vector"), dist_square->input("Vector2"));
-      graph->connect(dist_square->output("Value"), condition->input("Value1"));
-      graph->connect(radius_square->output("Value"), condition->input("Value2"));
-      graph->connect(condition->output("Value"), mask->input("Value2"));
+      else {
+        graph->connect(recenter->output("Vector"), dist_square->input("Vector1"));
+        graph->connect(recenter->output("Vector"), dist_square->input("Vector2"));
+        graph->connect(dist_square->output("Value"), condition->input("Value1"));
+        graph->connect(radius_square->output("Value"), condition->input("Value2"));
+        graph->connect(condition->output("Value"), mask->input("Value2"));
+        pattern = mask->output("Value");
+      }
+      if (staggered_link != node.links.end()) {
+        ShaderNode *select = lowered_nodes.at(node.name + ".staggered.select");
+        graph->connect(pattern, select->input("A"));
+        graph->connect(staggered_pattern, select->input("B"));
+        graph->connect(lowered_output(staggered_link->second, nodes_by_name, lowered_nodes),
+                       select->input("Factor"));
+        pattern = select->output("Result");
+      }
       for (const char *channel : {"Red", "Green", "Blue"}) {
-        graph->connect(mask->output("Value"), color->input(channel));
+        graph->connect(pattern, color->input(channel));
       }
       continue;
     }

@@ -1599,7 +1599,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_tiledcloverleafs_color3_literal
 
 /* Batch 16 (b15x packet n L3/L4/K1): staggered tiledcloverleafs reads, and a
  * 'size' connected to a static literal ND_constant_float is that literal. A
- * size connected to anything else, and staggered tiledcircles, stay refused. */
+ * cloverleaf size connected to anything else stays refused; staggered
+ * tiledcircles reads since batch 38. */
 TEST(materialx_usdshade_reader, tiledcloverleafs_staggered_and_constant_connected_size)
 {
   enum Mode { STAGGERED, CONSTANT_SIZE, COMPUTED_SIZE, CIRCLES_STAGGERED };
@@ -1648,8 +1649,16 @@ TEST(materialx_usdshade_reader, tiledcloverleafs_staggered_and_constant_connecte
 
     materialx::Graph graph;
     string error;
-    if (mode == COMPUTED_SIZE || mode == CIRCLES_STAGGERED) {
+    if (mode == COMPUTED_SIZE) {
       EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
+      continue;
+    }
+    if (mode == CIRCLES_STAGGERED) {
+      /* Batch 38: staggered tiledcircles now lowers
+       * (tiled_circles_hexagons_connected_controls checks its values). */
+      ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+      ShaderGraph lowered;
+      EXPECT_TRUE(materialx::lower(graph, &lowered));
       continue;
     }
     ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
@@ -34676,6 +34685,9 @@ float3 batch38_eval(ShaderOutput *output)
       case NODE_MATH_GREATER_THAN: r = a > b ? 1.0f : 0.0f; break;
       case NODE_MATH_LESS_THAN: r = a < b ? 1.0f : 0.0f; break;
       case NODE_MATH_MODULO: r = b == 0.0f ? 0.0f : fmodf(a, b); break;
+      case NODE_MATH_FLOORED_MODULO: r = b == 0.0f ? 0.0f : a - floorf(a / b) * b; break;
+      case NODE_MATH_MATERIALX_DIVIDE: r = b == 0.0f ? std::nanf("") : a / b; break;
+      case NODE_MATH_MATERIALX_MULTIPLY: r = a * b; break;
       default: ADD_FAILURE() << "unsupported math type " << int(math->get_math_type());
     }
     return make_float3(r);
@@ -34730,6 +34742,10 @@ float3 batch38_eval(ShaderOutput *output)
       case NODE_VECTOR_MATH_ABSOLUTE: return fabs(a);
       case NODE_VECTOR_MATH_DOT_PRODUCT: return make_float3(dot(a, b));
       case NODE_VECTOR_MATH_SCALE: return a * batch38_scalar(node, "Scale");
+      case NODE_VECTOR_MATH_MODULO:
+        return make_float3(b.x == 0.0f ? 0.0f : fmodf(a.x, b.x),
+                           b.y == 0.0f ? 0.0f : fmodf(a.y, b.y),
+                           b.z == 0.0f ? 0.0f : fmodf(a.z, b.z));
       default: ADD_FAILURE() << "unsupported vector math " << int(vmath->get_math_type());
     }
     return zero_float3();
@@ -35278,6 +35294,103 @@ TEST(materialx_usdshade_reader, hexagon_linked_center_radius_match_literal)
   /* The sample set covers both inside and outside the hexagon. */
   EXPECT_GT(inside, 0);
   EXPECT_LT(inside, 18);
+}
+
+/* MaterialX NG_tiledcircles_color3 reference (stdlib_ng.mtlx), for positive
+ * biased coordinates (floored and truncated modulo agree there). */
+static float batch38_tiledcircles_reference(const float2 uv,
+                                            const float2 tiling,
+                                            const float2 offset,
+                                            const float size,
+                                            const bool staggered)
+{
+  const auto mod = [](const float a, const float b) { return a - b * floorf(a / b); };
+  const auto circle = [](const float x, const float y, const float radius) {
+    return x * x + y * y <= radius * radius ? 1.0f : 0.0f;
+  };
+  const float bx = uv.x * tiling.x - offset.x, by = uv.y * tiling.y - offset.y;
+  if (!staggered) {
+    return circle(mod(bx, 1.0f) * 2.0f - 1.0f, mod(by, 1.0f) * 2.0f - 1.0f, size);
+  }
+  const float delta_x = mod(by, 1.73205f) > 0.866025f ? 0.5f : 0.0f;
+  const float mx = mod(bx + delta_x, 1.0f), my = mod(by, 0.866025f);
+  const float half = size / 2.0f;
+  return fmaxf(fmaxf(circle(mx, my, half), circle(1.0f - mx, my, half)),
+               circle(mx - 0.5f, 0.866025f - my, half));
+}
+
+/* Batch 38 port (certified private hosts 12e36073 tiledcircles-full-controls-v1 and
+ * 7db5f9a0 tiledhexagons-full-controls-v1): connected uvtiling, uvoffset, size and
+ * staggered, and literal staggered tiledcircles. Interpreted lowered values equal
+ * the literal-control lowering (both shapes) and the MaterialX reference (circles). */
+TEST(materialx_usdshade_reader, tiled_circles_hexagons_connected_controls)
+{
+  const float2 tiling = make_float2(2.0f, 3.0f), offset = make_float2(0.125f, 0.25f);
+  const float size = 0.4f;
+  int lit[2] = {0, 0};
+  for (const char *id : {"ND_tiledcircles_color3", "ND_tiledhexagons_color3"}) {
+    const bool circles = string(id) == "ND_tiledcircles_color3";
+    for (const bool staggered : {false, true}) {
+      for (int sample = 0; sample < 24; sample++) {
+        const float2 uv = make_float2(0.1f + 0.037f * sample, 0.2f + 0.029f * float((sample * 7) % 24));
+        float3 results[2];
+        for (const bool linked : {false, true}) {
+          SCOPED_TRACE(string(id) + (staggered ? " staggered " : " regular ") +
+                       std::to_string(sample) + (linked ? " linked" : " literal"));
+          Batch38EmissionProbe probe;
+          const pxr::SdfValueTypeName vector2 = pxr::SdfValueTypeNames->Float2;
+          const pxr::SdfValueTypeName scalar = pxr::SdfValueTypeNames->Float;
+          pxr::UsdShadeShader tiled = probe.shader("Tiled", id, pxr::SdfValueTypeNames->Color3f);
+          tiled.CreateInput(pxr::TfToken("texcoord"), vector2).Set(pxr::GfVec2f(uv.x, uv.y));
+          const auto vector_control = [&](const char *name, const float2 value) {
+            pxr::UsdShadeInput input = tiled.CreateInput(pxr::TfToken(name), vector2);
+            if (!linked) {
+              input.Set(pxr::GfVec2f(value.x, value.y));
+              return;
+            }
+            pxr::UsdShadeShader k = probe.shader((string("K_") + name).c_str(),
+                                                 "ND_constant_vector2", vector2);
+            k.CreateInput(pxr::TfToken("value"), vector2).Set(pxr::GfVec2f(value.x, value.y));
+            input.ConnectToSource(k.GetOutput(pxr::TfToken("out")));
+          };
+          vector_control("uvtiling", tiling);
+          vector_control("uvoffset", offset);
+          pxr::UsdShadeInput size_input = tiled.CreateInput(pxr::TfToken("size"), scalar);
+          pxr::UsdShadeInput staggered_input = tiled.CreateInput(pxr::TfToken("staggered"),
+                                                                 pxr::SdfValueTypeNames->Bool);
+          if (linked) {
+            /* A non-constant size producer (multiply) exercises the runtime size route. */
+            pxr::UsdShadeShader k = probe.shader("K_size", "ND_multiply_float", scalar);
+            k.CreateInput(pxr::TfToken("in1"), scalar).Set(size * 2.0f);
+            k.CreateInput(pxr::TfToken("in2"), scalar).Set(0.5f);
+            size_input.ConnectToSource(k.GetOutput(pxr::TfToken("out")));
+            staggered_input.ConnectToSource(probe.constant_boolean("K_staggered", staggered)
+                                                .GetOutput(pxr::TfToken("out")));
+          }
+          else {
+            size_input.Set(size);
+            staggered_input.Set(staggered);
+          }
+          probe.observe_color3(tiled);
+          string error;
+          ASSERT_TRUE(probe.interpret(&results[linked], &error)) << error;
+        }
+        EXPECT_EQ(results[1].x, results[0].x);
+        EXPECT_EQ(results[1].y, results[1].x);
+        if (circles) {
+          EXPECT_EQ(results[1].x,
+                    batch38_tiledcircles_reference(uv, tiling, offset, size, staggered))
+              << uv.x << "," << uv.y;
+        }
+        lit[circles] += results[1].x > 0.5f;
+      }
+    }
+  }
+  /* Both shapes produce inside and outside samples. */
+  EXPECT_GT(lit[0], 0);
+  EXPECT_LT(lit[0], 48);
+  EXPECT_GT(lit[1], 0);
+  EXPECT_LT(lit[1], 48);
 }
 
 /* Batch 38 port (certified private host def35d38): a geomcolor 'index' linked

@@ -15478,12 +15478,54 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     Node tiled;
     tiled.name = unique_node_name(*graph, source_shader.GetPrim().GetName().GetString(), shader_path);
     tiled.nodedef = nodedef;
+    /* Batch 38: tiledcircles/tiledhexagons take connected uvtiling, uvoffset,
+     * size and staggered (lineage: certified private hosts 12e36073
+     * tiledcircles-full-controls-v1 and 7db5f9a0 tiledhexagons-full-controls-v1). */
+    const bool connected_controls = nodedef == tiledcircles_color3_id ||
+                                    nodedef == tiledhexagons_color3_id;
+    const auto single_link = [](const pxr::UsdShadeInput &control) {
+      return composed_connection_count(control.GetAttr()) == 1 && control.HasConnectedSource() &&
+             control.GetAttr().GetNumTimeSamples() == 0;
+    };
     for (const char *input_name : {"uvtiling", "uvoffset"}) {
-      if (!read_literal_vector2_input(source_shader, nodedef, input_name, &tiled, error_message)) {
+      const pxr::UsdShadeInput control = source_shader.GetInput(pxr::TfToken(input_name));
+      if (connected_controls && control && composed_connection_count(control.GetAttr()) != 0) {
+        std::unordered_set<string> active_controls;
+        if (!single_link(control) ||
+            !read_vector2_operand(source_shader, nodedef, input_name, graph, &tiled,
+                                  &active_controls, depth + 1, error_message))
+        {
+          set_error(error_message, nodedef + " requires a single connected vector2 '" +
+                                       input_name + "'");
+          return finish(false);
+        }
+      }
+      else if (!read_literal_vector2_input(source_shader, nodedef, input_name, &tiled, error_message)) {
         return finish(false);
       }
     }
     const pxr::UsdShadeInput size = source_shader.GetInput(pxr::TfToken("size"));
+    bool size_linked = false;
+    if (connected_controls && size && size.GetTypeName() == pxr::SdfValueTypeNames->Float &&
+        single_link(size))
+    {
+      pxr::UsdShadeShader producer;
+      pxr::TfToken producer_id;
+      size_linked = !(connected_shader(size, nullptr, &producer, nullptr) &&
+                      producer.GetShaderId(&producer_id) &&
+                      producer_id.GetString() == constant_float_id);
+    }
+    if (size_linked) {
+      std::unordered_set<string> active_float_controls;
+      std::unordered_map<string, string> emitted_float_controls;
+      Link link;
+      if (!read_float_output(size, graph, &link, &active_float_controls, &emitted_float_controls,
+                             depth + 1, error_message))
+      {
+        return finish(false);
+      }
+      tiled.links["size"] = link;
+    }
     /* Batch 16 (b15x packet n K1): 'size' connected to a static literal
      * ND_constant_float is that literal (its output is exactly its value). */
     pxr::UsdAttribute size_attribute = size ? size.GetAttr() : pxr::UsdAttribute();
@@ -15505,24 +15547,40 @@ bool read_color_output(const pxr::UsdShadeInput &input,
     else if (size && composed_connection_count(size.GetAttr()) != 0) {
       size_attribute = pxr::UsdAttribute();
     }
-    if (!size || size.GetTypeName() != pxr::SdfValueTypeNames->Float || !size_attribute ||
-        size_attribute.GetNumTimeSamples() != 0 || !size_attribute.Get(&tiled.inputs["size"]) ||
-        !std::isfinite(tiled.inputs["size"]) || tiled.inputs["size"] < 0.0f)
+    if (!size_linked &&
+        (!size || size.GetTypeName() != pxr::SdfValueTypeNames->Float || !size_attribute ||
+         size_attribute.GetNumTimeSamples() != 0 || !size_attribute.Get(&tiled.inputs["size"]) ||
+         !std::isfinite(tiled.inputs["size"]) || tiled.inputs["size"] < 0.0f))
     {
       set_error(error_message, nodedef + " requires literal finite non-negative float input 'size'");
       return finish(false);
     }
     const pxr::UsdShadeInput staggered = source_shader.GetInput(pxr::TfToken("staggered"));
     bool staggered_value = false;
-    if (!staggered || staggered.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
-        staggered.HasConnectedSource() || !staggered.Get(&staggered_value) ||
-        (staggered_value && nodedef == tiledcircles_color3_id))
+    if (connected_controls && staggered && staggered.GetTypeName() == pxr::SdfValueTypeNames->Bool &&
+        composed_connection_count(staggered.GetAttr()) != 0)
     {
-      set_error(error_message,
-                nodedef + " native lowering currently requires literal false 'staggered'");
+      Link link;
+      std::unordered_set<string> active_boolean_controls;
+      std::unordered_map<string, string> emitted_boolean_controls;
+      if (!single_link(staggered) ||
+          !read_boolean_output(staggered, graph, &link, &active_boolean_controls,
+                               &emitted_boolean_controls, depth + 1, error_message))
+      {
+        set_error(error_message, nodedef + " requires a single connected boolean 'staggered'");
+        return finish(false);
+      }
+      tiled.links["staggered"] = link;
+    }
+    else if (!staggered || staggered.GetTypeName() != pxr::SdfValueTypeNames->Bool ||
+             staggered.HasConnectedSource() || !staggered.Get(&staggered_value))
+    {
+      set_error(error_message, nodedef + " requires literal or connected boolean 'staggered'");
       return finish(false);
     }
-    tiled.int_inputs["staggered"] = staggered_value ? 1 : 0;
+    else {
+      tiled.int_inputs["staggered"] = staggered_value ? 1 : 0;
+    }
     std::unordered_set<string> active_vector2_shaders;
     const pxr::UsdShadeInput texcoord_input = source_shader.GetInput(pxr::TfToken("texcoord"));
     if (texcoord_input && texcoord_input.GetTypeName() == pxr::SdfValueTypeNames->Float2 &&
