@@ -23251,9 +23251,10 @@ TEST(materialx_usdshade_reader, reads_split_defaults_and_linked_inputs)
   ASSERT_NE(left_alpha, nullptr);
   ASSERT_NE(principled, nullptr);
   EXPECT_NE(math_nodes["Split.factor"]->input("Value2")->link, nullptr);
-  EXPECT_EQ(split_alpha->input("A")->link, left_alpha->output("Value"));
-  EXPECT_EQ(split_alpha->input("B")->link, nullptr);
-  EXPECT_FLOAT_EQ(split_alpha->get_b(), 0.0f);
+  /* factor = (x < center) selects A, so valuel is B. */
+  EXPECT_EQ(split_alpha->input("B")->link, left_alpha->output("Value"));
+  EXPECT_EQ(split_alpha->input("A")->link, nullptr);
+  EXPECT_FLOAT_EQ(split_alpha->get_a(), 0.0f);
   EXPECT_EQ(split_alpha->input("Factor")->link, math_nodes["Split.factor"]->output("Value"));
   EXPECT_TRUE(split_alpha->get_use_clamp());
   ASSERT_NE(split_alpha->output("Result"), nullptr);
@@ -40653,8 +40654,8 @@ TEST(materialx_usdshade_reader, split_vector2_linked_endpoints_reach_lowered_mix
   ASSERT_NE(mix, nullptr);
   ASSERT_NE(mix->input("A")->link, nullptr);
   ASSERT_NE(mix->input("B")->link, nullptr);
-  EXPECT_EQ(mix->input("A")->link->parent->name, "Left");
-  EXPECT_EQ(mix->input("B")->link->parent->name, "Right");
+  EXPECT_EQ(mix->input("A")->link->parent->name, "Right");
+  EXPECT_EQ(mix->input("B")->link->parent->name, "Left");
 
   /* An authored dangling path must not be ignored in favor of an endpoint
    * literal. Keep the existing graph intact when the composed path is invalid. */
@@ -40717,8 +40718,8 @@ TEST(materialx_usdshade_reader, split_vector3_linked_endpoints_accept_vector_rol
       ASSERT_NE(mix, nullptr);
       ASSERT_NE(mix->input("A")->link, nullptr);
       ASSERT_NE(mix->input("B")->link, nullptr);
-      EXPECT_EQ(mix->input("A")->link->parent->name, "Left");
-      EXPECT_EQ(mix->input("B")->link->parent->name, "Right");
+      EXPECT_EQ(mix->input("A")->link->parent->name, "Right");
+      EXPECT_EQ(mix->input("B")->link->parent->name, "Left");
     }
   }
 }
@@ -41225,8 +41226,8 @@ TEST(materialx_usdshade_reader, split_float_recursive_links_defaults_and_native_
       if (mode == 1 || mode == 2) {
         ASSERT_NE(mix->input("A")->link, nullptr);
         ASSERT_NE(mix->input("B")->link, nullptr);
-        EXPECT_EQ(mix->input("A")->link->parent, nodes.at("First"));
-        EXPECT_EQ(mix->input("B")->link->parent, nodes.at("Second"));
+        EXPECT_EQ(mix->input("A")->link->parent, nodes.at("Second"));
+        EXPECT_EQ(mix->input("B")->link->parent, nodes.at("First"));
         ASSERT_NE(nodes.at("Split.factor")->input("Value2")->link, nullptr);
         EXPECT_EQ(nodes.at("Split.factor")->input("Value2")->link->parent, nodes.at("Center"));
       }
@@ -41347,7 +41348,7 @@ TEST(materialx_usdshade_reader, split_vector_centers_reach_native_selector_trans
         EXPECT_EQ(mix->input("Factor")->link->parent, nodes.at("Split.factor"));
         ASSERT_EQ(nodes.at("Split.factor")->type, MathNode::get_node_type());
         auto *factor = static_cast<MathNode *>(nodes.at("Split.factor"));
-        EXPECT_EQ(factor->get_math_type(), NODE_MATH_GREATER_THAN);
+        EXPECT_EQ(factor->get_math_type(), NODE_MATH_LESS_THAN);
         ASSERT_NE(factor->input("Value1")->link, nullptr);
         EXPECT_EQ(factor->input("Value1")->link, nodes.at("Split.coordinate")->output(tb ? "Y" : "X"));
         if (mode == 1 || mode == 2) {

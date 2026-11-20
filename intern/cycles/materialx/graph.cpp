@@ -18047,8 +18047,8 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       const bool vector2 = is_vector2_split(node.nodedef);
       const bool vector4 = is_vector4_split(node.nodedef);
       const bool top_to_bottom = split_is_top_to_bottom(node.nodedef);
-      const char *first_name = top_to_bottom ? "valuet" : "valuel";
-      const char *second_name = top_to_bottom ? "valueb" : "valuer";
+      const char *first_name = top_to_bottom ? "valueb" : "valuer";
+      const char *second_name = top_to_bottom ? "valuet" : "valuel";
       SeparateXYZNode *coordinate = graph->create_node<SeparateXYZNode>();
       coordinate->name = node.name + ".coordinate";
       if (const auto uv = node.vector2_inputs.find("texcoord"); uv != node.vector2_inputs.end()) {
@@ -18056,8 +18056,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       }
       MathNode *factor = graph->create_node<MathNode>();
       factor->name = node.name + ".factor";
-      /* MaterialX 1.39.4 GLSL/OSL mixes first -> second on both axes. */
-      factor->set_math_type(NODE_MATH_GREATER_THAN);
+      /* Unfiltered MaterialX step: second (valueb/valuer) at axis >= center, no
+       * coordinate clamp; factor = (axis < center) with reversed endpoints. */
+      factor->set_math_type(NODE_MATH_LESS_THAN);
       factor->set_value2(node.inputs.contains("center") ? node.inputs.at("center") : 0.5f);
       MixVectorNode *mix = graph->create_node<MixVectorNode>();
       const auto vector_value = [&](const char *name) {
@@ -23888,8 +23889,8 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     else if (is_split(node.nodedef)) {
       const bool top_to_bottom = split_is_top_to_bottom(node.nodedef);
       const bool color4 = is_color4_split(node.nodedef);
-      const char *first_name = top_to_bottom ? "valuet" : "valuel";
-      const char *second_name = top_to_bottom ? "valueb" : "valuer";
+      const char *first_name = top_to_bottom ? "valueb" : "valuer";
+      const char *second_name = top_to_bottom ? "valuet" : "valuel";
       SeparateXYZNode *coordinate = graph->create_node<SeparateXYZNode>();
       coordinate->name = node.name + ".coordinate";
       if (const auto uv = node.vector2_inputs.find("texcoord"); uv != node.vector2_inputs.end()) {
@@ -23897,8 +23898,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       }
       MathNode *factor = graph->create_node<MathNode>();
       factor->name = node.name + ".factor";
-      /* MaterialX 1.39.4 GLSL/OSL mixes first -> second on both axes. */
-      factor->set_math_type(NODE_MATH_GREATER_THAN);
+      /* Unfiltered MaterialX step: second (valueb/valuer) at axis >= center, no
+       * coordinate clamp; factor = (axis < center) with reversed endpoints. */
+      factor->set_math_type(NODE_MATH_LESS_THAN);
       factor->set_value2(node.inputs.contains("center") ? node.inputs.at("center") : 0.5f);
       lowered_nodes.emplace(coordinate->name, coordinate);
       lowered_nodes.emplace(factor->name, factor);
@@ -31153,8 +31155,8 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
 
     if (is_vector_split(node.nodedef)) {
       const bool top_to_bottom = split_is_top_to_bottom(node.nodedef);
-      const char *first_name = top_to_bottom ? "valuet" : "valuel";
-      const char *second_name = top_to_bottom ? "valueb" : "valuer";
+      const char *first_name = top_to_bottom ? "valueb" : "valuer";
+      const char *second_name = top_to_bottom ? "valuet" : "valuel";
       ShaderNode *coordinate = lowered_nodes.at(node.name + ".coordinate");
       ShaderNode *factor = lowered_nodes.at(node.name + ".factor");
       ShaderNode *mix = lowered_nodes.at(node.name);
@@ -31205,8 +31207,8 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         graph->connect(lowered_output(center->second, nodes_by_name, lowered_nodes),
                        factor->input("Value2"));
       }
-      const char *first_name = top_to_bottom ? "valuet" : "valuel";
-      const char *second_name = top_to_bottom ? "valueb" : "valuer";
+      const char *first_name = top_to_bottom ? "valueb" : "valuer";
+      const char *second_name = top_to_bottom ? "valuet" : "valuel";
       if (is_scalar_split(node.nodedef)) {
         ShaderNode *mix = lowered_nodes.at(node.name);
         if (const auto first = node.links.find(first_name); first != node.links.end()) {

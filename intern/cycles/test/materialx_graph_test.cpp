@@ -17397,14 +17397,16 @@ TEST(materialx_graph, lowers_split_defaults_and_linked_inputs_with_materialx_sig
   ASSERT_NE(alpha, nullptr);
   EXPECT_TRUE(alpha->get_use_clamp());
   EXPECT_EQ(factor->input("Value2")->link, nodes["Center"]->output("Value"));
-  EXPECT_EQ(mix->input("Color1")->link, nodes["Left"]->output("Color"));
-  EXPECT_FLOAT_EQ(mix->get_color2().x, 0.0f);
-  EXPECT_FLOAT_EQ(mix->get_color2().y, 0.0f);
-  EXPECT_FLOAT_EQ(mix->get_color2().z, 0.0f);
-  EXPECT_EQ(alpha->input("A")->link, nodes["Left.Alpha"]->output("Value"));
+  EXPECT_EQ(factor->get_math_type(), NODE_MATH_LESS_THAN);
+  /* factor = (x < center) selects the first mix operand, so valuel is Color2/B. */
+  EXPECT_EQ(mix->input("Color2")->link, nodes["Left"]->output("Color"));
+  EXPECT_FLOAT_EQ(mix->get_color1().x, 0.0f);
+  EXPECT_FLOAT_EQ(mix->get_color1().y, 0.0f);
+  EXPECT_FLOAT_EQ(mix->get_color1().z, 0.0f);
+  EXPECT_EQ(alpha->input("B")->link, nodes["Left.Alpha"]->output("Value"));
   EXPECT_EQ(alpha->input("Factor")->link, factor->output("Value"));
-  EXPECT_EQ(alpha->input("B")->link, nullptr);
-  EXPECT_FLOAT_EQ(alpha->get_b(), 0.0f);
+  EXPECT_EQ(alpha->input("A")->link, nullptr);
+  EXPECT_FLOAT_EQ(alpha->get_a(), 0.0f);
   ASSERT_NE(alpha->output("Result"), nullptr);
 }
 
@@ -19346,10 +19348,11 @@ TEST(materialx_graph, lowers_vector_ramps_and_splits_to_native_vector_mix)
     EXPECT_EQ(factor->input(test.split ? "Value1" : "Value")->link,
               axis->output(test.top_to_bottom ? "Y" : "X"))
         << test.id;
-    EXPECT_EQ(mix->get_a(), make_float3(0.1f, 0.2f, test.type == materialx::Type::Vector2 ? 0.0f : 0.3f))
-        << test.id;
-    EXPECT_EQ(mix->get_b(), make_float3(0.7f, 0.8f, test.type == materialx::Type::Vector2 ? 0.0f : 0.9f))
-        << test.id;
+    /* Splits reverse the endpoints: factor = (axis < center) selects A. */
+    const float3 first = make_float3(0.1f, 0.2f, test.type == materialx::Type::Vector2 ? 0.0f : 0.3f);
+    const float3 second = make_float3(0.7f, 0.8f, test.type == materialx::Type::Vector2 ? 0.0f : 0.9f);
+    EXPECT_EQ(mix->get_a(), test.split ? second : first) << test.id;
+    EXPECT_EQ(mix->get_b(), test.split ? first : second) << test.id;
   }
 }
 
@@ -19516,8 +19519,8 @@ TEST(materialx_graph, lowers_procedural2d_remainder_vector4_ramps_and_splits)
     if (test.split) {
       auto *w = dynamic_cast<MixFloatNode *>(nodes[string(test.name) + ".W"]);
       ASSERT_NE(w, nullptr) << test.id;
-      EXPECT_FLOAT_EQ(w->get_a(), 0.4f);
-      EXPECT_FLOAT_EQ(w->get_b(), 0.8f);
+      EXPECT_FLOAT_EQ(w->get_a(), 0.8f);
+      EXPECT_FLOAT_EQ(w->get_b(), 0.4f);
       EXPECT_TRUE(w->get_use_clamp());
       ASSERT_NE(nodes[string(test.name) + ".factor"], nullptr) << test.id;
       EXPECT_EQ(w->input("Factor")->link,
@@ -19535,8 +19538,9 @@ TEST(materialx_graph, lowers_split_family_with_literal_texcoords)
   /* Pinned MaterialX 1.39.4 GenGLSL and GenOSL use
    * mix(valuel, valuer, aastep(center, x)) and
    * mix(valuet, valueb, aastep(center, y)). Constant coordinates strictly
-   * off the edge select the first/second endpoint below/above center.
-   * No claim about derivatives or equality at the discontinuity is made. */
+   * off the edge select the first/second endpoint below/above center, and
+   * an unfiltered step(center, axis) selects the second endpoint at equality.
+   * No claim about derivatives at the discontinuity is made. */
   class SplitFoldGraph : public ShaderGraph {
    public:
     void fold_constants()
@@ -19587,7 +19591,8 @@ TEST(materialx_graph, lowers_split_family_with_literal_texcoords)
           node.vector3_inputs[port] = make_float3(value.x, value.y, value.z);
         else node.vector4_inputs[port] = value;
       };
-      for (const float2 uv : {make_float2(0.75f, 0.25f), make_float2(0.25f, 0.75f)}) {
+      for (const float2 uv : {make_float2(0.75f, 0.25f), make_float2(0.25f, 0.75f),
+                               make_float2(0.5f, 0.5f)}) {
         for (const bool linked : {false, true}) {
           for (const bool observe_w : {false, true}) {
             if (observe_w && !four) continue;
@@ -19656,7 +19661,7 @@ TEST(materialx_graph, lowers_split_family_with_literal_texcoords)
             EXPECT_EQ(factor->input("Value1")->link,
                       coordinate->output(top_to_bottom ? "Y" : "X"));
             EXPECT_FLOAT_EQ(factor->get_value2(), 0.5f);
-            EXPECT_EQ(factor->get_math_type(), NODE_MATH_GREATER_THAN);
+            EXPECT_EQ(factor->get_math_type(), NODE_MATH_LESS_THAN);
             if (linked) {
               const char *output = test.type == materialx::Type::Float ? "Value" :
                                    test.type == materialx::Type::Color3 ||
@@ -19668,8 +19673,8 @@ TEST(materialx_graph, lowers_split_family_with_literal_texcoords)
                 auto *selector = dynamic_cast<MixFloatNode *>(nodes["Split"]);
                 ASSERT_NE(selector, nullptr);
                 EXPECT_TRUE(selector->get_use_clamp());
-                EXPECT_EQ(selector->input("A")->link, nodes["First"]->output(output));
-                EXPECT_EQ(selector->input("B")->link, nodes["Second"]->output(output));
+                EXPECT_EQ(selector->input("A")->link, nodes["Second"]->output(output));
+                EXPECT_EQ(selector->input("B")->link, nodes["First"]->output(output));
                 EXPECT_EQ(selector->input("Factor")->link, factor->output("Value"));
                 ASSERT_NE(selector->output("Result"), nullptr);
               }
@@ -19677,9 +19682,9 @@ TEST(materialx_graph, lowers_split_family_with_literal_texcoords)
                 const bool color = test.type == materialx::Type::Color3 ||
                                    test.type == materialx::Type::Color4;
                 EXPECT_EQ(nodes["Split"]->input(color ? "Color1" : "A")->link,
-                          nodes["First"]->output(output));
-                EXPECT_EQ(nodes["Split"]->input(color ? "Color2" : "B")->link,
                           nodes["Second"]->output(output));
+                EXPECT_EQ(nodes["Split"]->input(color ? "Color2" : "B")->link,
+                          nodes["First"]->output(output));
               }
               if (four) {
                 const string suffix = test.type == materialx::Type::Color4 ? ".Alpha" : ".W";
@@ -19688,8 +19693,8 @@ TEST(materialx_graph, lowers_split_family_with_literal_texcoords)
                 ASSERT_NE(nodes["First" + suffix], nullptr);
                 ASSERT_NE(nodes["Second" + suffix], nullptr);
                 EXPECT_TRUE(selector->get_use_clamp());
-                EXPECT_EQ(selector->input("A")->link, nodes["First" + suffix]->output("Value"));
-                EXPECT_EQ(selector->input("B")->link, nodes["Second" + suffix]->output("Value"));
+                EXPECT_EQ(selector->input("A")->link, nodes["Second" + suffix]->output("Value"));
+                EXPECT_EQ(selector->input("B")->link, nodes["First" + suffix]->output("Value"));
                 EXPECT_EQ(selector->input("Factor")->link, factor->output("Value"));
                 ASSERT_NE(selector->output("Result"), nullptr);
               }
@@ -19699,7 +19704,7 @@ TEST(materialx_graph, lowers_split_family_with_literal_texcoords)
             ASSERT_NE(graph.output()->input("Surface")->link, nullptr);
             graph.fold_constants();
             ASSERT_EQ(emission->input("Color")->link, nullptr);
-            const bool high = (top_to_bottom ? uv.y : uv.x) > 0.5f;
+            const bool high = (top_to_bottom ? uv.y : uv.x) >= 0.5f;
             const float4 expected = high ? second : first;
             const float3 rgb = observe_w ? make_float3(expected.w) :
                                test.type == materialx::Type::Float ? make_float3(expected.x) :
@@ -24340,14 +24345,15 @@ TEST(materialx_graph, split_float_linked_operands_keep_varying_native_consumers)
     auto *mix = static_cast<MixFloatNode *>(nodes.at("Split"));
     ASSERT_NE(mix->input("A")->link, nullptr);
     ASSERT_NE(mix->input("B")->link, nullptr);
-    EXPECT_EQ(mix->input("A")->link->parent, nodes.at("First"));
-    EXPECT_EQ(mix->input("B")->link->parent, nodes.at("Second"));
+    /* factor = (axis < center) selects A, so the first endpoint is B. */
+    EXPECT_EQ(mix->input("A")->link->parent, nodes.at("Second"));
+    EXPECT_EQ(mix->input("B")->link->parent, nodes.at("First"));
     ASSERT_NE(nodes.at("Split.factor")->input("Value2")->link, nullptr);
     EXPECT_EQ(nodes.at("Split.factor")->input("Value2")->link->parent, nodes.at("Center"));
     ASSERT_NE(mix->input("Factor")->link, nullptr);
     EXPECT_EQ(mix->input("Factor")->link->parent, nodes.at("Split.factor"));
     graph.fold_constants();
-    EXPECT_NE(mix->input("A")->link, nullptr);
+    EXPECT_NE(mix->input("B")->link, nullptr);
     EXPECT_NE(mix->input("Factor")->link, nullptr);
     ASSERT_NE(graph.output()->input("Surface")->link, nullptr);
   }
