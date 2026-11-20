@@ -27838,6 +27838,199 @@ TEST(materialx_graph, matrix33_runtime_creatematrix_inverse_transpose_and_determ
   EXPECT_FALSE(materialx::validate({{row0, both}}));
 }
 
+/* Batch 41 (b35x rig35 ND_divide_matrix33 V0): a divide whose in1 is a
+ * runtime Matrix33 (creatematrix row from a primvar) was rejected by
+ * validate(). MaterialX 1.39.4 genglsl IM_divide_matrix33 is
+ * mx_inverse(in2) * in1 (column-major GLSL), i.e. in1 * inverse(in2) in the
+ * row-major row-vector convention the static fold already uses -- a matrix
+ * product, not a per-element quotient. It is now a runtime Matrix33 node:
+ * either operand may be runtime, consumers build it per element, and a static
+ * divide still folds. */
+TEST(materialx_graph, divide_matrix33_runtime_operands_lower_as_inverse_product)
+{
+  /* b35x packet-x L0 operands. */
+  const double a[9] = {1, 2, 0, 0, 1, 3, 4, 0, 1};
+  const double b[9] = {2, 1, 0, 0, 4, 2, 0, 0, 0.5};
+  /* Independent double reference: in1 * adjugate(in2) / det(in2). */
+  const auto reference = [](const double x[9], const double y[9], double out[9]) {
+    const double det = y[0] * (y[4] * y[8] - y[5] * y[7]) - y[1] * (y[3] * y[8] - y[5] * y[6]) +
+                       y[2] * (y[3] * y[7] - y[4] * y[6]);
+    const double inv[9] = {(y[4] * y[8] - y[5] * y[7]) / det, (y[2] * y[7] - y[1] * y[8]) / det,
+                           (y[1] * y[5] - y[2] * y[4]) / det, (y[5] * y[6] - y[3] * y[8]) / det,
+                           (y[0] * y[8] - y[2] * y[6]) / det, (y[2] * y[3] - y[0] * y[5]) / det,
+                           (y[3] * y[7] - y[4] * y[6]) / det, (y[1] * y[6] - y[0] * y[7]) / det,
+                           (y[0] * y[4] - y[1] * y[3]) / det};
+    for (int r = 0; r < 3; r++) {
+      for (int c = 0; c < 3; c++) {
+        out[r * 3 + c] = x[r * 3] * inv[c] + x[r * 3 + 1] * inv[3 + c] + x[r * 3 + 2] * inv[6 + c];
+      }
+    }
+  };
+  double expected[9];
+  reference(a, b, expected);
+  /* The packet's own observer values (rows of in1 * inverse(in2)). */
+  const double packet[9] = {0.5, 0.375, -1.5, 0, 0.25, 5, 2, -0.5, 4};
+  for (int i = 0; i < 9; i++) {
+    ASSERT_NEAR(expected[i], packet[i], 1e-12) << i;
+  }
+
+  const auto matrix9 = [](const double m[9]) {
+    std::array<float, 9> out;
+    for (int i = 0; i < 9; i++) {
+      out[size_t(i)] = float(m[i]);
+    }
+    return out;
+  };
+  const auto runtime_matrix = [](const char *name, const char *row_name, const double m[9]) {
+    /* Row 0 connected (runtime), rows 1-2 literal. */
+    materialx::Node row{row_name, "ND_constant_vector3"};
+    row.vector3_inputs["value"] = make_float3(float(m[0]), float(m[1]), float(m[2]));
+    row.outputs["out"] = materialx::Type::Vector3;
+    materialx::Node create{name, "ND_creatematrix_vector3_matrix33"};
+    create.links["in1"] = {row_name, "out", materialx::Type::Vector3};
+    create.vector3_inputs["in2"] = make_float3(float(m[3]), float(m[4]), float(m[5]));
+    create.vector3_inputs["in3"] = make_float3(float(m[6]), float(m[7]), float(m[8]));
+    create.outputs["out"] = materialx::Type::Matrix33;
+    return std::make_pair(row, create);
+  };
+  const auto [row_a, mat_a] = runtime_matrix("VMatA", "RowA", a);
+  const auto [row_b, mat_b] = runtime_matrix("VMatB", "RowB", b);
+  materialx::Node static_a{"StaticA", "ND_constant_matrix33"};
+  static_a.matrix33_inputs["value"] = matrix9(a);
+  static_a.outputs["out"] = materialx::Type::Matrix33;
+
+  const auto divide = [&](const char *name, const char *in1, const char *in2) {
+    materialx::Node node{name, "ND_divide_matrix33"};
+    if (in1) {
+      node.links["in1"] = {in1, "out", materialx::Type::Matrix33};
+    }
+    else {
+      node.matrix33_inputs["in1"] = matrix9(a);
+    }
+    if (in2) {
+      node.links["in2"] = {in2, "out", materialx::Type::Matrix33};
+    }
+    else {
+      node.matrix33_inputs["in2"] = matrix9(b);
+    }
+    node.outputs["out"] = materialx::Type::Matrix33;
+    return node;
+  };
+  /* V0 shape: runtime in1, literal in2. Also runtime in2, both runtime, and
+   * the static fold (connected constant in1, literal in2). */
+  const materialx::Node div_v0 = divide("DivV0", "VMatA", nullptr);
+  const materialx::Node div_in2 = divide("DivIn2", nullptr, "VMatB");
+  const materialx::Node div_both = divide("DivBoth", "VMatA", "VMatB");
+  const materialx::Node div_static = divide("DivStatic", "StaticA", nullptr);
+  const char *divides[] = {"DivV0", "DivIn2", "DivBoth", "DivStatic"};
+
+  vector<materialx::Node> nodes = {row_a, mat_a, row_b, mat_b, static_a,
+                                   div_v0, div_in2, div_both, div_static};
+  const float3 basis[3] = {make_float3(1, 0, 0), make_float3(0, 1, 0), make_float3(0, 0, 1)};
+  for (const char *div : divides) {
+    for (int r = 0; r < 3; r++) {
+      materialx::Node observer{string(div) + "_obs" + std::to_string(r),
+                               "ND_transformmatrix_vector3"};
+      observer.vector3_inputs["in"] = basis[r];
+      observer.links["mat"] = {div, "out", materialx::Type::Matrix33};
+      observer.outputs["out"] = materialx::Type::Vector3;
+      nodes.push_back(observer);
+    }
+  }
+  materialx::Node determinant{"DivDeterminant", "ND_determinant_matrix33"};
+  determinant.links["in"] = {"DivV0", "out", materialx::Type::Matrix33};
+  determinant.outputs["out"] = materialx::Type::Float;
+  nodes.push_back(determinant);
+  materialx::Node inverse{"DivInverse", "ND_invertmatrix_matrix33"};
+  inverse.links["in1"] = {"DivV0", "out", materialx::Type::Matrix33};
+  inverse.outputs["out"] = materialx::Type::Matrix33;
+  nodes.push_back(inverse);
+  materialx::Node inverse_probe{"DivInverse_obs0", "ND_transformmatrix_vector3"};
+  inverse_probe.vector3_inputs["in"] = basis[0];
+  inverse_probe.links["mat"] = {"DivInverse", "out", materialx::Type::Matrix33};
+  inverse_probe.outputs["out"] = materialx::Type::Vector3;
+  nodes.push_back(inverse_probe);
+
+  const materialx::Graph source{nodes};
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+
+  for (const char *div : divides) {
+    for (int r = 0; r < 3; r++) {
+      const string name = string(div) + "_obs" + std::to_string(r);
+      ShaderNode *node = materialx_divide_named_node(graph, name);
+      ASSERT_NE(node, nullptr) << name;
+      const float3 row = materialx_round_test_vector(node->output("Vector"));
+      EXPECT_NEAR(row.x, expected[r * 3 + 0], 2e-6) << name;
+      EXPECT_NEAR(row.y, expected[r * 3 + 1], 2e-6) << name;
+      EXPECT_NEAR(row.z, expected[r * 3 + 2], 2e-6) << name;
+      /* Runtime cells drive the observer per element; constant cells fold.
+       * Only row 0 of in1 is runtime, so with a literal in2 only result row
+       * 0 varies; a runtime in2 makes every row depend on det(in2). The
+       * static divide folds completely. */
+      const bool linked = node->input("X")->link || node->input("Y")->link ||
+                          node->input("Z")->link;
+      const bool runtime_row = string(div) == "DivV0" ? r == 0 : string(div) != "DivStatic";
+      EXPECT_EQ(linked, runtime_row) << name;
+    }
+  }
+  /* det(in1 * inverse(in2)) = det(in1) / det(in2) = 25 / 4. */
+  ShaderNode *det = materialx_divide_named_node(graph, "DivDeterminant");
+  ASSERT_NE(det, nullptr);
+  EXPECT_NE(det->input("Value1")->link, nullptr);
+  EXPECT_NEAR(materialx_round_test_scalar(det->output("Value")), 6.25f, 1e-5f);
+  /* inverse(in1 * inverse(in2)) = in2 * inverse(in1); row 0 of it. */
+  double back[9];
+  reference(b, a, back);
+  ShaderNode *probe = materialx_divide_named_node(graph, "DivInverse_obs0");
+  ASSERT_NE(probe, nullptr);
+  const float3 back0 = materialx_round_test_vector(probe->output("Vector"));
+  EXPECT_NEAR(back0.x, back[0], 1e-5);
+  EXPECT_NEAR(back0.y, back[1], 1e-5);
+  EXPECT_NEAR(back0.z, back[2], 1e-5);
+
+  /* Fail closed. */
+  const auto observe = [](const char *div) {
+    materialx::Node observer{"Probe", "ND_transformmatrix_vector3"};
+    observer.vector3_inputs["in"] = make_float3(1, 0, 0);
+    observer.links["mat"] = {div, "out", materialx::Type::Matrix33};
+    observer.outputs["out"] = materialx::Type::Vector3;
+    return observer;
+  };
+  /* A static singular divisor is refused like the static fold refuses it. */
+  materialx::Node singular = divide("Singular", "VMatA", nullptr);
+  singular.matrix33_inputs["in2"] = {1, 2, 3, 2, 4, 6, 0, 0, 1};
+  EXPECT_FALSE(materialx::validate({{row_a, mat_a, singular, observe("Singular")}}));
+  materialx::Node singular_constant{"SingularConstant", "ND_constant_matrix33"};
+  singular_constant.matrix33_inputs["value"] = {1, 2, 3, 2, 4, 6, 0, 0, 1};
+  singular_constant.outputs["out"] = materialx::Type::Matrix33;
+  EXPECT_FALSE(materialx::validate({{row_a, mat_a, singular_constant,
+                                     divide("SingularLinked", "VMatA", "SingularConstant"),
+                                     observe("SingularLinked")}}));
+  /* Non-finite literal divisor, link plus literal, a Matrix44 link. */
+  materialx::Node nonfinite = divide("NonFinite", "VMatA", nullptr);
+  nonfinite.matrix33_inputs["in2"][4] = std::numeric_limits<float>::infinity();
+  EXPECT_FALSE(materialx::validate({{row_a, mat_a, nonfinite, observe("NonFinite")}}));
+  materialx::Node both = divide("Both", "VMatA", nullptr);
+  both.matrix33_inputs["in1"] = matrix9(a);
+  EXPECT_FALSE(materialx::validate({{row_a, mat_a, both, observe("Both")}}));
+  materialx::Node m44{"M44", "ND_constant_matrix44"};
+  m44.matrix44_inputs["value"] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+  m44.outputs["out"] = materialx::Type::Matrix44;
+  materialx::Node mistyped = divide("Mistyped", "VMatA", nullptr);
+  mistyped.matrix33_inputs.erase("in2");
+  mistyped.links["in2"] = {"M44", "out", materialx::Type::Matrix44};
+  EXPECT_FALSE(materialx::validate({{row_a, mat_a, m44, mistyped, observe("Mistyped")}}));
+  /* A static-only consumer of the runtime result still fails closed. */
+  materialx::Node product{"Product", "ND_multiply_matrix33"};
+  product.links["in1"] = {"DivV0", "out", materialx::Type::Matrix33};
+  product.matrix33_inputs["in2"] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+  product.outputs["out"] = materialx::Type::Matrix33;
+  EXPECT_FALSE(materialx::validate({{row_a, mat_a, div_v0, product}}));
+}
+
 /* Batch 9, literal-operand class: ND_grid_color3 / ND_crosshatch_color3
  * 'thickness' and ND_time_float 'fps' accept a connected float (guard + seed +
  * wire). The connected value drives the same sockets the literal seeds. */

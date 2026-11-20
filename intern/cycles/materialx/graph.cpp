@@ -4519,7 +4519,8 @@ bool matrix44_consumer_is_runtime(const Node &node)
 /* Runtime (varying) Matrix33 values, the Matrix33 counterpart of the runtime
  * Matrix44 route above. A ND_creatematrix_vector3_matrix33 with a connected
  * row has no static value; ND_invertmatrix_matrix33 / ND_transpose_matrix33
- * over such a matrix stay runtime. They lower to identity metadata carriers
+ * over such a matrix stay runtime, as does ND_divide_matrix33 with a runtime
+ * operand (batch 41). They lower to identity metadata carriers
  * and are consumed element-wise by the runtime pass of
  * ND_transformmatrix_vector3 (Matrix33 'mat'), ND_transformmatrix_vector2M3
  * and ND_determinant_matrix33, which also accept a connected 'in' vector. */
@@ -4560,6 +4561,26 @@ bool matrix33_runtime_source_valid(const Link &link,
     return in1 != node.links.end() &&
            matrix33_runtime_source_valid(in1->second, nodes_by_name, depth + 1);
   }
+  if (node.nodedef == divide_matrix33_id) {
+    /* in1 * inverse(in2) with a runtime operand: each operand a finite
+     * literal XOR a static/runtime Matrix33 link. A static divisor must be
+     * nonsingular, as in the static fold; a runtime one is divided by its
+     * determinant per shading point (MaterialX mx_inverse). */
+    for (const char *name : {"in1", "in2"}) {
+      const auto literal = node.matrix33_inputs.find(name);
+      const auto operand = node.links.find(name);
+      const bool has_literal = literal != node.matrix33_inputs.end();
+      if (has_literal == (operand != node.links.end()) ||
+          (has_literal ? !finite_matrix33_value(literal->second) :
+                         !matrix33_runtime_source_valid(operand->second, nodes_by_name, depth + 1)))
+      {
+        return false;
+      }
+    }
+    std::array<float, 9> divisor{};
+    return !linked_matrix33_value(node, nodes_by_name, "in2", &divisor) ||
+           determinant_matrix33_value(divisor) != 0.0f;
+  }
   return false;
 }
 
@@ -4572,6 +4593,14 @@ bool matrix33_node_is_runtime(const Node &node,
   if (node.nodedef == invertmatrix_matrix33_id || node.nodedef == transpose_matrix33_id) {
     return node.links.contains("in1") &&
            !matrix33_link_has_static_value(node, "in1", nodes_by_name);
+  }
+  if (node.nodedef == divide_matrix33_id) {
+    /* Batch 41: runtime when either operand link has no static value. */
+    for (const char *name : {"in1", "in2"}) {
+      if (node.links.contains(name) && !matrix33_link_has_static_value(node, name, nodes_by_name)) {
+        return true;
+      }
+    }
   }
   return false;
 }
@@ -13954,8 +13983,17 @@ bool validate(const Graph &source,
                                        matrix44_node_is_runtime(node, *nodes_by_name);
       /* ND_invertmatrix_matrix33 / ND_transpose_matrix33 over a runtime
        * Matrix33: built by the runtime Matrix33 pass in its consumers. */
-      const bool runtime33 = matrix33_node_is_runtime(node, *nodes_by_name) && has_in1_link &&
-                             matrix33_runtime_source_valid(in1_link->second, *nodes_by_name);
+      /* ND_divide_matrix33 with a runtime operand (either side): the whole
+       * node is checked as a runtime Matrix33 source (batch 41). */
+      Link self33;
+      self33.source_node = node.name;
+      self33.source_output = "out";
+      self33.type = Type::Matrix33;
+      const bool runtime33 = matrix33_node_is_runtime(node, *nodes_by_name) &&
+                             (node.nodedef == divide_matrix33_id ?
+                                  matrix33_runtime_source_valid(self33, *nodes_by_name) :
+                                  has_in1_link && matrix33_runtime_source_valid(in1_link->second,
+                                                                                *nodes_by_name));
       const bool valid_in1 = matrix44 ?
                                  ((node.matrix44_inputs.contains("in1") != has_in1_link) &&
                                   (has_in1_link ?
@@ -34167,6 +34205,31 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
      * determinant is the 3x3 cofactor expansion. */
     using Matrix9 = std::array<Scalar, 9>;
     unordered_map<string, Matrix9> runtime_matrices33;
+    /* inverse = adjugate / determinant (MaterialX mx_inverse). */
+    const auto inverse33 = [&](const Matrix9 &a) {
+      const auto cofactor = [&](const int r0, const int c0, const int r1, const int c1) {
+        return sub(mul(a[size_t(r0 * 3 + c0)], a[size_t(r1 * 3 + c1)]),
+                   mul(a[size_t(r0 * 3 + c1)], a[size_t(r1 * 3 + c0)]));
+      };
+      const Scalar c00 = cofactor(1, 1, 2, 2);
+      const Scalar c01 = cofactor(1, 2, 2, 0);
+      const Scalar c02 = cofactor(1, 0, 2, 1);
+      const Scalar det = add(add(mul(a[0], c00), mul(a[1], c01)), mul(a[2], c02));
+      const Scalar adjugate[9] = {c00,
+                                  cofactor(0, 2, 2, 1),
+                                  cofactor(0, 1, 1, 2),
+                                  c01,
+                                  cofactor(0, 0, 2, 2),
+                                  cofactor(0, 2, 1, 0),
+                                  c02,
+                                  cofactor(0, 1, 2, 0),
+                                  cofactor(0, 0, 1, 1)};
+      Matrix9 inverse;
+      for (int i = 0; i < 9; i++) {
+        inverse[size_t(i)] = div(adjugate[i], det);
+      }
+      return inverse;
+    };
     std::function<bool(const Link &, Matrix9 *, int)> matrix33_runtime_value;
     matrix33_runtime_value = [&](const Link &link, Matrix9 *matrix, const int depth) -> bool {
       if (depth > 64) {
@@ -34226,26 +34289,37 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           }
         }
         else {
-          /* inverse = adjugate / determinant (MaterialX mx_inverse). */
-          const auto cofactor = [&](const int r0, const int c0, const int r1, const int c1) {
-            return sub(mul(a[size_t(r0 * 3 + c0)], a[size_t(r1 * 3 + c1)]),
-                       mul(a[size_t(r0 * 3 + c1)], a[size_t(r1 * 3 + c0)]));
-          };
-          const Scalar c00 = cofactor(1, 1, 2, 2);
-          const Scalar c01 = cofactor(1, 2, 2, 0);
-          const Scalar c02 = cofactor(1, 0, 2, 1);
-          const Scalar det = add(add(mul(a[0], c00), mul(a[1], c01)), mul(a[2], c02));
-          const Scalar adjugate[9] = {c00,
-                                      cofactor(0, 2, 2, 1),
-                                      cofactor(0, 1, 1, 2),
-                                      c01,
-                                      cofactor(0, 0, 2, 2),
-                                      cofactor(0, 2, 1, 0),
-                                      c02,
-                                      cofactor(0, 1, 2, 0),
-                                      cofactor(0, 0, 1, 1)};
-          for (int i = 0; i < 9; i++) {
-            (*matrix)[size_t(i)] = div(adjugate[i], det);
+          *matrix = inverse33(a);
+        }
+      }
+      else if (node.nodedef == divide_matrix33_id) {
+        /* MaterialX 1.39.4 genglsl IM_divide_matrix33 is
+         * mx_inverse(in2) * in1 (column-major GLSL) = in1 * inverse(in2) in
+         * the row-major row-vector convention, as the static fold
+         * (matrix33_literal_arithmetic_value()) computes it. */
+        Matrix9 operands[2];
+        int index = 0;
+        for (const char *name : {"in1", "in2"}) {
+          const auto operand = node.links.find(name);
+          if (operand == node.links.end()) {
+            const std::array<float, 9> &literal = node.matrix33_inputs.at(name);
+            for (int i = 0; i < 9; i++) {
+              operands[index][size_t(i)] = constant(literal[size_t(i)]);
+            }
+          }
+          else if (!matrix33_runtime_value(operand->second, &operands[index], depth + 1)) {
+            return false;
+          }
+          index++;
+        }
+        const Matrix9 inverse = inverse33(operands[1]);
+        for (int row = 0; row < 3; row++) {
+          for (int col = 0; col < 3; col++) {
+            Scalar sum = constant(0.0f);
+            for (int k = 0; k < 3; k++) {
+              sum = add(sum, mul(operands[0][size_t(row * 3 + k)], inverse[size_t(k * 3 + col)]));
+            }
+            (*matrix)[size_t(row * 3 + col)] = sum;
           }
         }
       }

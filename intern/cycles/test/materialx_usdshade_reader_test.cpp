@@ -48515,6 +48515,121 @@ TEST(materialx_usdshade_reader, reads_and_lowers_runtime_primvar_matrix44_determ
   EXPECT_EQ(result->get_value2(), 0.0f);
 }
 
+/* Batch 41: b35x rig35 ND_divide_matrix33 contract V0
+ * (src/ND_divide_matrix33.V0.mtlx): a creatematrix_vector3_matrix33 whose
+ * in1 row is a ND_geompropvalue_vector3 primvar feeds divide in1, in2 is a
+ * literal, and three ND_transformmatrix_vector3 basis observers read the
+ * rows. On host 596770bf1bc4 it was SYNC_REFUSED ("ND_divide_matrix33 was
+ * rejected by validate()"). The same graph shape is generated here, with
+ * authored defaults beside the connections. */
+TEST(materialx_usdshade_reader, reads_and_lowers_runtime_primvar_matrix33_divide)
+{
+  string usda =
+      "#usda 1.0\n"
+      "def Scope \"Looks\" {\n"
+      " def Material \"Material\" {\n"
+      "  token outputs:mtlx:surface.connect = </Looks/Material/Root.outputs:surface>\n"
+      "  def NodeGraph \"Root\" {\n"
+      "   token outputs:surface.connect = </Looks/Material/Root/mask_surface.outputs:out>\n";
+  const string root = "</Looks/Material/Root/";
+  const auto shader = [&](const string &name, const string &id, const string &body) {
+    usda += "   def Shader \"" + name + "\" {\n    uniform token info:id = \"" + id + "\"\n" + body +
+            "   }\n";
+  };
+  shader("p_in1",
+         "ND_geompropvalue_vector3",
+         "    vector3f inputs:default = (0, 0, 0)\n"
+         "    uniform string inputs:geomprop = \"nzx_p\"\n    vector3f outputs:out\n");
+  shader("cm_in1",
+         "ND_creatematrix_vector3_matrix33",
+         "    vector3f inputs:in1 = (1, 0, 0)\n    vector3f inputs:in1.connect = " + root +
+             "p_in1.outputs:out>\n    vector3f inputs:in2 = (-2, 1, 0.25)\n"
+             "    vector3f inputs:in3 = (0, 0, 2)\n    matrix3d outputs:out\n");
+  shader("under_test",
+         "ND_divide_matrix33",
+         "    matrix3d inputs:in1 = ( (1, 0, 0), (0, 1, 0), (0, 0, 1) )\n"
+         "    matrix3d inputs:in1.connect = " + root + "cm_in1.outputs:out>\n"
+         "    matrix3d inputs:in2 = ( (2, 1, 0), (0, 4, 2), (0, 0, 0.5) )\n"
+         "    matrix3d outputs:out\n");
+  const char *basis[] = {"(1, 0, 0)", "(0, 1, 0)", "(0, 0, 1)"};
+  for (int r = 0; r < 3; r++) {
+    const string obs = "obs" + std::to_string(r);
+    shader(obs,
+           "ND_transformmatrix_vector3",
+           string("    vector3f inputs:in = ") + basis[r] +
+               "\n    matrix3d inputs:mat = ( (1, 0, 0), (0, 1, 0), (0, 0, 1) )\n"
+               "    matrix3d inputs:mat.connect = " + root + "under_test.outputs:out>\n"
+               "    vector3f outputs:out\n");
+    shader(obs + "_x",
+           "ND_extract_vector3",
+           "    vector3f inputs:in.connect = " + root + obs + ".outputs:out>\n"
+           "    uniform int inputs:index = " + std::to_string(r) + "\n    float outputs:out\n");
+  }
+  shader("mask",
+         "ND_combine3_color3",
+         "    float inputs:in1.connect = " + root + "obs0_x.outputs:out>\n"
+         "    float inputs:in2.connect = " + root + "obs1_x.outputs:out>\n"
+         "    float inputs:in3.connect = " + root + "obs2_x.outputs:out>\n"
+         "    color3f outputs:out\n");
+  shader("mask_surface",
+         "ND_convert_color3_surfaceshader",
+         "    color3f inputs:in.connect = " + root + "mask.outputs:out>\n    token outputs:out\n");
+  usda += "  }\n }\n}\n";
+
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  ASSERT_TRUE(stage);
+  ASSERT_TRUE(stage->GetRootLayer()->ImportFromString(usda));
+  const pxr::UsdShadeMaterial material(stage->GetPrimAtPath(pxr::SdfPath("/Looks/Material")));
+  ASSERT_TRUE(material);
+  materialx::Graph graph;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+  const materialx::Node *divide = nullptr;
+  for (const materialx::Node &node : graph.nodes) {
+    if (node.nodedef == "ND_divide_matrix33") {
+      divide = &node;
+    }
+  }
+  ASSERT_NE(divide, nullptr);
+  /* The runtime in1 link is kept (the authored default is not a literal);
+   * in2 stays the literal. */
+  ASSERT_EQ(divide->links.size(), 1u);
+  EXPECT_EQ(divide->links.at("in1").type, materialx::Type::Matrix33);
+  ASSERT_EQ(divide->matrix33_inputs.size(), 1u);
+  const std::array<float, 9> in2 = {2, 1, 0, 0, 4, 2, 0, 0, 0.5f};
+  EXPECT_EQ(divide->matrix33_inputs.at("in2"), in2);
+  ASSERT_TRUE(materialx::validate(graph));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+  int observers = 0;
+  for (ShaderNode *node : lowered.nodes) {
+    const string name = node->name.string();
+    if (name.size() >= 4 && name.compare(name.size() - 4, 3, "obs") == 0) {
+      CombineXYZNode *observer = dynamic_cast<CombineXYZNode *>(node);
+      ASSERT_NE(observer, nullptr) << name;
+      /* Result row 0 = primvar row * inverse(in2) is driven per shading
+       * point; rows 1-2 depend only on literals and fold to constants. */
+      const bool linked = observer->input("X")->link || observer->input("Y")->link ||
+                          observer->input("Z")->link;
+      EXPECT_EQ(linked, name.back() == '0') << name;
+      /* V0 packet expectations for the folded rows (in1 rows times
+       * inverse(in2) = ((0.5, -0.125, 0.5), (0, 0.25, -1), (0, 0, 2))). */
+      if (name.back() == '1') {
+        EXPECT_NEAR(observer->get_x(), -1.0f, 2e-6f);
+        EXPECT_NEAR(observer->get_y(), 0.5f, 2e-6f);
+        EXPECT_NEAR(observer->get_z(), -1.5f, 2e-6f);
+      }
+      else if (name.back() == '2') {
+        EXPECT_NEAR(observer->get_x(), 0.0f, 2e-6f);
+        EXPECT_NEAR(observer->get_y(), 0.0f, 2e-6f);
+        EXPECT_NEAR(observer->get_z(), 4.0f, 2e-6f);
+      }
+      observers++;
+    }
+  }
+  EXPECT_EQ(observers, 3);
+}
+
 
 /* Batch 10: tangent/viewdirection accept "object" space and uniform
  * space/index through ND_constant_string / ND_constant_integer. */
