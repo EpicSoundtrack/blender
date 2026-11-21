@@ -51834,4 +51834,221 @@ TEST(materialx_usdshade_reader, hextilednormalmap_unauthored_colorspace_decodes_
   }
 }
 
+/* Batch 48 (user ruling 20261121q, "make them raw"): ND_tiledimage_float and
+ * ND_triplanarprojection_float sample non-color image data. MaterialX 1.39.4
+ * applies no color transform to image data without an authored colorspace,
+ * but both lowerings kept the ImageTextureNode default "auto", which decodes
+ * an 8-bit file as sRGB. Read, validate and lower each on an actual 8-bit
+ * file and load it through Cycles' image metadata/pixel path with every
+ * lowered ImageTextureNode's colorspace: texel 128 must read 128/255 when the
+ * colorspace is unauthored or "raw"; an authored "srgb_texture" still decodes
+ * as sRGB (per triplanar axis); an unsupported authored value is refused. */
+TEST(materialx_usdshade_reader, float_tiled_and_triplanar_images_unauthored_colorspace_decode_raw)
+{
+  ColorSpaceManager::init_fallback_config();
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     "cycles_materialx_float_image_texel128.ppm";
+  {
+    std::ofstream file(path, std::ios::binary);
+    file << "P6\n1 1\n255\n";
+    const unsigned char pixel[] = {128, 64, 255};
+    file.write(reinterpret_cast<const char *>(pixel), sizeof(pixel));
+  }
+  struct Remove {
+    std::filesystem::path path;
+    ~Remove()
+    {
+      std::error_code error;
+      std::filesystem::remove(path, error);
+    }
+  } remove{path};
+  const float raw[3] = {128.0f / 255.0f, 64.0f / 255.0f, 1.0f};
+
+  /* Decode texel (0,0) the way ImageManager::load_image_metadata and
+   * OIIOImageLoader::load_pixels do, then as the kernel reads the storage. */
+  const auto decode = [&](const ustring colorspace, ustring *finalized) {
+    ImageMetaData metadata;
+    metadata.colorspace = colorspace;
+    EXPECT_TRUE(metadata.oiio_load_metadata(path.string()));
+    metadata.finalize(IMAGE_ALPHA_AUTO);
+    *finalized = metadata.colorspace;
+    std::vector<uint8_t> buffer(metadata.memory_size());
+    EXPECT_TRUE(metadata.oiio_load_pixels(path.string(), buffer.data()));
+    metadata.conform_pixels(buffer.data());
+    float3 texel = zero_float3();
+    switch (metadata.type) {
+      case IMAGE_DATA_TYPE_BYTE4: {
+        const uchar *p = buffer.data();
+        texel = make_float3(p[0], p[1], p[2]) / 255.0f;
+        if (metadata.is_compressible_as_srgb) {
+          texel = color_srgb_to_linear_v3(texel);
+        }
+        break;
+      }
+      case IMAGE_DATA_TYPE_HALF4: {
+        const half *p = reinterpret_cast<const half *>(buffer.data());
+        texel = make_float3(half_to_float(p[0]), half_to_float(p[1]), half_to_float(p[2]));
+        break;
+      }
+      case IMAGE_DATA_TYPE_FLOAT4: {
+        const float *p = reinterpret_cast<const float *>(buffer.data());
+        texel = make_float3(p[0], p[1], p[2]);
+        break;
+      }
+      default:
+        ADD_FAILURE() << "unexpected conformed image type " << int(metadata.type);
+    }
+    return texel;
+  };
+
+  /* authored[i]: colorspace on file (tiled) or filex/filey/filez (triplanar);
+   * "" leaves it unauthored. */
+  const auto read = [&](const bool triplanar,
+                        const std::array<const char *, 3> &authored,
+                        materialx::Graph *graph,
+                        string *error) {
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/FloatImage"));
+    const auto shader = [&](const char *name) {
+      return pxr::UsdShadeShader::Define(stage,
+                                         material.GetPath().AppendChild(pxr::TfToken(name)));
+    };
+    pxr::UsdShadeShader image = shader(triplanar ? "Tri" : "Tile");
+    image.CreateIdAttr(pxr::VtValue(pxr::TfToken(triplanar ? "ND_triplanarprojection_float" :
+                                                             "ND_tiledimage_float")));
+    const auto file_input = [&](const char *name, const char *colorspace) {
+      pxr::UsdShadeInput file = image.CreateInput(pxr::TfToken(name),
+                                                  pxr::SdfValueTypeNames->Asset);
+      file.Set(pxr::SdfAssetPath(path.string()));
+      if (colorspace[0] != '\0') {
+        file.GetAttr().SetColorSpace(pxr::TfToken(colorspace));
+      }
+    };
+    if (triplanar) {
+      file_input("filex", authored[0]);
+      file_input("filey", authored[1]);
+      file_input("filez", authored[2]);
+    }
+    else {
+      file_input("file", authored[0]);
+      pxr::UsdShadeShader uv = shader("UV");
+      uv.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_constant_vector2")));
+      uv.CreateInput(pxr::TfToken("value"), pxr::SdfValueTypeNames->Float2)
+          .Set(pxr::GfVec2f(0.25f, 0.5f));
+      uv.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float2);
+      EXPECT_TRUE(image.CreateInput(pxr::TfToken("texcoord"), pxr::SdfValueTypeNames->Float2)
+                      .ConnectToSource(uv.ConnectableAPI(), pxr::TfToken("out")));
+      for (const char *name : {"uvtiling", "realworldimagesize", "realworldtilesize"}) {
+        image.CreateInput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float2)
+            .Set(pxr::GfVec2f(1.0f, 1.0f));
+      }
+      image.CreateInput(pxr::TfToken("uvoffset"), pxr::SdfValueTypeNames->Float2)
+          .Set(pxr::GfVec2f(0.0f, 0.0f));
+      image.CreateInput(pxr::TfToken("filtertype"), pxr::SdfValueTypeNames->String)
+          .Set(string("linear"));
+      image.CreateInput(pxr::TfToken("framerange"), pxr::SdfValueTypeNames->String)
+          .Set(string(""));
+      image.CreateInput(pxr::TfToken("frameoffset"), pxr::SdfValueTypeNames->Int).Set(0);
+      image.CreateInput(pxr::TfToken("frameendaction"), pxr::SdfValueTypeNames->String)
+          .Set(string("constant"));
+      image.CreateInput(pxr::TfToken("default"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+    }
+    image.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Float);
+    pxr::UsdShadeShader surface = shader("Surface");
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    EXPECT_TRUE(surface.CreateInput(pxr::TfToken("base_weight"), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(image.ConnectableAPI(), pxr::TfToken("out")));
+    EXPECT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+    return materialx::read_usdshade_graph(material, graph, error);
+  };
+
+  struct Case {
+    bool triplanar;
+    std::array<const char *, 3> authored;
+  };
+  const Case cases[] = {{false, {"", "", ""}},
+                        {false, {"raw", "", ""}},
+                        {false, {"srgb_texture", "", ""}},
+                        {true, {"", "", ""}},
+                        {true, {"raw", "raw", "raw"}},
+                        {true, {"", "srgb_texture", "raw"}}};
+  for (const Case &item : cases) {
+    SCOPED_TRACE(string(item.triplanar ? "triplanar " : "tiled ") + item.authored[0] + "/" +
+                 item.authored[1] + "/" + item.authored[2]);
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(read(item.triplanar, item.authored, &graph, &error)) << error;
+    const string nodedef = item.triplanar ? "ND_triplanarprojection_float" :
+                                            "ND_tiledimage_float";
+    const auto found = std::find_if(
+        graph.nodes.begin(), graph.nodes.end(), [&](const materialx::Node &node) {
+          return node.nodedef == nodedef;
+        });
+    ASSERT_NE(found, graph.nodes.end());
+    const auto expected = [&](const int axis) {
+      return item.authored[axis][0] == '\0' ? string("raw") : string(item.authored[axis]);
+    };
+    if (item.triplanar) {
+      EXPECT_EQ(found->string_inputs.at("colorspacex"), expected(0));
+      EXPECT_EQ(found->string_inputs.at("colorspacey"), expected(1));
+      EXPECT_EQ(found->string_inputs.at("colorspacez"), expected(2));
+    }
+    else {
+      EXPECT_EQ(found->string_inputs.at("colorspace"), expected(0));
+    }
+    ASSERT_TRUE(materialx::validate(graph));
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    int images = 0;
+    for (ShaderNode *node : lowered.nodes) {
+      ImageTextureNode *image = dynamic_cast<ImageTextureNode *>(node);
+      if (image == nullptr) {
+        continue;
+      }
+      ++images;
+      const string name = image->name.string();
+      int axis = 0;
+      if (item.triplanar) {
+        ASSERT_EQ(name.substr(0, 10), "Tri.image_") << name;
+        axis = name.back() - 'x';
+        ASSERT_TRUE(axis >= 0 && axis <= 2) << name;
+      }
+      else {
+        EXPECT_EQ(name, "Tile.image");
+      }
+      SCOPED_TRACE(name);
+      ustring finalized;
+      const float3 texel = decode(image->get_colorspace(), &finalized);
+      if (expected(axis) == "srgb_texture") {
+        EXPECT_NE(image->get_colorspace(), u_colorspace_data);
+        EXPECT_NE(image->get_colorspace(), u_colorspace_auto);
+        EXPECT_NEAR(texel.x, color_srgb_to_linear(raw[0]), 2e-3f);
+        EXPECT_NEAR(texel.y, color_srgb_to_linear(raw[1]), 2e-3f);
+      }
+      else {
+        EXPECT_EQ(image->get_colorspace(), u_colorspace_data);
+        /* cycles_test runs on the fallback OCIO config, whose "auto" byte
+         * decode is not Blender's sRGB curve, so the colorspace the loader
+         * settles on discriminates here; the texel values pin raw decoding. */
+        EXPECT_TRUE(ColorSpaceManager::colorspace_is_data(finalized)) << finalized.string();
+        EXPECT_FLOAT_EQ(texel.x, raw[0]);
+        EXPECT_FLOAT_EQ(texel.y, raw[1]);
+        EXPECT_FLOAT_EQ(texel.z, raw[2]);
+      }
+    }
+    EXPECT_EQ(images, item.triplanar ? 3 : 1);
+  }
+
+  for (const bool triplanar : {false, true}) {
+    SCOPED_TRACE(triplanar ? "triplanar unsupported" : "tiled unsupported");
+    materialx::Graph graph;
+    string error;
+    EXPECT_FALSE(read(triplanar, {"acescg", "", ""}, &graph, &error));
+    EXPECT_NE(error.find("unsupported authored colorspace 'acescg'"), string::npos) << error;
+  }
+}
+
 CCL_NAMESPACE_END

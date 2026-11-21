@@ -5357,6 +5357,37 @@ bool read_tiledimage_shader(const pxr::UsdShadeShader &source,
   return true;
 }
 
+/* File colorspace of a non-color (float) image input. MaterialX 1.39.4
+ * applies no color transform to image data without an authored colorspace,
+ * so unauthored is "raw" (lowered to Cycles data, as
+ * read_image_vector_controls and read_hextilednormalmap_shader do). An
+ * authored raw / lin_rec709 / srgb_texture colorspace is kept; anything else
+ * is refused. */
+bool read_non_color_file_colorspace(const pxr::UsdShadeInput &file,
+                                    const string &nodedef,
+                                    const string &input_name,
+                                    string *colorspace,
+                                    string *error_message)
+{
+  *colorspace = "raw";
+  if (!file) {
+    return true;
+  }
+  const pxr::TfToken authored = file.GetAttr().GetColorSpace();
+  if (authored.IsEmpty()) {
+    return true;
+  }
+  const string value = authored.GetString();
+  if (value != "raw" && value != "srgb_texture" && value != "lin_rec709") {
+    set_error(error_message,
+              nodedef + " has unsupported authored colorspace '" + value + "' on '" +
+                  input_name + "'");
+    return false;
+  }
+  *colorspace = value;
+  return true;
+}
+
 bool read_tiledimage_float_dynamic(const pxr::UsdShadeShader &source,
                             const string &nodedef,
                             const Link &texcoord,
@@ -5396,6 +5427,13 @@ bool read_tiledimage_float_dynamic(const pxr::UsdShadeShader &source,
     set_error(error_message, nodedef + " file asset is unavailable or invalid");
     return false;
   }
+  string colorspace;
+  if (!read_non_color_file_colorspace(
+          source.GetInput(pxr::TfToken("file")), nodedef, "file", &colorspace, error_message))
+  {
+    return false;
+  }
+  node->string_inputs["colorspace"] = colorspace;
   std::unordered_set<string> active_vector2_shaders;
   for (const char *input_name : {"uvtiling", "uvoffset", "realworldimagesize", "realworldtilesize"}) {
     const pxr::UsdShadeInput guarded = source.GetInput(pxr::TfToken(input_name));
@@ -5656,6 +5694,14 @@ bool read_triplanarprojection_shader(const pxr::UsdShadeShader &source,
     }
     any_empty = any_empty || file_path.empty();
     node.asset_inputs[file_input] = file_path;
+    if (output_type == Type::Float) {
+      string colorspace;
+      if (!read_non_color_file_colorspace(file, nodedef, file_input, &colorspace, error_message))
+      {
+        return false;
+      }
+      node.string_inputs[string("colorspace") + (file_input + 4)] = colorspace;
+    }
   }
 
   Link link;

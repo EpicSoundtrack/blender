@@ -2911,6 +2911,30 @@ bool image_vector_controls_valid(const Node &node)
   return image_color3_controls_error(node).empty() && (colorspace.empty() || colorspace == "raw");
 }
 
+/* File colorspace of a non-color (float) image: ND_tiledimage_float key
+ * "colorspace", ND_triplanarprojection_float keys "colorspacex/y/z". MaterialX
+ * 1.39.4 applies no color transform to image data without an authored
+ * colorspace, so an absent key or "raw" is Cycles data (never "auto", which
+ * decodes 8-bit files as sRGB). An authored lin_rec709 / srgb_texture keeps
+ * the image_color3 mapping and its working-space checks. */
+bool non_color_image_colorspace_valid(const string &colorspace)
+{
+  if (colorspace.empty()) {
+    return false;
+  }
+  Node probe;
+  probe.string_inputs["colorspace"] = colorspace;
+  return image_color3_controls_error(probe).empty();
+}
+
+ustring non_color_image_colorspace(const Node &node, const string &key)
+{
+  const auto colorspace = node.string_inputs.find(key);
+  return colorspace == node.string_inputs.end() || colorspace->second.empty() ?
+             u_colorspace_data :
+             image_color3_colorspace(colorspace->second);
+}
+
 const char *triplanarprojection_component_suffix(const Type type)
 {
   return type == Type::Color4 ? ".Alpha" : ".W";
@@ -10627,7 +10651,19 @@ bool validate(const Graph &source,
       {
         return false;
       }
-      const bool ok = position != node.links.end() &&
+      /* Optional per-axis file colorspace, float only (non_color_image_colorspace). */
+      size_t colorspace_count = 0;
+      bool colorspaces_valid = true;
+      for (const char *key : {"colorspacex", "colorspacey", "colorspacez"}) {
+        if (const auto colorspace = node.string_inputs.find(key);
+            colorspace != node.string_inputs.end())
+        {
+          ++colorspace_count;
+          colorspaces_valid = colorspaces_valid && triplanar_type == Type::Float &&
+                              non_color_image_colorspace_valid(colorspace->second);
+        }
+      }
+      const bool ok = colorspaces_valid && position != node.links.end() &&
                       validate_link(position->second, Type::Vector3, *nodes_by_name) &&
                       normal != node.links.end() &&
                       validate_link(normal->second, Type::Vector3, *nodes_by_name) &&
@@ -10649,7 +10685,8 @@ bool validate(const Graph &source,
                                               size_t(triplanar_type == Type::Float &&
                                                      node.inputs.contains("default")) &&
                       node.int_inputs.size() == 1 &&
-                      node.string_inputs.size() == 1 && node.color3_inputs.size() <= 1 &&
+                      node.string_inputs.size() == 1 + colorspace_count &&
+                      node.color3_inputs.size() <= 1 &&
                       node.float4_inputs.size() <= 1 && node.vector2_inputs.size() <= 1 &&
                       node.vector3_inputs.size() <= 1 && node.vector4_inputs.size() <= 1 &&
                       (!node.color3_inputs.contains("default") ||
@@ -11399,7 +11436,10 @@ bool validate(const Graph &source,
           !path_is_file(file->second) || path_file_size(file->second) == 0 ||
           uv == node.links.end() || !validate_link(uv->second, Type::Vector2, *nodes_by_name) ||
           output == node.outputs.end() || output->second != Type::Float || node.outputs.size()!=1 ||
-          node.asset_inputs.size()!=1 || node.string_inputs.size()!=1 ||
+          node.asset_inputs.size()!=1 ||
+          node.string_inputs.size()!=1+size_t(node.string_inputs.contains("colorspace")) ||
+          (node.string_inputs.contains("colorspace") &&
+           !non_color_image_colorspace_valid(node.string_inputs.at("colorspace"))) ||
           !node.string_inputs.contains("filtertype") ||
           (node.string_inputs.at("filtertype")!="closest" && node.string_inputs.at("filtertype")!="linear" && node.string_inputs.at("filtertype")!="cubic") ||
           !node.int_inputs.empty() || !node.color3_inputs.empty() || !node.float4_inputs.empty() ||
@@ -18247,6 +18287,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       if (tiled_type == Type::Vector2 || tiled_type == Type::Vector3 || tiled_type == Type::Vector4) {
         image->set_colorspace(u_colorspace_data);
       }
+      else if (tiled_type == Type::Float) {
+        image->set_colorspace(non_color_image_colorspace(node, "colorspace"));
+      }
       lowered_nodes.emplace(tile->name, tile);
       lowered_nodes.emplace(offset->name, offset);
       lowered_nodes.emplace(image_size->name, image_size);
@@ -19112,6 +19155,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
               triplanar_type == Type::Vector4)
           {
             image->set_colorspace(u_colorspace_data);
+          }
+          else if (triplanar_type == Type::Float) {
+            image->set_colorspace(non_color_image_colorspace(node, string("colorspace") + axis));
           }
           lowered_nodes.emplace(image->name, image);
         }
