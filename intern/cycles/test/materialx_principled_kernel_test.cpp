@@ -15,6 +15,11 @@
 #include "kernel/svm/closure.h"
 #include "kernel/svm/materialx_closure.h"
 #include "kernel/svm/attribute.h"
+#include "kernel/svm/geometry.h"
+#include "kernel/svm/math.h"
+#include "kernel/svm/mix.h"
+#include "kernel/svm/sepcomb_color.h"
+#include "kernel/svm/value.h"
 #include "kernel/svm/materialx_noise.h"
 #include "scene/constant_fold.h"
 #include "scene/scene.h"
@@ -31,7 +36,9 @@
 #include <array>
 #include <bit>
 #include <cstring>
+#include <functional>
 #include <iterator>
+#include <unordered_set>
 #include <vector>
 
 CCL_NAMESPACE_BEGIN
@@ -2249,6 +2256,237 @@ TEST_F(materialx_principled_kernel, four_component_reader_absent_primvar_reads_n
       globals.attributes_float4 = {};
     }
   }
+}
+
+/* Batch 47 (b66x-20261121 gs1/gd1): ND_gooch_shade lost its specular term in
+ * Cycles because the lowering fed GeometryNode "Incoming" (sd->wi, shading
+ * point -> viewer) straight into unit_viewdir. MaterialX 1.39.4 NG_gooch_shade
+ * (nprlib_ng.mtlx 50-112) reads <viewdirection space="world">, camera ->
+ * shading point (genglsl normalize(P - viewPosition), genosl I), so
+ *   R = reflect(normalize(V), N) = V - 2 dot(N, V) N,
+ *   specular = specular_intensity * max(dot(-L, R), 0) ^ shininess.
+ * Run the actual reader -> validate -> lower -> SVM compiler bytecode through
+ * the CPU kernel node functions and compare the color3 output with the
+ * analytic value and with the b66x packet references (gs G0-G7, fp32). */
+namespace {
+template<typename T> T read_svm_record(const std::vector<uint> &words, size_t *index)
+{
+  T record;
+  memcpy(&record, words.data() + *index, sizeof(T));
+  *index += sizeof(T) / sizeof(uint);
+  return record;
+}
+struct GoochTerms {
+  float3 color;
+  float specular;
+};
+GoochTerms gooch_analytic(const float3 warm,
+                          const float3 cool,
+                          const float specular_intensity,
+                          const float shininess,
+                          const float3 light,
+                          const float3 normal,
+                          const float3 view)
+{
+  const float3 n = normalize(normal), v = normalize(view), l = normalize(light);
+  const float cool_intensity = (1.0f + dot(n, l)) / 2.0f;
+  const float3 diffuse = warm + (cool - warm) * cool_intensity;
+  const float3 r = v - n * (2.0f * dot(n, v));
+  const float specular = powf(fmaxf(dot(-l, r), 0.0f), shininess) * specular_intensity;
+  return {diffuse + make_float3(specular, specular, specular), specular};
+}
+}  // namespace
+TEST_F(materialx_principled_kernel, gooch_shade_specular_uses_camera_to_surface_view_direction)
+{
+  struct Case {
+    const char *id;
+    float3 warm, cool;
+    float specular_intensity, shininess;
+    float3 light, normal, reference;
+  };
+  const float3 warm_a = make_float3(0.95f, 0.55f, 0.15f), cool_a = make_float3(0.1f, 0.35f, 0.85f);
+  const float3 warm_b = make_float3(0.7f, 0.9f, 0.3f), cool_b = make_float3(0.45f, 0.1f, 0.6f);
+  const Case cases[] = {
+      {"G0", warm_a, cool_a, 0.6f, 6.0f, make_float3(1.1922f, 1.5003f, 0.4515f),
+       make_float3(-0.19186467584671874f, -0.8910065241883679f, 0.4114551251546115f),
+       make_float3(0.9394646286964417f, 0.6367005109786987f, 0.37133464217185974f)},
+      {"G1", warm_a, cool_a, 0.6f, 6.0f, make_float3(0.4735f, 0.3679f, 0.3435f),
+       make_float3(-0.7738545498907957f, -0.48642040484769206f, 0.4056406357370045f),
+       make_float3(0.9612061381340027f, 0.6952465176582336f, 0.48084089159965515f)},
+      {"G2", warm_a, cool_a, 0.6f, 6.0f, make_float3(0.4225f, -0.9207f, -0.8707f),
+       make_float3(-0.04224988737415874f, -0.1789735940456375f, 0.9829462852319338f),
+       make_float3(0.8217417597770691f, 0.5742590427398682f, 0.3854368031024933f)},
+      {"G3", warm_b, cool_b, 0.35f, 3.5f, make_float3(0.1085f, 0.7454f, 0.4325f),
+       make_float3(0.07861043824642322f, -0.8819960039959711f, 0.4646541164499074f),
+       make_float3(0.7319680452346802f, 0.798790454864502f, 0.46514567732810974f)},
+      {"G4", warm_b, cool_b, 0.35f, 3.5f, make_float3(1.8393f, 0.4235f, 0.0301f),
+       make_float3(-0.7430148091190193f, -0.10426005463389988f, 0.6611042538341162f),
+       make_float3(0.7869862914085388f, 0.9146135449409485f, 0.4593590795993805f)},
+      {"G5", warm_b, cool_b, 0.35f, 3.5f, make_float3(-1.1708f, 1.7388f, -0.3336f),
+       make_float3(0.25264188003434535f, -0.4640330845810166f, 0.8490261343839415f),
+       make_float3(0.7387313842773438f, 0.8432834148406982f, 0.4341793656349182f)},
+      {"G6", warm_a, cool_a, 0.6f, 6.0f, make_float3(-0.7542f, -0.6755f, 0.3142f),
+       make_float3(-0.3361405452591376f, -0.9173775975200972f, 0.21313816505061753f),
+       make_float3(0.1480836272239685f, 0.3613137900829315f, 0.8104016780853271f)},
+      {"G7", warm_b, cool_b, 0.35f, 3.5f, make_float3(-1.0101f, -0.6904f, 0.1203f),
+       make_float3(-0.7904598690216583f, -0.1866086743858825f, 0.5833955760118572f),
+       make_float3(0.4735826253890991f, 0.1754644364118576f, 0.5717008709907532f)},
+  };
+  /* b66x camera forward (camera -> surface), identical for every tile. */
+  const float3 view = make_float3(0.34618861305875415f, 0.573576436351046f, -0.7424038765061041f);
+  int specular_active = 0;
+  for (const Case &c : cases) {
+    SCOPED_TRACE(c.id);
+    const GoochTerms truth = gooch_analytic(
+        c.warm, c.cool, c.specular_intensity, c.shininess, c.light, c.normal, view);
+    const GoochTerms flipped = gooch_analytic(
+        c.warm, c.cool, c.specular_intensity, c.shininess, c.light, c.normal, -view);
+    /* The analytic transcription reproduces the independent packet reference. */
+    EXPECT_NEAR(truth.color.x, c.reference.x, 2e-6f);
+    EXPECT_NEAR(truth.color.y, c.reference.y, 2e-6f);
+    EXPECT_NEAR(truth.color.z, c.reference.z, 2e-6f);
+    /* Every case discriminates the view sign by far more than the tolerance. */
+    EXPECT_GT(fabsf(truth.specular - flipped.specular), 0.02f);
+    specular_active += truth.specular > 0.0f;
+
+    const auto stage = pxr::UsdStage::CreateInMemory();
+    const pxr::SdfPath root("/Material");
+    const auto material = pxr::UsdShadeMaterial::Define(stage, root);
+    pxr::UsdShadeShader gooch = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken("Gooch")));
+    gooch.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gooch_shade")));
+    const auto vec = [](const float3 v) { return pxr::GfVec3f(v.x, v.y, v.z); };
+    gooch.CreateInput(pxr::TfToken("warm_color"), pxr::SdfValueTypeNames->Color3f)
+        .Set(vec(c.warm));
+    gooch.CreateInput(pxr::TfToken("cool_color"), pxr::SdfValueTypeNames->Color3f)
+        .Set(vec(c.cool));
+    gooch.CreateInput(pxr::TfToken("specular_intensity"), pxr::SdfValueTypeNames->Float)
+        .Set(c.specular_intensity);
+    gooch.CreateInput(pxr::TfToken("shininess"), pxr::SdfValueTypeNames->Float).Set(c.shininess);
+    gooch.CreateInput(pxr::TfToken("light_direction"), pxr::SdfValueTypeNames->Vector3f)
+        .Set(vec(c.light));
+    gooch.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    pxr::UsdShadeShader convert = pxr::UsdShadeShader::Define(
+        stage, root.AppendChild(pxr::TfToken("Convert")));
+    convert.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_convert_color3_surfaceshader")));
+    ASSERT_TRUE(convert.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(gooch.ConnectableAPI(), pxr::TfToken("out")));
+    convert.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx"))
+                    .ConnectToSource(convert.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+    ASSERT_TRUE(materialx::validate(source));
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower(source, &graph, &error)) << error;
+    MixNode *sum = nullptr;
+    for (ShaderNode *candidate : graph.nodes) {
+      if (candidate->name == "Gooch") {
+        sum = dynamic_cast<MixNode *>(candidate);
+      }
+    }
+    ASSERT_NE(sum, nullptr);
+
+    /* Compile the gooch subgraph producers-first with the actual compiler. */
+    std::vector<ShaderNode *> order;
+    std::unordered_set<ShaderNode *> seen;
+    std::function<void(ShaderNode *)> visit = [&](ShaderNode *node) {
+      if (!seen.insert(node).second) {
+        return;
+      }
+      for (ShaderInput *input : node->inputs) {
+        if (input->link) {
+          visit(input->link->parent);
+        }
+      }
+      order.push_back(node);
+    };
+    visit(sum);
+    CapturePrincipledSVM compiler(scene.get(), progress, &graph);
+    std::vector<uint> words;
+    for (ShaderNode *node : order) {
+      const std::vector<uint> node_words = compiler.capture(node);
+      words.insert(words.end(), node_words.begin(), node_words.end());
+    }
+    const SVMStackOffset out_offset = sum->output("Color")->stack_offset;
+    ASSERT_LT(out_offset + 2, SVM_STACK_SIZE);
+
+    /* Shading point: sd->wi points from the surface toward the camera. */
+    ShaderData sd{};
+    sd.N = sd.Ng = c.normal;
+    sd.wi = -view;
+    ThreadKernelGlobalsCPU kg(globals, nullptr, profiler, 0);
+    std::array<float, SVM_STACK_SIZE> stack{};
+    stack.fill(NAN);
+    std::array<int, 7> opcodes{};
+    for (size_t i = 0; i < words.size();) {
+      const uint opcode = words[i++];
+      const auto fits = [&](const size_t bytes) {
+        return i + bytes / sizeof(uint) <= words.size();
+      };
+      switch (opcode) {
+        case NODE_GEOMETRY:
+          ASSERT_TRUE(fits(sizeof(SVMNodeGeometry)));
+          svm_node_geometry<float3>(
+              &kg, &sd, stack.data(), read_svm_record<SVMNodeGeometry>(words, &i));
+          ++opcodes[0];
+          break;
+        case NODE_VECTOR_MATH:
+          ASSERT_TRUE(fits(sizeof(SVMNodeVectorMath)));
+          svm_node_vector_math<float3>(stack.data(),
+                                       read_svm_record<SVMNodeVectorMath>(words, &i));
+          ++opcodes[1];
+          break;
+        case NODE_MATH:
+        case NODE_MATERIALX_MATH: /* svm.h dispatches both to svm_node_math. */
+          ASSERT_TRUE(fits(sizeof(SVMNodeMath)));
+          svm_node_math(stack.data(), read_svm_record<SVMNodeMath>(words, &i));
+          ++opcodes[2];
+          break;
+        case NODE_MIX:
+          ASSERT_TRUE(fits(sizeof(SVMNodeMix)));
+          svm_node_mix(stack.data(), read_svm_record<SVMNodeMix>(words, &i));
+          ++opcodes[3];
+          break;
+        case NODE_COMBINE_COLOR:
+          ASSERT_TRUE(fits(sizeof(SVMNodeCombineColor)));
+          svm_node_combine_color(stack.data(), read_svm_record<SVMNodeCombineColor>(words, &i));
+          ++opcodes[4];
+          break;
+        case NODE_VALUE_F:
+          ASSERT_TRUE(fits(sizeof(SVMNodeValueF)));
+          svm_node_value_f<float>(stack.data(), read_svm_record<SVMNodeValueF>(words, &i));
+          ++opcodes[5];
+          break;
+        case NODE_VALUE_V:
+          ASSERT_TRUE(fits(sizeof(SVMNodeValueV)));
+          svm_node_value_v<float3>(stack.data(), read_svm_record<SVMNodeValueV>(words, &i));
+          ++opcodes[6];
+          break;
+        default:
+          FAIL() << "unexpected SVM opcode " << opcode << " in the gooch subgraph";
+      }
+    }
+    /* Normal and Incoming reads; the eight vector ops (normalize N/V/L, NdotL,
+     * view negation, reflect, light inversion, VdotR); diffuse mix + final add. */
+    EXPECT_EQ(opcodes[0], 2);
+    EXPECT_EQ(opcodes[1], 8);
+    EXPECT_EQ(opcodes[3], 2);
+    EXPECT_EQ(opcodes[4], 1);
+    const float3 actual = make_float3(
+        stack[out_offset], stack[out_offset + 1], stack[out_offset + 2]);
+    EXPECT_NEAR(actual.x, truth.color.x, 1e-5f);
+    EXPECT_NEAR(actual.y, truth.color.y, 1e-5f);
+    EXPECT_NEAR(actual.z, truth.color.z, 1e-5f);
+    EXPECT_NEAR(actual.x, c.reference.x, 1e-5f);
+    EXPECT_NEAR(actual.y, c.reference.y, 1e-5f);
+    EXPECT_NEAR(actual.z, c.reference.z, 1e-5f);
+  }
+  /* G0-G5 carry a specular highlight; G6/G7 are clamped to zero by
+   * max(dot(-L, R), 0) under the correct sign but not under the flipped one. */
+  EXPECT_EQ(specular_active, 6);
 }
 #endif
 

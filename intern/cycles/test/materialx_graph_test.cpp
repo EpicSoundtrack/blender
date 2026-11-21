@@ -10049,12 +10049,14 @@ TEST(materialx_graph, lowers_npr_facingratio_float)
   EXPECT_FLOAT_EQ(signed_faceforward->get_value2(), -1.0f);
 }
 
-/* Batch 13 CHECK: batch 12 (546587a2) flipped ND_viewdirection_vector3 to
- * -Incoming. ND_gooch_shade is certified and does NOT route through the
- * viewdirection node: its view vector is still GeometryNode "Incoming"
- * normalized directly (unchanged since batch 11, 754be29d), with no
- * negation anywhere on the V -> reflect path. Keep gooch's convention. */
-TEST(materialx_graph, gooch_shade_view_vector_unchanged_by_viewdirection_sign_flip)
+/* Batch 47: NG_gooch_shade (nprlib_ng.mtlx 50-112) reads <viewdirection
+ * space="world">, which points FROM the camera TO the shading point (the
+ * ND_viewdirection_vector3 lowering negates Incoming since batch 12). The
+ * batch 13 check pinned gooch's direct, un-negated Incoming; b66x-20261121
+ * measured Cycles equal to the analytic value with V negated, so the view
+ * vector is now -Incoming, normalized, feeding reflect(V, N). The only other
+ * negation on the path is the light inversion of reflect(-L, N). */
+TEST(materialx_graph, gooch_shade_view_vector_is_negated_incoming)
 {
   materialx::Node gooch{"Gooch", "ND_gooch_shade"};
   gooch.color3_inputs["warm_color"] = make_float3(0.8f, 0.7f, 0.4f);
@@ -10066,27 +10068,38 @@ TEST(materialx_graph, gooch_shade_view_vector_unchanged_by_viewdirection_sign_fl
   ShaderGraph graph;
   string error;
   ASSERT_TRUE(materialx::lower({{gooch}}, &graph, &error)) << error;
+  VectorMathNode *view = nullptr;
   VectorMathNode *unit_view = nullptr;
   VectorMathNode *reflect = nullptr;
+  int negations = 0;
   for (ShaderNode *node : graph.nodes) {
+    view = node->name == "Gooch.viewdir" ? dynamic_cast<VectorMathNode *>(node) : view;
     unit_view = node->name == "Gooch.unit_viewdir" ? dynamic_cast<VectorMathNode *>(node) :
                                                      unit_view;
     reflect = node->name == "Gooch.view_reflect" ? dynamic_cast<VectorMathNode *>(node) : reflect;
     if (auto *math = dynamic_cast<VectorMathNode *>(node)) {
-      /* The only negation is the light inversion of reflect(-L, N). */
       if (math->get_math_type() == NODE_VECTOR_MATH_SCALE && math->get_scale() == -1.0f) {
-        EXPECT_EQ(node->name, "Gooch.invert_lightdir");
+        ++negations;
+        EXPECT_TRUE(node->name == "Gooch.viewdir" || node->name == "Gooch.invert_lightdir")
+            << node->name;
       }
     }
   }
+  EXPECT_EQ(negations, 2);
+  ASSERT_NE(view, nullptr);
   ASSERT_NE(unit_view, nullptr);
   ASSERT_NE(reflect, nullptr);
-  EXPECT_EQ(unit_view->get_math_type(), NODE_VECTOR_MATH_NORMALIZE);
-  ShaderOutput *view_source = unit_view->input("Vector1")->link;
+  EXPECT_EQ(view->get_math_type(), NODE_VECTOR_MATH_SCALE);
+  EXPECT_FLOAT_EQ(view->get_scale(), -1.0f);
+  ShaderOutput *view_source = view->input("Vector1")->link;
   ASSERT_NE(view_source, nullptr);
   ASSERT_NE(dynamic_cast<GeometryNode *>(view_source->parent), nullptr);
   EXPECT_EQ(view_source->name(), "Incoming");
+  EXPECT_EQ(unit_view->get_math_type(), NODE_VECTOR_MATH_NORMALIZE);
+  EXPECT_EQ(unit_view->input("Vector1")->link, view->output("Vector"));
   EXPECT_EQ(reflect->input("Vector1")->link, unit_view->output("Vector"));
+  /* Incoming feeds nothing else in the gooch graph. */
+  EXPECT_EQ(view_source->links.size(), 1u);
 }
 
 TEST(materialx_graph, lowers_npr_gooch_shade_with_literal_controls)

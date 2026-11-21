@@ -18969,6 +18969,15 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       VectorMathNode *unit_normal = graph->create_node<VectorMathNode>();
       unit_normal->name = node.name + ".unit_normal";
       unit_normal->set_math_type(NODE_VECTOR_MATH_NORMALIZE);
+      /* NG_gooch_shade reads <viewdirection space="world">, which points FROM
+       * the camera TO the shading point. GeometryNode "Incoming" is sd->wi and
+       * points the other way, so V = -Incoming, exactly as the
+       * ND_viewdirection_vector3 lowering (batch 12). Without the negation
+       * reflect(V, N) mirrors the wrong way and the specular term is lost. */
+      VectorMathNode *view = graph->create_node<VectorMathNode>();
+      view->name = node.name + ".viewdir";
+      view->set_math_type(NODE_VECTOR_MATH_SCALE);
+      view->set_scale(-1.0f);
       VectorMathNode *unit_view = graph->create_node<VectorMathNode>();
       unit_view->name = node.name + ".unit_viewdir";
       unit_view->set_math_type(NODE_VECTOR_MATH_NORMALIZE);
@@ -19022,6 +19031,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       sum->set_fac(1.0f);
       for (ShaderNode *created : {static_cast<ShaderNode *>(geometry),
                                   static_cast<ShaderNode *>(unit_normal),
+                                  static_cast<ShaderNode *>(view),
                                   static_cast<ShaderNode *>(unit_view),
                                   static_cast<ShaderNode *>(unit_light),
                                   static_cast<ShaderNode *>(ndotl),
@@ -28176,6 +28186,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     if (node.nodedef == gooch_shade_id) {
       ShaderNode *geometry = lowered_nodes.at(node.name + ".geometry");
       ShaderNode *unit_normal = lowered_nodes.at(node.name + ".unit_normal");
+      ShaderNode *view = lowered_nodes.at(node.name + ".viewdir");
       ShaderNode *unit_view = lowered_nodes.at(node.name + ".unit_viewdir");
       ShaderNode *unit_light = lowered_nodes.at(node.name + ".unit_lightdir");
       ShaderNode *ndotl = lowered_nodes.at(node.name + ".NdotL");
@@ -28191,7 +28202,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       ShaderNode *specular_color = lowered_nodes.at(node.name + ".specular_color");
       ShaderNode *sum = lowered_nodes.at(node.name);
       graph->connect(geometry->output("Normal"), unit_normal->input("Vector1"));
-      graph->connect(geometry->output("Incoming"), unit_view->input("Vector1"));
+      /* V = -Incoming (camera -> shading point); see the creation above. */
+      graph->connect(geometry->output("Incoming"), view->input("Vector1"));
+      graph->connect(view->output("Vector"), unit_view->input("Vector1"));
       graph->connect(unit_normal->output("Vector"), ndotl->input("Vector1"));
       graph->connect(unit_light->output("Vector"), ndotl->input("Vector2"));
       graph->connect(ndotl->output("Value"), one_plus_ndotl->input("Value2"));
