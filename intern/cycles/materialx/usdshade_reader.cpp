@@ -6534,6 +6534,14 @@ bool read_hextilednormalmap_shader(const pxr::UsdShadeShader &source,
       }
     }
   }
+  /* The file holds vector (normal) data: MaterialX applies no color transform
+   * to a non-color image without an authored colorspace. An empty colorspace
+   * would lower to Cycles "auto", which decodes 8-bit files as sRGB, so an
+   * unauthored colorspace is raw data (as read_image_vector_controls and the
+   * latlongimage lowering already do). An authored colorspace is kept. */
+  if (colorspace.empty()) {
+    colorspace = "raw";
+  }
   tile.asset_inputs["file"] = file_path;
   tile.string_inputs["colorspace"] = colorspace;
 

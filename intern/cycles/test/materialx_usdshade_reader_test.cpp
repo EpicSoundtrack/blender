@@ -42,7 +42,10 @@
 #include "scene/scene.h"
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
+#include "util/color.h"
 #include "util/colorspace.h"
+#include "util/half.h"
+#include "util/image_metadata.h"
 #include "util/profiling.h"
 #include "util/stats.h"
 #include "materialx/sha256.h"
@@ -51693,6 +51696,141 @@ TEST(materialx_usdshade_reader, add_integer_varying_words_edge_battery)
     materialx::Graph graph;
     string error;
     EXPECT_FALSE(materialx::read_usdshade_graph(nonzero.probe.material, &graph, &error));
+  }
+}
+
+/* Batch 47 (b66x-20261121 side finding): ND_hextilednormalmap_vector3 reads
+ * vector (normal) data. MaterialX 1.39.4 applies no color transform to a
+ * non-color image without an authored colorspace, but the reader left the
+ * colorspace empty, which lowers to Cycles "auto" and decodes an 8-bit file
+ * as sRGB. Load an actual 8-bit file through Cycles' image metadata/pixel path
+ * with each lowered ImageTextureNode's colorspace: texel 128 must read
+ * 128/255 when unauthored or authored "raw", and the sRGB decode only when
+ * "srgb_texture" is authored. */
+TEST(materialx_usdshade_reader, hextilednormalmap_unauthored_colorspace_decodes_raw_texels)
+{
+  ColorSpaceManager::init_fallback_config();
+  const std::filesystem::path path = std::filesystem::temp_directory_path() /
+                                     "cycles_materialx_hextile_texel128.ppm";
+  {
+    std::ofstream file(path, std::ios::binary);
+    file << "P6\n1 1\n255\n";
+    const unsigned char pixel[] = {128, 64, 255};
+    file.write(reinterpret_cast<const char *>(pixel), sizeof(pixel));
+  }
+  struct Remove {
+    std::filesystem::path path;
+    ~Remove()
+    {
+      std::error_code error;
+      std::filesystem::remove(path, error);
+    }
+  } remove{path};
+  const float raw[3] = {128.0f / 255.0f, 64.0f / 255.0f, 1.0f};
+
+  /* Decode texel (0,0) the way ImageManager::load_image_metadata and
+   * OIIOImageLoader::load_pixels do, then as the kernel reads the storage. */
+  const auto decode = [&](const ustring colorspace, ustring *finalized) {
+    ImageMetaData metadata;
+    metadata.colorspace = colorspace;
+    EXPECT_TRUE(metadata.oiio_load_metadata(path.string()));
+    metadata.finalize(IMAGE_ALPHA_AUTO);
+    *finalized = metadata.colorspace;
+    std::vector<uint8_t> buffer(metadata.memory_size());
+    EXPECT_TRUE(metadata.oiio_load_pixels(path.string(), buffer.data()));
+    metadata.conform_pixels(buffer.data());
+    float3 texel = zero_float3();
+    switch (metadata.type) {
+      case IMAGE_DATA_TYPE_BYTE4: {
+        const uchar *p = buffer.data();
+        texel = make_float3(p[0], p[1], p[2]) / 255.0f;
+        if (metadata.is_compressible_as_srgb) {
+          texel = color_srgb_to_linear_v3(texel);
+        }
+        break;
+      }
+      case IMAGE_DATA_TYPE_HALF4: {
+        const half *p = reinterpret_cast<const half *>(buffer.data());
+        texel = make_float3(half_to_float(p[0]), half_to_float(p[1]), half_to_float(p[2]));
+        break;
+      }
+      case IMAGE_DATA_TYPE_FLOAT4: {
+        const float *p = reinterpret_cast<const float *>(buffer.data());
+        texel = make_float3(p[0], p[1], p[2]);
+        break;
+      }
+      default:
+        ADD_FAILURE() << "unexpected conformed image type " << int(metadata.type);
+    }
+    return texel;
+  };
+
+  for (const char *authored : {"", "raw", "srgb_texture"}) {
+    SCOPED_TRACE(authored);
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/HexNormal"));
+    pxr::UsdShadeShader hex = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken("Hex")));
+    hex.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_hextilednormalmap_vector3")));
+    pxr::UsdShadeInput file = hex.CreateInput(pxr::TfToken("file"),
+                                              pxr::SdfValueTypeNames->Asset);
+    file.Set(pxr::SdfAssetPath(path.string()));
+    if (authored[0] != '\0') {
+      file.GetAttr().SetColorSpace(pxr::TfToken(authored));
+    }
+    hex.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Vector3f);
+    pxr::UsdShadeShader surface = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken("Surface")));
+    surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_open_pbr_surface_surfaceshader")));
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface
+                    .CreateInput(pxr::TfToken("geometry_normal"),
+                                 pxr::SdfValueTypeNames->Vector3f)
+                    .ConnectToSource(hex.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx", pxr::TfToken::Immortal))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    const auto found = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                    [](const materialx::Node &node) {
+                                      return node.nodedef == "ND_hextilednormalmap_vector3";
+                                    });
+    ASSERT_NE(found, graph.nodes.end());
+    EXPECT_EQ(found->string_inputs.at("colorspace"),
+              authored[0] == '\0' ? string("raw") : string(authored));
+    ASSERT_TRUE(materialx::validate(graph));
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    int images = 0;
+    for (ShaderNode *node : lowered.nodes) {
+      ImageTextureNode *image = dynamic_cast<ImageTextureNode *>(node);
+      if (image == nullptr) {
+        continue;
+      }
+      ++images;
+      ustring finalized;
+      const float3 texel = decode(image->get_colorspace(), &finalized);
+      if (string(authored) == "srgb_texture") {
+        EXPECT_NE(image->get_colorspace(), u_colorspace_data);
+        EXPECT_NEAR(texel.x, color_srgb_to_linear(raw[0]), 2e-3f);
+        EXPECT_NEAR(texel.y, color_srgb_to_linear(raw[1]), 2e-3f);
+      }
+      else {
+        EXPECT_EQ(image->get_colorspace(), u_colorspace_data);
+        /* The loader keeps the texels as non-color data. (cycles_test runs on
+         * the fallback OCIO config, whose "auto" byte decode is not the sRGB
+         * curve Blender's config applies, so the colorspace the loader settles
+         * on is what discriminates here; the texel values pin raw decoding.) */
+        EXPECT_TRUE(ColorSpaceManager::colorspace_is_data(finalized)) << finalized.string();
+        EXPECT_FLOAT_EQ(texel.x, raw[0]);
+        EXPECT_FLOAT_EQ(texel.y, raw[1]);
+        EXPECT_FLOAT_EQ(texel.z, raw[2]);
+      }
+    }
+    EXPECT_EQ(images, 3);
   }
 }
 
