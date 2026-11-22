@@ -12,6 +12,7 @@
 #  include <pxr/base/plug/registry.h>
 #endif
 
+#include <algorithm>
 #include <array>
 #include <cctype>
 #include <climits>
@@ -29079,14 +29080,16 @@ bool is_supported_usd_preview_surface_input(const string &name)
  * libraries/bxdf/gltf_pbr.mtlx ND_gltf_pbr_surfaceshader nodedef: all 24
  * real inputs it declares. base_color, metallic, roughness, clearcoat,
  * clearcoat_roughness, ior, emissive, and emissive_strength are lowered to
- * real Cycles Principled BSDF equivalents (connectable); the rest are
+ * real Cycles Principled BSDF equivalents (connectable); sheen_color and
+ * sheen_roughness lower onto Principled sheen as an approximation, refused
+ * together with an active clearcoat (layer order); the rest are
  * admitted here as "known" real inputs but are further restricted below --
  * either to their inert default value (normal, tangent, occlusion,
  * transmission, specular, specular_color, alpha, alpha_mode, alpha_cutoff,
- * iridescence, sheen_color, clearcoat_normal, anisotropy_strength), or
+ * iridescence, clearcoat_normal, anisotropy_strength), or
  * accepted unconditionally because the real reference nodegraph never
  * wires them to the nodedef's "out" surfaceshader output at all
- * (iridescence_ior, iridescence_thickness, sheen_roughness,
+ * (iridescence_ior, iridescence_thickness,
  * anisotropy_rotation once their gating inputs are forced to their inert
  * default; thickness, attenuation_distance, attenuation_color, which only
  * ever feed a volume closure this surfaceshader-only nodedef never
@@ -32681,6 +32684,12 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                                  &emitted_color4_shaders, error_message) ||
       !read_float_terminal_input(surface, "emissive_strength", &parsed, &gltf_pbr_node,
                                  &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_color_terminal_input(surface, "sheen_color", &parsed, &gltf_pbr_node,
+                                 &has_supported_input, &emitted_float_shaders,
+                                 &emitted_color4_shaders, error_message) ||
+      !read_float_terminal_input(surface, "sheen_roughness", &parsed, &gltf_pbr_node,
+                                 &has_supported_input, &emitted_float_shaders,
                                  &emitted_color4_shaders, error_message))
   {
     return false;
@@ -32699,18 +32708,41 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                               "gltf_pbr", error_message) ||
       !require_default_int(surface, "alpha_mode", 0, "gltf_pbr", error_message) ||
       !require_default_float(surface, "iridescence", 0.0f, "gltf_pbr", error_message) ||
-      !require_default_color3(surface, "sheen_color", pxr::GfVec3f(0.0f, 0.0f, 0.0f),
-                              "gltf_pbr", error_message) ||
       !require_default_float(surface, "anisotropy_strength", 0.0f, "gltf_pbr", error_message))
   {
     return false;
   }
+  /* sheen_color / sheen_roughness lower onto Principled sheen as an
+   * approximation (graph.cpp gltf_pbr_sheen_active()). Sheen is active when
+   * sheen_color is connected or has a positive channel. The reference layers
+   * clearcoat over sheen over base, Cycles Principled layers sheen above the
+   * coat, so active sheen with a non-zero or connected clearcoat is refused
+   * rather than approximated. */
+  {
+    const auto sheen_value = gltf_pbr_node.color3_inputs.find("sheen_color");
+    const bool sheen_active =
+        gltf_pbr_node.links.contains("sheen_color") ||
+        (sheen_value != gltf_pbr_node.color3_inputs.end() &&
+         std::max({sheen_value->second.x, sheen_value->second.y, sheen_value->second.z}) >
+             0.0f);
+    const auto clearcoat_value = gltf_pbr_node.inputs.find("clearcoat");
+    const bool clearcoat_active = gltf_pbr_node.links.contains("clearcoat") ||
+                                  (clearcoat_value != gltf_pbr_node.inputs.end() &&
+                                   clearcoat_value->second != 0.0f);
+    if (sheen_active && clearcoat_active) {
+      set_error(error_message,
+                "gltf_pbr sheen_color with clearcoat has no faithful Cycles equivalent: the "
+                "reference layers clearcoat over sheen over base, Cycles Principled layers "
+                "sheen above the coat (refused, not approximated)");
+      return false;
+    }
+  }
   /* alpha, alpha_cutoff, iridescence_ior, iridescence_thickness,
-   * sheen_roughness, anisotropy_rotation are provably inert once their
+   * anisotropy_rotation are provably inert once their
    * gating inputs above are pinned to their real defaults; thickness,
    * attenuation_distance, attenuation_color feed a volume closure the
    * real reference nodegraph never wires to this nodedef's "out"
-   * surfaceshader output at all -- all six are admitted at any authored
+   * surfaceshader output at all -- all eight are admitted at any authored
    * value without further checks (see is_supported_gltf_pbr_input's
    * comment). */
   }

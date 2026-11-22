@@ -20951,6 +20951,359 @@ TEST(materialx_graph, lowers_gltf_pbr_defaults_with_no_authored_inputs)
   EXPECT_FLOAT_EQ(principled->get_emission_strength(), 0.0f);
 }
 
+namespace {
+
+/* Batch 50: the single PrincipledBsdfNode a gltf_pbr lowering produces. */
+PrincipledBsdfNode *gltf_principled(ShaderGraph &graph)
+{
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *p = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      EXPECT_EQ(principled, nullptr);
+      principled = p;
+    }
+  }
+  return principled;
+}
+
+/* Batch 49's kernel-function evaluator (defined below, same unnamed
+ * namespace): svm_math() per MathNode, ValueNode literal. */
+float if_select_eval(ShaderOutput *output);
+
+/* Expected Cycles microfiber roughness for gltf sheen_roughness sr, computed
+ * independently of graph.cpp: 0.7019 + 0.0859 * ln(max(sr^2, 0.005)),
+ * clamped to [0, 1]. */
+float gltf_sheen_expected_roughness(const float sr)
+{
+  return std::clamp(0.7019f + 0.0859f * std::log(std::max(sr * sr, 0.005f)), 0.0f, 1.0f);
+}
+
+materialx::Node gltf_sheen_surface()
+{
+  materialx::Node surface;
+  surface.name = "Gltf";
+  surface.nodedef = "ND_gltf_pbr_surfaceshader";
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  return surface;
+}
+
+}  // namespace
+
+TEST(materialx_graph, lowers_gltf_pbr_unauthored_base_inputs_to_gltf_nodedef_defaults)
+{
+  /* Batch 50 defect 1: ND_gltf_pbr_surfaceshader's own defaults
+   * (libraries/bxdf/gltf_pbr.mtlx) are base_color (1,1,1), metallic 1,
+   * roughness 1, not Principled's socket defaults (0.8 grey, 0, 0.5). The
+   * reader does not default-fill gltf_pbr, so the lowering must. */
+  materialx::Node surface;
+  surface.name = "Gltf";
+  surface.nodedef = "ND_gltf_pbr_surfaceshader";
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  ASSERT_TRUE(materialx::validate({{surface}}));
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+  PrincipledBsdfNode *principled = gltf_principled(graph);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->get_base_color(), make_float3(1.0f, 1.0f, 1.0f));
+  EXPECT_FLOAT_EQ(principled->get_metallic(), 1.0f);
+  EXPECT_FLOAT_EQ(principled->get_roughness(), 1.0f);
+}
+
+TEST(materialx_graph, lowers_gltf_pbr_emissive_strength_without_emissive_to_no_emission)
+{
+  /* Batch 50 defect 2: the reference emission is emissive * emissive_strength
+   * with emissive defaulting to (0,0,0). Principled's Emission Color
+   * defaults to white, so an authored emissive_strength alone must not leave
+   * that white in place. */
+  materialx::Node surface;
+  surface.name = "Gltf";
+  surface.nodedef = "ND_gltf_pbr_surfaceshader";
+  surface.inputs["emissive_strength"] = 2.5f;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+  PrincipledBsdfNode *principled = gltf_principled(graph);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->input("Emission Color")->link, nullptr);
+  EXPECT_EQ(principled->get_emission_color(), make_float3(0.0f, 0.0f, 0.0f));
+  EXPECT_FLOAT_EQ(principled->get_emission_strength(), 2.5f);
+}
+
+TEST(materialx_graph, lowers_gltf_pbr_linked_emissive_with_default_strength_when_unauthored)
+{
+  /* Batch 50 (found while fixing defect 2): emissive_strength defaults to 1
+   * for a LINKED emissive too, not only for a literal one. */
+  materialx::Node emissive;
+  emissive.name = "EmissiveSource";
+  emissive.nodedef = "ND_constant_color3";
+  emissive.color3_inputs["value"] = make_float3(0.4f, 0.3f, 0.2f);
+  emissive.outputs["out"] = materialx::Type::Color3;
+  materialx::Node surface;
+  surface.name = "Gltf";
+  surface.nodedef = "ND_gltf_pbr_surfaceshader";
+  surface.links["emissive"] = {"EmissiveSource", "out", materialx::Type::Color3};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  const materialx::Graph source{{emissive, surface}};
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower(source, &graph));
+  PrincipledBsdfNode *principled = gltf_principled(graph);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_NE(principled->input("Emission Color")->link, nullptr);
+  EXPECT_FLOAT_EQ(principled->get_emission_strength(), 1.0f);
+}
+
+TEST(materialx_graph, lowers_gltf_pbr_clearcoat_without_roughness_to_zero_coat_roughness)
+{
+  /* Batch 50 defect 3: clearcoat_roughness defaults to 0 in gltf_pbr.mtlx;
+   * Principled's Coat Roughness defaults to 0.03. */
+  materialx::Node surface;
+  surface.name = "Gltf";
+  surface.nodedef = "ND_gltf_pbr_surfaceshader";
+  surface.inputs["clearcoat"] = 0.5f;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+  PrincipledBsdfNode *principled = gltf_principled(graph);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.5f);
+  EXPECT_EQ(principled->get_coat_roughness(), 0.0f);
+}
+
+TEST(materialx_graph, lowers_gltf_pbr_literal_sheen_with_conty_kulla_roughness_remap)
+{
+  /* Batch 50: gltf_pbr sheen = Conty-Kulla sheen_bsdf (weight max(sheen_color),
+   * color sheen_color / max, roughness sheen_roughness^2). Principled sheen:
+   * Sheen Weight 1, Sheen Tint = sheen_color, Sheen Roughness = energy remap
+   * of sheen_roughness^2 (approximate lobe shape, as ND_sheen_bsdf).
+   * Absolute anchors: sr 0 -> ln(0.005) floor -> 0.246775; sr 0.5 -> r 0.25
+   * -> 0.582817; sr 1 -> 0.7019. Unauthored sr is the nodedef default 0. */
+  struct Case {
+    bool authored;
+    float sr;
+    float expected;
+  };
+  for (const Case &c : {Case{true, 0.0f, 0.246775f},
+                        Case{true, 0.5f, 0.582817f},
+                        Case{true, 1.0f, 0.7019f},
+                        Case{false, 0.0f, 0.246775f}})
+  {
+    SCOPED_TRACE(string(c.authored ? "sr " : "unauthored sr ") + std::to_string(c.sr));
+    EXPECT_NEAR(gltf_sheen_expected_roughness(c.sr), c.expected, 1e-5f);
+    materialx::Node surface = gltf_sheen_surface();
+    surface.color3_inputs["sheen_color"] = make_float3(0.3f, 0.2f, 0.1f);
+    if (c.authored) {
+      surface.inputs["sheen_roughness"] = c.sr;
+    }
+    ASSERT_TRUE(materialx::validate({{surface}}));
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+    PrincipledBsdfNode *principled = gltf_principled(graph);
+    ASSERT_NE(principled, nullptr);
+    EXPECT_FLOAT_EQ(principled->get_sheen_weight(), 1.0f);
+    EXPECT_EQ(principled->get_sheen_tint(), make_float3(0.3f, 0.2f, 0.1f));
+    EXPECT_NEAR(principled->get_sheen_roughness(), c.expected, 1e-5f);
+    EXPECT_EQ(principled->input("Sheen Weight")->link, nullptr);
+    EXPECT_EQ(principled->input("Sheen Tint")->link, nullptr);
+    EXPECT_EQ(principled->input("Sheen Roughness")->link, nullptr);
+    /* Clearcoat stays off (no sheen-over-coat ordering question). */
+    EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.0f);
+  }
+}
+
+TEST(materialx_graph, lowers_gltf_pbr_zero_sheen_color_to_no_sheen)
+{
+  /* Batch 50: genglsl mx_sheen_bsdf returns no sheen when max(sheen_color) <
+   * eps, so a zero (default) or non-positive sheen_color leaves Principled
+   * sheen off: Sheen Weight 0 (the kernel then allocates no sheen closure),
+   * nothing wired to the sheen sockets, no sheen helper nodes -- even with a
+   * linked sheen_roughness. */
+  materialx::Node roughness;
+  roughness.name = "SheenRoughness";
+  roughness.nodedef = "ND_constant_float";
+  roughness.inputs["value"] = 0.6f;
+  roughness.outputs["out"] = materialx::Type::Float;
+  for (const float3 color : {make_float3(0.0f, 0.0f, 0.0f), make_float3(-0.2f, 0.0f, -1.0f)}) {
+    for (const int roughness_mode : {0, 1, 2}) {
+      SCOPED_TRACE(std::to_string(color.x) + " roughness mode " + std::to_string(roughness_mode));
+      materialx::Node surface = gltf_sheen_surface();
+      surface.color3_inputs["sheen_color"] = color;
+      if (roughness_mode == 1) {
+        surface.inputs["sheen_roughness"] = 0.7f;
+      }
+      else if (roughness_mode == 2) {
+        surface.links["sheen_roughness"] = {"SheenRoughness", "out", materialx::Type::Float};
+      }
+      const materialx::Graph source{{roughness, surface}};
+      ASSERT_TRUE(materialx::validate(source));
+      ShaderGraph graph;
+      ASSERT_TRUE(materialx::lower(source, &graph));
+      PrincipledBsdfNode *principled = gltf_principled(graph);
+      ASSERT_NE(principled, nullptr);
+      EXPECT_EQ(principled->get_sheen_weight(), 0.0f);
+      EXPECT_EQ(principled->input("Sheen Weight")->link, nullptr);
+      EXPECT_EQ(principled->input("Sheen Tint")->link, nullptr);
+      EXPECT_EQ(principled->input("Sheen Roughness")->link, nullptr);
+      for (ShaderNode *node : graph.nodes) {
+        EXPECT_EQ(node->name.find("gltf_sheen"), string::npos) << node->name.string();
+      }
+    }
+  }
+  /* Unauthored sheen_color: the same. */
+  materialx::Node bare = gltf_sheen_surface();
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{bare}}, &graph));
+  PrincipledBsdfNode *principled = gltf_principled(graph);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->get_sheen_weight(), 0.0f);
+}
+
+TEST(materialx_graph, lowers_gltf_pbr_linked_sheen_color_and_roughness)
+{
+  /* Batch 50: a linked sheen_color makes sheen active (Weight 1) and feeds
+   * Sheen Tint; a linked sheen_roughness is squared by a registered MathNode
+   * (both operands the same source) and then remapped by the ND_sheen_bsdf
+   * graph form max(x, 0.005) -> ln -> clamp(0.0859 * y + 0.7019). The chain
+   * is evaluated with the kernel's own svm_math(). */
+  materialx::Node color;
+  color.name = "SheenColor";
+  color.nodedef = "ND_constant_color3";
+  color.color3_inputs["value"] = make_float3(0.5f, 0.4f, 0.3f);
+  color.outputs["out"] = materialx::Type::Color3;
+  for (const float sr : {0.0f, 0.5f, 1.0f}) {
+    SCOPED_TRACE(sr);
+    materialx::Node roughness;
+    roughness.name = "SheenRoughness";
+    roughness.nodedef = "ND_constant_float";
+    roughness.inputs["value"] = sr;
+    roughness.outputs["out"] = materialx::Type::Float;
+    materialx::Node surface = gltf_sheen_surface();
+    surface.links["sheen_color"] = {"SheenColor", "out", materialx::Type::Color3};
+    surface.links["sheen_roughness"] = {"SheenRoughness", "out", materialx::Type::Float};
+    const materialx::Graph source{{color, roughness, surface}};
+    ASSERT_TRUE(materialx::validate(source));
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower(source, &graph));
+    PrincipledBsdfNode *principled = gltf_principled(graph);
+    ASSERT_NE(principled, nullptr);
+    EXPECT_FLOAT_EQ(principled->get_sheen_weight(), 1.0f);
+    ASSERT_NE(principled->input("Sheen Tint")->link, nullptr);
+    EXPECT_EQ(principled->input("Sheen Tint")->link->parent->name.find("gltf_sheen"),
+              string::npos);
+
+    const ShaderOutput *link = principled->input("Sheen Roughness")->link;
+    ASSERT_NE(link, nullptr);
+    auto *map = dynamic_cast<MathNode *>(link->parent);
+    ASSERT_NE(map, nullptr);
+    EXPECT_EQ(map->name, "Gltf.gltf_sheen.conty_kulla_microfiber_roughness");
+    EXPECT_EQ(map->get_math_type(), NODE_MATH_MULTIPLY_ADD);
+    EXPECT_TRUE(map->get_use_clamp());
+    EXPECT_FLOAT_EQ(map->get_value2(), 0.0859f);
+    EXPECT_FLOAT_EQ(map->get_value3(), 0.7019f);
+    ASSERT_NE(map->input("Value1")->link, nullptr);
+    auto *log = dynamic_cast<MathNode *>(map->input("Value1")->link->parent);
+    ASSERT_NE(log, nullptr);
+    EXPECT_EQ(log->get_math_type(), NODE_MATH_LOGARITHM);
+    ASSERT_NE(log->input("Value1")->link, nullptr);
+    auto *floor = dynamic_cast<MathNode *>(log->input("Value1")->link->parent);
+    ASSERT_NE(floor, nullptr);
+    EXPECT_EQ(floor->get_math_type(), NODE_MATH_MAXIMUM);
+    EXPECT_FLOAT_EQ(floor->get_value2(), 0.005f);
+    ASSERT_NE(floor->input("Value1")->link, nullptr);
+    auto *sq = dynamic_cast<MathNode *>(floor->input("Value1")->link->parent);
+    ASSERT_NE(sq, nullptr);
+    EXPECT_EQ(sq->name, "Gltf.gltf_sheen_roughness_sq");
+    EXPECT_EQ(sq->get_math_type(), NODE_MATH_MULTIPLY);
+    ASSERT_NE(sq->input("Value1")->link, nullptr);
+    EXPECT_EQ(sq->input("Value1")->link, sq->input("Value2")->link);
+    EXPECT_EQ(sq->input("Value1")->link->parent->name.find("gltf_sheen"), string::npos);
+    /* Value: unclamped svm_math chain; every case lies inside [0, 1]. */
+    EXPECT_NEAR(if_select_eval(link->parent->output("Value")),
+                gltf_sheen_expected_roughness(sr),
+                1e-5f);
+  }
+  {
+    /* Linked colour with a literal roughness: literal remap, colour wired. */
+    materialx::Node surface = gltf_sheen_surface();
+    surface.links["sheen_color"] = {"SheenColor", "out", materialx::Type::Color3};
+    surface.inputs["sheen_roughness"] = 0.5f;
+    const materialx::Graph source{{color, surface}};
+    ASSERT_TRUE(materialx::validate(source));
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower(source, &graph));
+    PrincipledBsdfNode *principled = gltf_principled(graph);
+    ASSERT_NE(principled, nullptr);
+    EXPECT_FLOAT_EQ(principled->get_sheen_weight(), 1.0f);
+    EXPECT_NE(principled->input("Sheen Tint")->link, nullptr);
+    EXPECT_EQ(principled->input("Sheen Roughness")->link, nullptr);
+    EXPECT_NEAR(principled->get_sheen_roughness(), 0.582817f, 1e-5f);
+  }
+}
+
+TEST(materialx_graph, validates_gltf_pbr_sheen_link_types_and_refuses_sheen_with_clearcoat)
+{
+  /* Batch 50: sheen_color must be a color3 link or literal, sheen_roughness a
+   * float. Active sheen (linked, or a literal with a positive channel)
+   * together with a non-zero or linked clearcoat is refused: the reference
+   * layers clearcoat over sheen, Principled layers sheen over the coat. */
+  materialx::Node color;
+  color.name = "C";
+  color.nodedef = "ND_constant_color3";
+  color.color3_inputs["value"] = make_float3(0.5f, 0.4f, 0.3f);
+  color.outputs["out"] = materialx::Type::Color3;
+  materialx::Node scalar;
+  scalar.name = "F";
+  scalar.nodedef = "ND_constant_float";
+  scalar.inputs["value"] = 0.5f;
+  scalar.outputs["out"] = materialx::Type::Float;
+  {
+    materialx::Node surface = gltf_sheen_surface();
+    surface.links["sheen_color"] = {"F", "out", materialx::Type::Float};
+    EXPECT_FALSE(materialx::validate({{color, scalar, surface}}));
+  }
+  {
+    materialx::Node surface = gltf_sheen_surface();
+    surface.color3_inputs["sheen_color"] = make_float3(0.5f, 0.5f, 0.5f);
+    surface.links["sheen_roughness"] = {"C", "out", materialx::Type::Color3};
+    EXPECT_FALSE(materialx::validate({{color, scalar, surface}}));
+  }
+  {
+    /* Both a link and a literal for the same field. */
+    materialx::Node surface = gltf_sheen_surface();
+    surface.color3_inputs["sheen_color"] = make_float3(0.5f, 0.5f, 0.5f);
+    surface.links["sheen_color"] = {"C", "out", materialx::Type::Color3};
+    EXPECT_FALSE(materialx::validate({{color, scalar, surface}}));
+  }
+  enum Mode { Off, Literal, Linked };
+  for (const Mode sheen : {Off, Literal, Linked}) {
+    for (const Mode clearcoat : {Off, Literal, Linked}) {
+      SCOPED_TRACE(std::to_string(int(sheen)) + "/" + std::to_string(int(clearcoat)));
+      materialx::Node surface = gltf_sheen_surface();
+      if (sheen == Off) {
+        surface.color3_inputs["sheen_color"] = make_float3(0.0f, 0.0f, 0.0f);
+      }
+      else if (sheen == Literal) {
+        surface.color3_inputs["sheen_color"] = make_float3(0.0f, 0.01f, 0.0f);
+      }
+      else {
+        surface.links["sheen_color"] = {"C", "out", materialx::Type::Color3};
+      }
+      if (clearcoat == Off) {
+        surface.inputs["clearcoat"] = 0.0f;
+      }
+      else if (clearcoat == Literal) {
+        surface.inputs["clearcoat"] = 0.25f;
+      }
+      else {
+        surface.links["clearcoat"] = {"F", "out", materialx::Type::Float};
+      }
+      const materialx::Graph source{{color, scalar, surface}};
+      const bool refused = sheen != Off && clearcoat != Off;
+      EXPECT_EQ(materialx::validate(source), !refused);
+    }
+  }
+}
+
 /* ======================================================================
  * BSDF closure-producer leaves: real Cycles closure nodes for
  * ND_oren_nayar_diffuse_bsdf, ND_translucent_bsdf, ND_sheen_bsdf,

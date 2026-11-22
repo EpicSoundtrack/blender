@@ -1085,8 +1085,14 @@ constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshad
  *  real inputs). Same delivery-phase scoping rationale as
  *  usd_preview_surface_id above: base_color, metallic, roughness,
  *  clearcoat, clearcoat_roughness, ior, emissive, emissive_strength map
- *  directly onto Principled BSDF; transmission, specular/specular_color,
- *  sheen, iridescence, anisotropy, alpha MASK/BLEND modes, and connected
+ *  directly onto Principled BSDF, with the gltf_pbr nodedef defaults applied
+ *  where they differ from Principled's socket defaults. sheen_color /
+ *  sheen_roughness lower onto Principled sheen as an APPROXIMATION (see
+ *  gltf_pbr_sheen_active()): the reference sheen_bsdf is Conty-Kulla,
+ *  Cycles' is microfiber, bridged by the energy-matched roughness remap also
+ *  used by ND_sheen_bsdf; sheen together with a clearcoat stays fail-closed
+ *  because the layer order differs. transmission, specular/specular_color,
+ *  iridescence, anisotropy, alpha MASK/BLEND modes, and connected
  *  normal/tangent/clearcoat_normal have no faithful Cycles equivalent yet
  *  and are admitted only at their inert default value. thickness /
  *  attenuation_distance / attenuation_color feed a volume closure that the
@@ -3233,6 +3239,44 @@ float sheen_microfiber_literal_roughness(const Node &node)
   }
   return sheen_uses_conty_kulla(node) ? sheen_conty_kulla_microfiber_roughness(roughness) :
                                         roughness;
+}
+
+/* ND_gltf_pbr_surfaceshader sheen (gltf_pbr.mtlx, MaterialX 1.39.4): a
+ * Conty-Kulla sheen_bsdf with weight = max(sheen_color), color =
+ * sheen_color / max(sheen_color) and roughness = sheen_roughness^2, layered
+ * over the base. Lowered onto Principled sheen as Sheen Weight 1, Sheen
+ * Tint = sheen_color (closure weight = weight * color = sheen_color, with no
+ * divide) and Sheen Roughness = the Conty-Kulla -> microfiber energy remap of
+ * sheen_roughness^2. Colour, weight and the layering form
+ * (1 - max(sheen_color) * albedo) match the reference; the lobe shape does
+ * not (the approximation ND_sheen_bsdf already uses, see
+ * sheen_conty_kulla_microfiber_roughness()). Cycles clamps a negative tint
+ * channel to 0; the reference does not.
+ *
+ * Sheen is active when sheen_color is linked or is a literal with a positive
+ * channel: genglsl mx_sheen_bsdf returns no sheen for weight < eps, so the
+ * zero default means no sheen and leaves Principled sheen off.
+ *
+ * The reference layers clearcoat over sheen over base; Principled layers
+ * sheen above the coat. Active sheen with a non-zero or linked clearcoat is
+ * therefore refused (fail-closed), not approximated. */
+bool gltf_pbr_sheen_active(const Node &node)
+{
+  if (node.links.contains("sheen_color")) {
+    return true;
+  }
+  const auto color = node.color3_inputs.find("sheen_color");
+  return color != node.color3_inputs.end() &&
+         std::max({color->second.x, color->second.y, color->second.z}) > 0.0f;
+}
+
+bool gltf_pbr_clearcoat_active(const Node &node)
+{
+  if (node.links.contains("clearcoat")) {
+    return true;
+  }
+  const auto clearcoat = node.inputs.find("clearcoat");
+  return clearcoat != node.inputs.end() && clearcoat->second != 0.0f;
 }
 
 bool is_matrix33_conditional(const string &nodedef)
@@ -12631,10 +12675,11 @@ bool validate(const Graph &source,
 
     /* Real ND_gltf_pbr_surfaceshader validation. Same delivery-phase
      * rationale as ND_UsdPreviewSurface_surfaceshader above:
-     * usdshade_reader.cpp only ever stores the eight fields listed here
+     * usdshade_reader.cpp only ever stores the ten fields listed here
      * into a node of this nodedef; every other real input on the 24-input
      * gltf_pbr nodedef is checked at admission time to be absent or inert
-     * and is never stored. */
+     * and is never stored. Active sheen with an active clearcoat is refused
+     * (layer order; see gltf_pbr_sheen_active()). */
     if (node.nodedef == gltf_pbr_id) {
       const auto output = node.outputs.find("out");
       if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
@@ -12646,9 +12691,14 @@ bool validate(const Graph &source,
       {
         return false;
       }
-      static const char *const color_fields[] = {"base_color", "emissive"};
-      static const char *const float_fields[] = {
-          "metallic", "roughness", "clearcoat", "clearcoat_roughness", "ior", "emissive_strength"};
+      static const char *const color_fields[] = {"base_color", "emissive", "sheen_color"};
+      static const char *const float_fields[] = {"metallic",
+                                                 "roughness",
+                                                 "clearcoat",
+                                                 "clearcoat_roughness",
+                                                 "ior",
+                                                 "emissive_strength",
+                                                 "sheen_roughness"};
       size_t link_count = 0, color_val_count = 0, float_val_count = 0;
       for (const char *field : color_fields) {
         const auto link = node.links.find(field);
@@ -12681,6 +12731,9 @@ bool validate(const Graph &source,
       if (node.links.size() != link_count || node.color3_inputs.size() != color_val_count ||
           node.inputs.size() != float_val_count)
       {
+        return false;
+      }
+      if (gltf_pbr_sheen_active(node) && gltf_pbr_clearcoat_active(node)) {
         return false;
       }
       continue;
@@ -26775,6 +26828,16 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
          * libraries/bxdf/gltf_pbr.mtlx nodedef. See gltf_pbr_id's comment
          * above for scope. */
         PrincipledBsdfNode *principled = graph->create_node<PrincipledBsdfNode>();
+        /* The reader does not default-fill gltf_pbr, so unauthored inputs
+         * take the gltf_pbr nodedef defaults here wherever they differ from
+         * Principled's socket defaults: base_color (1,1,1) not 0.8 grey,
+         * metallic 1 not 0, roughness 1 not 0.5, clearcoat_roughness 0 not
+         * 0.03, emissive (0,0,0) not white. A link overrides the socket. */
+        principled->set_base_color(make_float3(1.0f, 1.0f, 1.0f));
+        principled->set_metallic(1.0f);
+        principled->set_roughness(1.0f);
+        principled->set_coat_roughness(0.0f);
+        principled->set_emission_color(zero_float3());
         if (const auto input = node.color3_inputs.find("base_color");
             input != node.color3_inputs.end())
         {
@@ -26817,9 +26880,37 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
            * then let an authored value below override it. */
           principled->set_emission_strength(1.0f);
         }
+        else if (node.links.contains("emissive")) {
+          /* Same real default product for a linked emissive. */
+          principled->set_emission_strength(1.0f);
+        }
         if (const auto input = node.inputs.find("emissive_strength"); input != node.inputs.end())
         {
           principled->set_emission_strength(input->second);
+        }
+        if (gltf_pbr_sheen_active(node)) {
+          /* Approximate in lobe shape; see gltf_pbr_sheen_active(). A linked
+           * sheen_color / sheen_roughness is wired in the connect phase, a
+           * linked roughness through the MathNode registered here that
+           * squares it before the remap. */
+          principled->set_sheen_weight(1.0f);
+          if (const auto input = node.color3_inputs.find("sheen_color");
+              input != node.color3_inputs.end())
+          {
+            principled->set_sheen_tint(input->second);
+          }
+          if (node.links.contains("sheen_roughness")) {
+            MathNode *roughness_sq = graph->create_node<MathNode>();
+            roughness_sq->name = node.name + ".gltf_sheen_roughness_sq";
+            roughness_sq->set_math_type(NODE_MATH_MULTIPLY);
+            lowered_nodes.emplace(roughness_sq->name, roughness_sq);
+          }
+          else {
+            const auto input = node.inputs.find("sheen_roughness");
+            const float roughness = input != node.inputs.end() ? input->second : 0.0f;
+            principled->set_sheen_roughness(
+                sheen_conty_kulla_microfiber_roughness(roughness * roughness));
+          }
         }
         lowered = principled;
       }
@@ -33640,6 +33731,22 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       if (const auto link = node.links.find("emissive_strength"); link != node.links.end()) {
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                        surface_node->input("Emission Strength"));
+      }
+      if (gltf_pbr_sheen_active(node)) {
+        if (const auto link = node.links.find("sheen_color"); link != node.links.end()) {
+          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
+                         surface_node->input("Sheen Tint"));
+        }
+        if (const auto link = node.links.find("sheen_roughness"); link != node.links.end()) {
+          ShaderNode *roughness_sq = lowered_nodes.at(node.name + ".gltf_sheen_roughness_sq");
+          ShaderOutput *roughness = lowered_output(link->second, nodes_by_name, lowered_nodes);
+          graph->connect(roughness, roughness_sq->input("Value1"));
+          graph->connect(roughness, roughness_sq->input("Value2"));
+          connect_sheen_conty_kulla_roughness(graph,
+                                              node.name + ".gltf_sheen",
+                                              roughness_sq->output("Value"),
+                                              surface_node->input("Sheen Roughness"));
+        }
       }
       graph->connect(surface_node->output("BSDF"), graph->output()->input("Surface"));
       continue;

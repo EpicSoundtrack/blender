@@ -31524,6 +31524,216 @@ TEST(materialx_usdshade_reader, rejects_unsupported_gltf_pbr_input)
       << error;
 }
 
+namespace {
+
+/* Batch 50: gltf_pbr sheen fixtures. A standard_surface_to_gltf_pbr "t"
+ * optionally feeds gltf_pbr "g" (b80x W shape: base_color/metallic/roughness
+ * and sheen_color wired to the translation outputs). */
+struct GltfSheenStage {
+  pxr::UsdStageRefPtr stage;
+  pxr::UsdShadeMaterial material;
+  pxr::UsdShadeShader translate;
+  pxr::UsdShadeShader gltf;
+};
+
+GltfSheenStage gltf_sheen_stage(const bool with_translate)
+{
+  GltfSheenStage s;
+  s.stage = pxr::UsdStage::CreateInMemory();
+  s.material = pxr::UsdShadeMaterial::Define(s.stage, pxr::SdfPath("/Looks/SheenMat"));
+  s.gltf = pxr::UsdShadeShader::Define(s.stage, pxr::SdfPath("/Looks/SheenMat/g"));
+  s.gltf.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_gltf_pbr_surfaceshader")));
+  s.gltf.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+  if (with_translate) {
+    s.translate = pxr::UsdShadeShader::Define(s.stage, pxr::SdfPath("/Looks/SheenMat/t"));
+    s.translate.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_standard_surface_to_gltf_pbr")));
+    s.translate.CreateInput(pxr::TfToken("base_color"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.8f, 0.6f, 0.4f));
+    s.translate.CreateInput(pxr::TfToken("specular_roughness"), pxr::SdfValueTypeNames->Float)
+        .Set(0.36f);
+    s.translate.CreateInput(pxr::TfToken("sheen_color"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(1.0f, 1.0f, 1.0f));
+    s.translate.CreateInput(pxr::TfToken("sheen_roughness"), pxr::SdfValueTypeNames->Float)
+        .Set(0.3f);
+    for (const char *name : {"base_color_out", "sheen_color_out"}) {
+      s.translate.CreateOutput(pxr::TfToken(name), pxr::SdfValueTypeNames->Color3f);
+    }
+    for (const char *name : {"metallic_out", "roughness_out", "sheen_roughness_out"}) {
+      s.translate.CreateOutput(pxr::TfToken(name), pxr::SdfValueTypeNames->Float);
+    }
+    for (const auto &[input, output, type] :
+         {std::tuple{"base_color", "base_color_out", pxr::SdfValueTypeNames->Color3f},
+          std::tuple{"metallic", "metallic_out", pxr::SdfValueTypeNames->Float},
+          std::tuple{"roughness", "roughness_out", pxr::SdfValueTypeNames->Float},
+          std::tuple{"sheen_color", "sheen_color_out", pxr::SdfValueTypeNames->Color3f}})
+    {
+      EXPECT_TRUE(s.gltf.CreateInput(pxr::TfToken(input), type)
+                      .ConnectToSource(s.translate.ConnectableAPI(), pxr::TfToken(output)));
+    }
+  }
+  const pxr::TfToken mtlx_render_context("mtlx", pxr::TfToken::Immortal);
+  EXPECT_TRUE(s.material.CreateSurfaceOutput(mtlx_render_context)
+                  .ConnectToSource(s.gltf.ConnectableAPI(), pxr::TfToken("out")));
+  return s;
+}
+
+PrincipledBsdfNode *gltf_sheen_principled(ShaderGraph &graph)
+{
+  PrincipledBsdfNode *principled = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *p = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      EXPECT_EQ(principled, nullptr);
+      principled = p;
+    }
+  }
+  return principled;
+}
+
+}  // namespace
+
+TEST(materialx_usdshade_reader, admits_gltf_pbr_literal_sheen_and_lowers_principled_sheen)
+{
+  /* Batch 50: literal sheen_color / sheen_roughness are read (no longer
+   * refused) and lower onto Principled sheen: Weight 1, Tint = sheen_color,
+   * Roughness = 0.7019 + 0.0859 * ln(max(0.5^2, 0.005)) = 0.582817. */
+  GltfSheenStage s = gltf_sheen_stage(false);
+  s.gltf.CreateInput(pxr::TfToken("sheen_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.3f, 0.2f, 0.1f));
+  s.gltf.CreateInput(pxr::TfToken("sheen_roughness"), pxr::SdfValueTypeNames->Float).Set(0.5f);
+  s.gltf.CreateInput(pxr::TfToken("clearcoat"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &source, &error)) << error;
+  ASSERT_EQ(source.nodes.size(), 1);
+  EXPECT_EQ(source.nodes[0].color3_inputs.at("sheen_color"), make_float3(0.3f, 0.2f, 0.1f));
+  EXPECT_FLOAT_EQ(source.nodes[0].inputs.at("sheen_roughness"), 0.5f);
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  PrincipledBsdfNode *principled = gltf_sheen_principled(lowered);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_FLOAT_EQ(principled->get_sheen_weight(), 1.0f);
+  EXPECT_EQ(principled->get_sheen_tint(), make_float3(0.3f, 0.2f, 0.1f));
+  EXPECT_NEAR(principled->get_sheen_roughness(), 0.582817f, 1e-5f);
+}
+
+TEST(materialx_usdshade_reader, admits_gltf_pbr_zero_sheen_with_clearcoat)
+{
+  /* Batch 50: a literal zero sheen_color is no sheen, so a clearcoat beside
+   * it raises no layer-order question; sheen_roughness alone is inert. */
+  GltfSheenStage s = gltf_sheen_stage(false);
+  s.gltf.CreateInput(pxr::TfToken("sheen_color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.0f, 0.0f, 0.0f));
+  s.gltf.CreateInput(pxr::TfToken("sheen_roughness"), pxr::SdfValueTypeNames->Float).Set(0.8f);
+  s.gltf.CreateInput(pxr::TfToken("clearcoat"), pxr::SdfValueTypeNames->Float).Set(0.4f);
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &source, &error)) << error;
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered));
+  PrincipledBsdfNode *principled = gltf_sheen_principled(lowered);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_EQ(principled->get_sheen_weight(), 0.0f);
+  EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.4f);
+}
+
+TEST(materialx_usdshade_reader, rejects_gltf_pbr_sheen_with_clearcoat_naming_layer_order)
+{
+  /* Batch 50 root decision: active sheen with a non-zero or connected
+   * clearcoat is refused (reference: clearcoat over sheen over base;
+   * Principled: sheen above the coat), with a message naming the layer
+   * order, and the output graph is left untouched. */
+  for (const bool connected_sheen : {false, true}) {
+    for (const bool connected_clearcoat : {false, true}) {
+      SCOPED_TRACE(std::to_string(connected_sheen) + "/" + std::to_string(connected_clearcoat));
+      GltfSheenStage s = gltf_sheen_stage(connected_sheen || connected_clearcoat);
+      if (!connected_sheen) {
+        if (s.translate) {
+          ASSERT_TRUE(s.gltf.GetPrim().RemoveProperty(pxr::TfToken("inputs:sheen_color")));
+        }
+        s.gltf.CreateInput(pxr::TfToken("sheen_color"), pxr::SdfValueTypeNames->Color3f)
+            .Set(pxr::GfVec3f(0.0f, 0.0f, 0.02f));
+      }
+      if (connected_clearcoat) {
+        s.translate.CreateOutput(pxr::TfToken("clearcoat_out"), pxr::SdfValueTypeNames->Float);
+        ASSERT_TRUE(
+            s.gltf.CreateInput(pxr::TfToken("clearcoat"), pxr::SdfValueTypeNames->Float)
+                .ConnectToSource(s.translate.ConnectableAPI(), pxr::TfToken("clearcoat_out")));
+      }
+      else {
+        s.gltf.CreateInput(pxr::TfToken("clearcoat"), pxr::SdfValueTypeNames->Float).Set(0.3f);
+      }
+      materialx::Graph graph;
+      string error;
+      EXPECT_FALSE(materialx::read_usdshade_graph(s.material, &graph, &error));
+      EXPECT_NE(error.find("gltf_pbr sheen_color with clearcoat"), string::npos) << error;
+      EXPECT_NE(error.find("clearcoat over sheen over base"), string::npos) << error;
+      EXPECT_NE(error.find("sheen above the coat"), string::npos) << error;
+      EXPECT_TRUE(graph.nodes.empty());
+    }
+  }
+}
+
+TEST(materialx_usdshade_reader, batch50_standard_surface_to_gltf_pbr_sheen_color_feeds_gltf_sheen)
+{
+  /* b80x W0/W01/W5 shape: gltf_pbr sheen_color <- standard_surface_to_gltf_pbr
+   * sheen_color_out (= sheen_color * sheen), clearcoat literal 0. Connected
+   * sheen is active even when the translated value is 0 (W0): Principled
+   * then gets a zero tint, i.e. no sheen closure at render time. Connected
+   * sheen_roughness <- sheen_roughness_out is squared and remapped. */
+  for (const float sheen : {0.0f, 0.01f, 5.0f}) {
+    for (const bool connected_roughness : {false, true}) {
+      SCOPED_TRACE(std::to_string(sheen) + (connected_roughness ? " linked sr" : " default sr"));
+      GltfSheenStage s = gltf_sheen_stage(true);
+      s.translate.CreateInput(pxr::TfToken("sheen"), pxr::SdfValueTypeNames->Float).Set(sheen);
+      s.gltf.CreateInput(pxr::TfToken("clearcoat"), pxr::SdfValueTypeNames->Float).Set(0.0f);
+      if (connected_roughness) {
+        ASSERT_TRUE(s.gltf.CreateInput(pxr::TfToken("sheen_roughness"),
+                                       pxr::SdfValueTypeNames->Float)
+                        .ConnectToSource(s.translate.ConnectableAPI(),
+                                         pxr::TfToken("sheen_roughness_out")));
+      }
+      materialx::Graph source;
+      string error;
+      ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &source, &error)) << error;
+      ASSERT_TRUE(materialx::validate(source));
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower(source, &lowered));
+      PrincipledBsdfNode *principled = gltf_sheen_principled(lowered);
+      ASSERT_NE(principled, nullptr);
+      EXPECT_FLOAT_EQ(principled->get_sheen_weight(), 1.0f);
+      EXPECT_NE(principled->input("Sheen Tint")->link, nullptr);
+      EXPECT_NE(principled->input("Base Color")->link, nullptr);
+      EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.0f);
+      if (connected_roughness) {
+        const ShaderOutput *link = principled->input("Sheen Roughness")->link;
+        ASSERT_NE(link, nullptr);
+        EXPECT_NE(link->parent->name.find("gltf_sheen.conty_kulla_microfiber_roughness"),
+                  string::npos)
+            << link->parent->name.string();
+        bool squared = false;
+        for (ShaderNode *node : lowered.nodes) {
+          if (auto *math = dynamic_cast<MathNode *>(node)) {
+            if (math->name.find("gltf_sheen_roughness_sq") != string::npos) {
+              squared = math->get_math_type() == NODE_MATH_MULTIPLY &&
+                        math->input("Value1")->link != nullptr &&
+                        math->input("Value1")->link == math->input("Value2")->link;
+            }
+          }
+        }
+        EXPECT_TRUE(squared);
+      }
+      else {
+        EXPECT_EQ(principled->input("Sheen Roughness")->link, nullptr);
+        /* gltf default sheen_roughness 0 -> floor 0.005 -> 0.246775. */
+        EXPECT_NEAR(principled->get_sheen_roughness(), 0.246775f, 1e-5f);
+      }
+    }
+  }
+}
+
 TEST(materialx_usdshade_reader, rejects_unconnected_volume_output_but_admits_valid_displacement)
 {
   /* An authored-but-not-connected volume output is optional (mirrors the
