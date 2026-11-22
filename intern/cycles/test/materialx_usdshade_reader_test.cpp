@@ -31639,6 +31639,47 @@ TEST(materialx_usdshade_reader, admits_gltf_pbr_zero_sheen_with_clearcoat)
   EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.4f);
 }
 
+TEST(materialx_usdshade_reader, admits_gltf_pbr_inert_sheen_roughness_when_sheen_is_off)
+{
+  /* Batch 50 (review): with sheen off, sheen_roughness stays inert and is not
+   * read, so even a connected or valueless one admits as before; with sheen
+   * active the same connected roughness is read. */
+  for (const bool active : {false, true}) {
+    SCOPED_TRACE(active);
+    GltfSheenStage s = gltf_sheen_stage(true);
+    ASSERT_TRUE(s.gltf.GetPrim().RemoveProperty(pxr::TfToken("inputs:sheen_color")));
+    s.gltf.CreateInput(pxr::TfToken("sheen_color"), pxr::SdfValueTypeNames->Color3f)
+        .Set(active ? pxr::GfVec3f(0.2f, 0.2f, 0.2f) : pxr::GfVec3f(0.0f, 0.0f, 0.0f));
+    ASSERT_TRUE(
+        s.gltf.CreateInput(pxr::TfToken("sheen_roughness"), pxr::SdfValueTypeNames->Float)
+            .ConnectToSource(s.translate.ConnectableAPI(), pxr::TfToken("sheen_roughness_out")));
+    materialx::Graph source;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &source, &error)) << error;
+    ASSERT_TRUE(materialx::validate(source));
+    const materialx::Node *gltf = nullptr;
+    for (const materialx::Node &node : source.nodes) {
+      gltf = node.nodedef == "ND_gltf_pbr_surfaceshader" ? &node : gltf;
+    }
+    ASSERT_NE(gltf, nullptr);
+    EXPECT_EQ(gltf->links.contains("sheen_roughness"), active);
+    ShaderGraph lowered;
+    ASSERT_TRUE(materialx::lower(source, &lowered));
+    PrincipledBsdfNode *principled = gltf_sheen_principled(lowered);
+    ASSERT_NE(principled, nullptr);
+    EXPECT_EQ(principled->get_sheen_weight(), active ? 1.0f : 0.0f);
+    EXPECT_EQ(principled->input("Sheen Roughness")->link != nullptr, active);
+  }
+  {
+    /* Valueless sheen_roughness declaration with sheen off. */
+    GltfSheenStage s = gltf_sheen_stage(false);
+    s.gltf.CreateInput(pxr::TfToken("sheen_roughness"), pxr::SdfValueTypeNames->Float);
+    materialx::Graph source;
+    string error;
+    EXPECT_TRUE(materialx::read_usdshade_graph(s.material, &source, &error)) << error;
+  }
+}
+
 TEST(materialx_usdshade_reader, rejects_gltf_pbr_sheen_with_clearcoat_naming_layer_order)
 {
   /* Batch 50 root decision: active sheen with a non-zero or connected

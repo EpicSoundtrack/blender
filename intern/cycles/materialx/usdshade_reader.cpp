@@ -32687,9 +32687,6 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                                  &emitted_color4_shaders, error_message) ||
       !read_color_terminal_input(surface, "sheen_color", &parsed, &gltf_pbr_node,
                                  &has_supported_input, &emitted_float_shaders,
-                                 &emitted_color4_shaders, error_message) ||
-      !read_float_terminal_input(surface, "sheen_roughness", &parsed, &gltf_pbr_node,
-                                 &has_supported_input, &emitted_float_shaders,
                                  &emitted_color4_shaders, error_message))
   {
     return false;
@@ -32717,7 +32714,8 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * sheen_color is connected or has a positive channel. The reference layers
    * clearcoat over sheen over base, Cycles Principled layers sheen above the
    * coat, so active sheen with a non-zero or connected clearcoat is refused
-   * rather than approximated. */
+   * rather than approximated. sheen_roughness is read only for active sheen;
+   * otherwise it stays inert and is admitted unchecked, as before. */
   {
     const auto sheen_value = gltf_pbr_node.color3_inputs.find("sheen_color");
     const bool sheen_active =
@@ -32734,6 +32732,13 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                 "gltf_pbr sheen_color with clearcoat has no faithful Cycles equivalent: the "
                 "reference layers clearcoat over sheen over base, Cycles Principled layers "
                 "sheen above the coat (refused, not approximated)");
+      return false;
+    }
+    if (sheen_active &&
+        !read_float_terminal_input(surface, "sheen_roughness", &parsed, &gltf_pbr_node,
+                                   &has_supported_input, &emitted_float_shaders,
+                                   &emitted_color4_shaders, error_message))
+    {
       return false;
     }
   }

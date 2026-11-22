@@ -21007,6 +21007,24 @@ TEST(materialx_graph, lowers_gltf_pbr_unauthored_base_inputs_to_gltf_nodedef_def
   EXPECT_EQ(principled->get_base_color(), make_float3(1.0f, 1.0f, 1.0f));
   EXPECT_FLOAT_EQ(principled->get_metallic(), 1.0f);
   EXPECT_FLOAT_EQ(principled->get_roughness(), 1.0f);
+  EXPECT_EQ(principled->get_coat_roughness(), 0.0f);
+  EXPECT_EQ(principled->get_emission_color(), make_float3(0.0f, 0.0f, 0.0f));
+}
+
+TEST(materialx_graph, lowers_gltf_pbr_mixed_sign_literal_sheen_color_raw)
+{
+  /* Batch 50 (review): a literal with one positive channel is active sheen;
+   * the raw tint, negative channel included, reaches Sheen Tint (the Cycles
+   * kernel then clamps that channel to 0, the reference does not). */
+  materialx::Node surface = gltf_sheen_surface();
+  surface.color3_inputs["sheen_color"] = make_float3(-0.2f, 0.5f, 0.0f);
+  ASSERT_TRUE(materialx::validate({{surface}}));
+  ShaderGraph graph;
+  ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+  PrincipledBsdfNode *principled = gltf_principled(graph);
+  ASSERT_NE(principled, nullptr);
+  EXPECT_FLOAT_EQ(principled->get_sheen_weight(), 1.0f);
+  EXPECT_EQ(principled->get_sheen_tint(), make_float3(-0.2f, 0.5f, 0.0f));
 }
 
 TEST(materialx_graph, lowers_gltf_pbr_emissive_strength_without_emissive_to_no_emission)

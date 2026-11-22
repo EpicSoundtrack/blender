@@ -3251,7 +3251,13 @@ float sheen_microfiber_literal_roughness(const Node &node)
  * (1 - max(sheen_color) * albedo) match the reference; the lobe shape does
  * not (the approximation ND_sheen_bsdf already uses, see
  * sheen_conty_kulla_microfiber_roughness()). Cycles clamps a negative tint
- * channel to 0; the reference does not.
+ * channel to 0 and saturates the layer throughput; the reference does
+ * neither. Principled also attenuates its emission by the sheen layer
+ * (closure.h "Emission (attenuated by sheen and coat)"), while the
+ * reference surface adds the edf beside the BSDF layer stack (believed
+ * unattenuated; the same pre-existing gap applies to clearcoat): active
+ * sheen with a non-zero emissive emits about (1 - max(sheen_color) * albedo)
+ * times the reference. Open for a root ruling; not refused here.
  *
  * Sheen is active when sheen_color is linked or is a literal with a positive
  * channel: genglsl mx_sheen_bsdf returns no sheen for weight < eps, so the
