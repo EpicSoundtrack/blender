@@ -1092,8 +1092,9 @@ constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshad
  *  Cycles' is microfiber, bridged by the energy-matched roughness remap also
  *  used by ND_sheen_bsdf; sheen together with a clearcoat (layer order) or
  *  with emission (Principled attenuates it by the sheen) stays fail-closed.
- *  transmission, specular/specular_color, iridescence, anisotropy, alpha MASK/BLEND modes, and connected
- *  normal/tangent/clearcoat_normal have no faithful Cycles equivalent yet
+ *  transmission, specular/specular_color, iridescence, anisotropy, alpha
+ *  MASK/BLEND modes, and connected normal/tangent/clearcoat_normal have no
+ *  faithful Cycles equivalent yet
  *  and are admitted only at their inert default value. thickness /
  *  attenuation_distance / attenuation_color feed a volume closure that the
  *  real nodedef never wires to its "out" surfaceshader output (dead in the

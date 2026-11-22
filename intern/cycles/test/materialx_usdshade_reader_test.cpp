@@ -31768,8 +31768,9 @@ TEST(materialx_usdshade_reader, rejects_gltf_pbr_active_sheen_with_active_emissi
     }
   }
   /* With active literal sheen: a zero emissive admits; a negative emissive
-   * channel and a connected emissive_strength (even if it evaluates to 0)
-   * are refused, matching validate(). */
+   * channel and any connected emissive_strength are refused, matching
+   * validate() (a connection is active whatever it evaluates to; here the
+   * source is the translation's metallic_out). */
   struct Case {
     const char *name;
     pxr::GfVec3f emissive;
@@ -31788,8 +31789,6 @@ TEST(materialx_usdshade_reader, rejects_gltf_pbr_active_sheen_with_active_emissi
     GltfSheenStage s = gltf_sheen_stage(c.linked_strength);
     if (c.linked_strength) {
       ASSERT_TRUE(s.gltf.GetPrim().RemoveProperty(pxr::TfToken("inputs:sheen_color")));
-      s.translate.CreateInput(pxr::TfToken("emission"), pxr::SdfValueTypeNames->Float)
-          .Set(0.0f);
       ASSERT_TRUE(
           s.gltf.CreateInput(pxr::TfToken("emissive_strength"), pxr::SdfValueTypeNames->Float)
               .ConnectToSource(s.translate.ConnectableAPI(), pxr::TfToken("metallic_out")));
