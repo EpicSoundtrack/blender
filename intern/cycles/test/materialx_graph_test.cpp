@@ -13227,32 +13227,34 @@ TEST(materialx_graph, lowers_lama_surface_front_back_and_presence)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{front, back, surface}}, &graph));
 
-  MixClosureNode *side = nullptr;
+  /* User ruling 2026-11-22 Q8 "align it" (policy-rulings-20261122c.receipt.json):
+   * materialFront shades both faces even with materialBack connected, as the
+   * MaterialX 1.39.4 OSL/GLSL/MDL back ends do. This test previously pinned a
+   * Geometry.Backfacing split (Closure1=front, Closure2=back); the ruling replaces
+   * exactly those three side assertions with "no split, front into presence". */
   MixClosureNode *presence = nullptr;
-  GeometryNode *geometry = nullptr;
   TransparentBsdfNode *transparent = nullptr;
   MaterialXDiffuseBsdfNode *front_native = nullptr;
   MaterialXDiffuseBsdfNode *back_native = nullptr;
+  bool has_side = false, has_geometry = false;
   for (ShaderNode *node : graph.nodes) {
-    side = node->name == "LamaSurface.side" ? dynamic_cast<MixClosureNode *>(node) : side;
+    has_side = has_side || node->name == "LamaSurface.side";
+    has_geometry = has_geometry || dynamic_cast<GeometryNode *>(node) != nullptr;
     presence = node->name == "LamaSurface" ? dynamic_cast<MixClosureNode *>(node) : presence;
-    geometry = node->name == "LamaSurface.geometry" ? dynamic_cast<GeometryNode *>(node) : geometry;
     transparent = node->name == "LamaSurface.transparent" ? dynamic_cast<TransparentBsdfNode *>(node) : transparent;
     front_native = node->name == "FrontDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : front_native;
     back_native = node->name == "BackDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : back_native;
   }
-  ASSERT_NE(side, nullptr);
+  EXPECT_FALSE(has_side);
+  EXPECT_FALSE(has_geometry);
   ASSERT_NE(presence, nullptr);
-  ASSERT_NE(geometry, nullptr);
   ASSERT_NE(transparent, nullptr);
   ASSERT_NE(front_native, nullptr);
   ASSERT_NE(back_native, nullptr);
-  EXPECT_EQ(side->input("Closure1")->link, front_native->output("BSDF"));
-  EXPECT_EQ(side->input("Closure2")->link, back_native->output("BSDF"));
-  EXPECT_EQ(side->input("Fac")->link, geometry->output("Backfacing"));
+  EXPECT_TRUE(back_native->output("BSDF")->links.empty());
   EXPECT_FLOAT_EQ(presence->get_fac(), 0.6f);
   EXPECT_EQ(presence->input("Closure1")->link, transparent->output("BSDF"));
-  EXPECT_EQ(presence->input("Closure2")->link, side->output("Closure"));
+  EXPECT_EQ(presence->input("Closure2")->link, front_native->output("BSDF"));
   EXPECT_EQ(graph.output()->input("Surface")->link, presence->output("Closure"));
 }
 
@@ -30938,13 +30940,14 @@ TEST(materialx_graph, b51_chiang_hair_linked_absorption_still_lowers)
  * entirely, and genmdl stdlib_1_6.mdl mx_surfacematerial only uses `backface` when
  * thin_walled, which ND_surface defaults to false (pbrlib_1_6.mdl mx_surface). Both use
  * the front surface on both sides, which is what this lowering already does. This test
- * pins that behaviour until a ruling chooses otherwise.
+ * pins that behaviour.
  *
- * OPEN RULING (review b51-review-20261122-7c4e): the lowering is not internally
- * consistent. A CONNECTED materialBack gets a Backfacing split (nodegraph reading),
- * which the same OSL/MDL back ends would also ignore; the nodegraph reading for an
- * UNCONNECTED materialBack would be an empty (black, presence-cut) back face. The
- * genglsl surfacematerial back-face behaviour (C++ MaterialNode) is unverified. */
+ * RULED (user ruling 2026-11-22 Q8 "align it", policy-rulings-20261122c.receipt.json;
+ * this resolves the open ruling from review b51-review-20261122-7c4e): front on both
+ * faces in every case. Batch 52 verified genglsl too: MaterialX 1.39.4
+ * MaterialNode::emitFunctionCall emits only `surfaceshader`, ignoring the back surface.
+ * The connected-materialBack case is pinned by the b52_ tests below. Assertions here
+ * are unchanged. */
 TEST(materialx_graph, b51_lama_surface_unconnected_back_keeps_front_on_both_faces)
 {
   materialx::Node front;
@@ -30978,6 +30981,227 @@ TEST(materialx_graph, b51_lama_surface_unconnected_back_keeps_front_on_both_face
   EXPECT_FALSE(has_geometry);
   EXPECT_EQ(presence->input("Closure2")->link, front_native->output("BSDF"));
   EXPECT_FLOAT_EQ(presence->get_fac(), 0.5f);
+}
+
+/* Batch 52: user ruling 2026-11-22 Q8 "align it" (receipt
+ * out/continuous-finish/hermes-divide-zero-fix-20261014/policy-rulings-20261122c.receipt.json).
+ * ND_lama_surface renders materialFront on both faces even with materialBack CONNECTED,
+ * matching MaterialX 1.39.4 genosl (mx_surfacematerial.osl ignores `back`), genglsl
+ * (MaterialNode::emitFunctionCall emits only `surfaceshader`) and genmdl/OVRTX
+ * (stdlib_1_6.mdl `backface` is used only when thin_walled, false in NG_lama_surface). */
+namespace {
+materialx::Node b52_lama_diffuse(const string &name, const float3 color)
+{
+  materialx::Node node;
+  node.name = name;
+  node.nodedef = "ND_lama_diffuse";
+  node.color3_inputs["color"] = color;
+  node.inputs["energyCompensation"] = 0.0f;
+  node.outputs["out"] = materialx::Type::SurfaceShader;
+  return node;
+}
+
+materialx::Node b52_lama_surface_front_back()
+{
+  materialx::Node surface;
+  surface.name = "LamaSurface";
+  surface.nodedef = "ND_lama_surface";
+  surface.links["materialFront"] = {"FrontDiffuse", "out", materialx::Type::SurfaceShader};
+  surface.links["materialBack"] = {"BackDiffuse", "out", materialx::Type::SurfaceShader};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  return surface;
+}
+
+/* No Geometry node, no ".side" node and no closure mix whose Fac is driven by a
+ * Backfacing output anywhere in the lowered graph. */
+void b52_expect_no_backfacing_split(ShaderGraph &graph)
+{
+  for (ShaderNode *node : graph.nodes) {
+    EXPECT_EQ(dynamic_cast<GeometryNode *>(node), nullptr) << node->name;
+    EXPECT_EQ(node->name.find(".side"), string::npos) << node->name;
+    for (ShaderInput *input : node->inputs) {
+      if (input->link) {
+        EXPECT_NE(input->link->name(), ustring("Backfacing")) << node->name;
+      }
+    }
+  }
+}
+}  // namespace
+
+TEST(materialx_graph, b52_lama_surface_connected_back_renders_front_on_both_faces)
+{
+  const materialx::Node front = b52_lama_diffuse("FrontDiffuse", make_float3(0.8f, 0.1f, 0.1f));
+  const materialx::Node back = b52_lama_diffuse("BackDiffuse", make_float3(0.1f, 0.1f, 0.8f));
+  const materialx::Node surface = b52_lama_surface_front_back();
+  ASSERT_TRUE(materialx::validate({{front, back, surface}}));
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower({{front, back, surface}}, &graph, &error)) << error;
+  b52_expect_no_backfacing_split(graph);
+  MaterialXDiffuseBsdfNode *front_native = nullptr;
+  MaterialXDiffuseBsdfNode *back_native = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    front_native = node->name == "FrontDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) :
+                                                  front_native;
+    back_native = node->name == "BackDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) :
+                                                back_native;
+  }
+  ASSERT_NE(front_native, nullptr);
+  ASSERT_NE(back_native, nullptr);
+  /* The front closure drives the surface output directly (both faces); the back
+   * closure is lowered but feeds nothing. */
+  EXPECT_EQ(graph.output()->input("Surface")->link, front_native->output("BSDF"));
+  EXPECT_TRUE(back_native->output("BSDF")->links.empty());
+}
+
+TEST(materialx_graph, b52_lama_surface_connected_back_presence_applies_to_both_faces)
+{
+  const materialx::Node front = b52_lama_diffuse("FrontDiffuse", make_float3(0.8f, 0.1f, 0.1f));
+  const materialx::Node back = b52_lama_diffuse("BackDiffuse", make_float3(0.1f, 0.1f, 0.8f));
+  materialx::Node mask;
+  mask.name = "Mask";
+  mask.nodedef = "ND_constant_float";
+  mask.inputs["value"] = 0.25f;
+  mask.outputs["out"] = materialx::Type::Float;
+
+  for (const bool linked : {false, true}) {
+    materialx::Node surface = b52_lama_surface_front_back();
+    if (linked) {
+      surface.links["presence"] = {"Mask", "out", materialx::Type::Float};
+    }
+    else {
+      surface.inputs["presence"] = 0.4f;
+    }
+    materialx::Graph source;
+    source.nodes = {front, back, surface};
+    if (linked) {
+      source.nodes.push_back(mask);
+    }
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower(source, &graph, &error)) << "linked=" << linked << ": " << error;
+    b52_expect_no_backfacing_split(graph);
+    MixClosureNode *presence = nullptr;
+    TransparentBsdfNode *transparent = nullptr;
+    MaterialXDiffuseBsdfNode *front_native = nullptr;
+    MaterialXDiffuseBsdfNode *back_native = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      presence = node->name == "LamaSurface" ? dynamic_cast<MixClosureNode *>(node) : presence;
+      transparent = node->name == "LamaSurface.transparent" ?
+                        dynamic_cast<TransparentBsdfNode *>(node) :
+                        transparent;
+      front_native = node->name == "FrontDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) :
+                                                    front_native;
+      back_native = node->name == "BackDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) :
+                                                  back_native;
+    }
+    ASSERT_NE(presence, nullptr) << "linked=" << linked;
+    ASSERT_NE(transparent, nullptr) << "linked=" << linked;
+    ASSERT_NE(front_native, nullptr) << "linked=" << linked;
+    ASSERT_NE(back_native, nullptr) << "linked=" << linked;
+    /* One presence cut over the single (front) closure: it applies to both faces. */
+    EXPECT_EQ(presence->input("Closure1")->link, transparent->output("BSDF"));
+    EXPECT_EQ(presence->input("Closure2")->link, front_native->output("BSDF"));
+    EXPECT_TRUE(back_native->output("BSDF")->links.empty());
+    EXPECT_EQ(graph.output()->input("Surface")->link, presence->output("Closure"));
+    if (linked) {
+      ASSERT_NE(presence->input("Fac")->link, nullptr);
+    }
+    else {
+      EXPECT_EQ(presence->input("Fac")->link, nullptr);
+      EXPECT_FLOAT_EQ(presence->get_fac(), 0.4f);
+    }
+  }
+}
+
+TEST(materialx_graph, b52_lama_surface_connected_back_consumer_reads_front)
+{
+  /* A SurfaceShader consumer of a presence-free ND_lama_surface reads the lowered
+   * placeholder; it must carry the front closure (it used to carry the split). */
+  const materialx::Node front = b52_lama_diffuse("FrontDiffuse", make_float3(0.8f, 0.1f, 0.1f));
+  const materialx::Node back = b52_lama_diffuse("BackDiffuse", make_float3(0.1f, 0.1f, 0.8f));
+  const materialx::Node surface = b52_lama_surface_front_back();
+  materialx::Node dot;
+  dot.name = "DotSurface";
+  dot.nodedef = "ND_dot_surfaceshader";
+  dot.links["in"] = {"LamaSurface", "out", materialx::Type::SurfaceShader};
+  dot.outputs["out"] = materialx::Type::SurfaceShader;
+
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower({{front, back, surface, dot}}, &graph, &error)) << error;
+  b52_expect_no_backfacing_split(graph);
+  MaterialXDiffuseBsdfNode *front_native = nullptr;
+  MaterialXDiffuseBsdfNode *back_native = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    front_native = node->name == "FrontDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) :
+                                                  front_native;
+    back_native = node->name == "BackDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) :
+                                                back_native;
+  }
+  ASSERT_NE(front_native, nullptr);
+  ASSERT_NE(back_native, nullptr);
+  ShaderOutput *surface_link = graph.output()->input("Surface")->link;
+  ASSERT_NE(surface_link, nullptr);
+  AddClosureNode *placeholder = dynamic_cast<AddClosureNode *>(surface_link->parent);
+  ASSERT_NE(placeholder, nullptr);
+  EXPECT_EQ(placeholder->input("Closure1")->link, front_native->output("BSDF"));
+  EXPECT_EQ(placeholder->input("Closure2")->link, nullptr);
+  EXPECT_TRUE(back_native->output("BSDF")->links.empty());
+}
+
+TEST(materialx_graph, b52_lama_surface_invalid_connected_back_is_still_refused)
+{
+  /* materialBack is no longer rendered, but it is still validated: an invalid back
+   * subgraph refuses the whole graph without mutating the target. */
+  const materialx::Node front = b52_lama_diffuse("FrontDiffuse", make_float3(0.8f, 0.1f, 0.1f));
+  materialx::Node unsupported;
+  unsupported.name = "BackDiffuse";
+  unsupported.nodedef = "ND_dielectric_bsdf"; /* default scatter_mode R: refused */
+  unsupported.outputs["out"] = materialx::Type::SurfaceShader;
+  materialx::Node float_source;
+  float_source.name = "BackDiffuse";
+  float_source.nodedef = "ND_constant_float";
+  float_source.inputs["value"] = 0.5f;
+  float_source.outputs["out"] = materialx::Type::Float;
+
+  /* Positive control: the same graph with a valid back lowers. */
+  {
+    const materialx::Node back = b52_lama_diffuse("BackDiffuse", make_float3(0.1f, 0.1f, 0.8f));
+    EXPECT_TRUE(materialx::validate({{front, back, b52_lama_surface_front_back()}}));
+  }
+
+  for (int variant = 0; variant < 4; variant++) {
+    materialx::Graph source;
+    materialx::Node surface = b52_lama_surface_front_back();
+    switch (variant) {
+      case 0: /* unsupported back closure */
+        source.nodes = {front, unsupported, surface};
+        break;
+      case 1: /* back link to a missing node */
+        source.nodes = {front, surface};
+        break;
+      case 2: /* back link typed Float to a float producer */
+        surface.links["materialBack"] = {"BackDiffuse", "out", materialx::Type::Float};
+        source.nodes = {front, float_source, surface};
+        break;
+      case 3: /* back link declared SurfaceShader onto a float producer */
+        source.nodes = {front, float_source, surface};
+        break;
+    }
+    EXPECT_FALSE(materialx::validate(source)) << "variant=" << variant;
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower(source, &graph)) << "variant=" << variant;
+    EXPECT_EQ(graph.nodes.size(), original_node_count) << "variant=" << variant;
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link)
+        << "variant=" << variant;
+  }
 }
 
 /* Batch 51 item 4: ND_lama_diffuse energyCompensation 1 (the nodedef default) and an

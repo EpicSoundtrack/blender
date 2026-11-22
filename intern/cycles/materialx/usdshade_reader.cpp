@@ -32362,8 +32362,9 @@ bool read_surface_material_displacement(const pxr::UsdShadeShader &surface_mater
  *  backsurfaceshader shades back-facing geometry and surfaceshader shades
  *  front-facing geometry. Lowered as one IR node (nodedef ND_surfacematerial,
  *  links surfaceshader/backsurfaceshader) that graph.cpp turns into
- *  MixClosure(Fac = Geometry.Backfacing, Closure1 = front, Closure2 = back), the
- *  same backface split ND_lama_surface materialBack uses. Both operands go
+ *  MixClosure(Fac = Geometry.Backfacing, Closure1 = front, Closure2 = back).
+ *  (ND_lama_surface materialBack no longer uses this split: user ruling
+ *  2026-11-22 Q8 renders its front on both faces.) Both operands go
  *  through the ND_mix_surfaceshader operand reader, so the admitted surface
  *  models and the unit-opacity restriction are exactly mix_surfaceshader's
  *  (batch 36: including unit-opacity OpenPBR); anything else stays an explicit

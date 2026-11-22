@@ -26403,14 +26403,8 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         preserve_lowered_name = true;
       }
       else if (node.nodedef == lama_surface_id) {
-        if (node.links.contains("materialBack")) {
-          GeometryNode *geometry = graph->create_node<GeometryNode>();
-          geometry->name = node.name + ".geometry";
-          MixClosureNode *side = graph->create_node<MixClosureNode>();
-          side->name = node.name + ".side";
-          lowered_nodes.emplace(geometry->name, geometry);
-          lowered_nodes.emplace(side->name, side);
-        }
+        /* No Backfacing split, even for a connected materialBack: see the
+         * connect-phase comment for this nodedef (user ruling 2026-11-22 Q8). */
         if (node.links.find("presence") != node.links.end() ||
             node.inputs.find("presence") != node.inputs.end())
         {
@@ -26423,9 +26417,6 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           }
           lowered_nodes.emplace(transparent->name, transparent);
           lowered = presence;
-        }
-        else if (node.links.contains("materialBack")) {
-          lowered = lowered_nodes.at(node.name + ".side");
         }
         else {
           lowered = graph->create_node<AddClosureNode>();
@@ -33389,16 +33380,24 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     }
 
     if (node.nodedef == lama_surface_id) {
+      /* materialFront shades BOTH faces, whether or not materialBack is connected
+       * (user ruling 2026-11-22 Q8 "align it", receipt
+       * out/continuous-finish/hermes-divide-zero-fix-20261014/
+       * policy-rulings-20261122c.receipt.json). NG_lama_surface wires
+       * materialBack into surfacematerial.backsurfaceshader, but no MaterialX
+       * 1.39.4 reference back end renders that back surface here:
+       *  - genosl stdlib/genosl/mx_surfacematerial.osl:1-5 never reads `back`;
+       *  - genglsl (and genmsl) use C++ MaterialNode::emitFunctionCall
+       *    (MaterialXGenShader/Nodes/MaterialNode.cpp:30-55), which emits only the
+       *    `surfaceshader` input;
+       *  - genmdl mdl/materialx/stdlib_1_6.mdl:39-56 passes it as MDL `backface`,
+       *    which MDL ignores unless thin_walled, and the ND_surface nodes inside
+       *    NG_lama_surface keep thin_walled=false (pbrlib_defs.mtlx:244,
+       *    pbrlib_1_6.mdl:583-601) -- so OVRTX shows the front on both sides.
+       * The materialBack subgraph is still validated in validate() (an invalid one
+       * is refused as before) and still lowered, but it is deliberately not
+       * connected: no Geometry.Backfacing split exists for this nodedef. */
       ShaderOutput *closure = lowered_output(node.links.at("materialFront"), nodes_by_name, lowered_nodes);
-      if (const auto back = node.links.find("materialBack"); back != node.links.end()) {
-        ShaderNode *geometry = lowered_nodes.at(node.name + ".geometry");
-        ShaderNode *side = lowered_nodes.at(node.name + ".side");
-        graph->connect(closure, side->input("Closure1"));
-        graph->connect(lowered_output(back->second, nodes_by_name, lowered_nodes),
-                       side->input("Closure2"));
-        graph->connect(geometry->output("Backfacing"), side->input("Fac"));
-        closure = side->output("Closure");
-      }
       if (node.links.find("presence") != node.links.end() ||
           node.inputs.find("presence") != node.inputs.end())
       {
@@ -33411,6 +33410,13 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
                          presence->input("Fac"));
         }
         closure = presence->output("Closure");
+      }
+      else if (surface_shader_node_has_surface_shader_consumer(source, node.name)) {
+        /* Without presence the lowered node is an AddClosure placeholder; a
+         * SurfaceShader consumer reads it, so it must carry the front closure
+         * (before this ruling a connected materialBack routed consumers through
+         * the Backfacing split instead). */
+        graph->connect(closure, lowered_nodes.at(node.name)->input("Closure1"));
       }
       if (!surface_shader_node_has_surface_shader_consumer(source, node.name)) {
         graph->connect(closure, graph->output()->input("Surface"));

@@ -28102,18 +28102,28 @@ TEST(materialx_usdshade_reader, reads_and_lowers_lama_surface_terminal)
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
+  /* User ruling 2026-11-22 Q8 "align it" (policy-rulings-20261122c.receipt.json):
+   * the connected materialBack no longer produces a Geometry.Backfacing split; the
+   * front closure shades both faces, as in the MaterialX 1.39.4 OSL/GLSL/MDL back
+   * ends. The ruling replaces the former side/geometry assertions with these. */
   MixClosureNode *presence = nullptr;
-  MixClosureNode *side = nullptr;
-  GeometryNode *geometry = nullptr;
+  ShaderNode *front_native = nullptr;
+  ShaderNode *back_native = nullptr;
+  bool has_side = false, has_geometry = false;
   for (ShaderNode *node : lowered.nodes) {
     presence = node->name == "LamaSurface" ? dynamic_cast<MixClosureNode *>(node) : presence;
-    side = node->name == "LamaSurface.side" ? dynamic_cast<MixClosureNode *>(node) : side;
-    geometry = node->name == "LamaSurface.geometry" ? dynamic_cast<GeometryNode *>(node) : geometry;
+    has_side = has_side || node->name == "LamaSurface.side";
+    has_geometry = has_geometry || dynamic_cast<GeometryNode *>(node) != nullptr;
+    front_native = node->name == "FrontDiffuse" ? node : front_native;
+    back_native = node->name == "BackDiffuse" ? node : back_native;
   }
   ASSERT_NE(presence, nullptr);
-  ASSERT_NE(side, nullptr);
-  ASSERT_NE(geometry, nullptr);
-  EXPECT_EQ(side->input("Fac")->link, geometry->output("Backfacing"));
+  ASSERT_NE(front_native, nullptr);
+  ASSERT_NE(back_native, nullptr);
+  EXPECT_FALSE(has_side);
+  EXPECT_FALSE(has_geometry);
+  EXPECT_EQ(presence->input("Closure2")->link, front_native->output("BSDF"));
+  EXPECT_TRUE(back_native->output("BSDF")->links.empty());
   EXPECT_FLOAT_EQ(presence->get_fac(), 0.5f);
   EXPECT_EQ(lowered.output()->input("Surface")->link, presence->output("Closure"));
 }
@@ -30124,7 +30134,8 @@ TEST(materialx_usdshade_reader, lowers_surfacematerial_back_surface_as_backfacin
 {
   /* MaterialX 1.39 ND_surfacematerial: backsurfaceshader shades back-facing
    * geometry, surfaceshader front-facing. Cycles: MixClosure(Fac=Backfacing,
-   * Closure1=front, Closure2=back), as ND_lama_surface materialBack. */
+   * Closure1=front, Closure2=back). (ND_lama_surface materialBack no longer splits:
+   * user ruling 2026-11-22 Q8.) */
   TwoSidedSurfaceMaterial f = make_two_sided_surface_material();
   pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
       f.stage, pxr::SdfPath("/Looks/TwoSided/Displacement"));
