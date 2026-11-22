@@ -6876,6 +6876,7 @@ NODE_DEFINE(MathNode)
   type_enum.insert("materialx_sqrt", NODE_MATH_MATERIALX_SQRT);
   type_enum.insert("materialx_sine", NODE_MATH_MATERIALX_SINE);
   type_enum.insert("materialx_cosine", NODE_MATH_MATERIALX_COSINE);
+  type_enum.insert("materialx_select", NODE_MATH_MATERIALX_SELECT);
   type_enum.insert("multiply_add", NODE_MATH_MULTIPLY_ADD);
   type_enum.insert("sine", NODE_MATH_SINE);
   type_enum.insert("cosine", NODE_MATH_COSINE);
@@ -6949,6 +6950,12 @@ void MathNode::constant_fold(const ConstantFolder &folder)
 {
   if (folder.all_inputs_constant()) {
     folder.make_constant(svm_math(math_type, value1, value2, value3));
+  }
+  else if (math_type == NODE_MATH_MATERIALX_SELECT) {
+    /* A constant predicate selects one arm; the other arm is never read. */
+    if (!input("Value1")->link) {
+      folder.try_bypass_or_make_constant(input(value1 != 0.0f ? "Value2" : "Value3"));
+    }
   }
   else {
     folder.fold_math(math_type);

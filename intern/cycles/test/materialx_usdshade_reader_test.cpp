@@ -13121,10 +13121,11 @@ TEST(materialx_usdshade_reader, reads_and_lowers_linked_float_conditionals)
   ASSERT_TRUE(materialx::lower(source, &lowered));
   std::unordered_map<string, ShaderNode *> nodes;
   int greater_count = 0, less_count = 0, subtract_count = 0;
-  int compare_count = 0, maximum_count = 0, mix_count = 0;
+  int compare_count = 0, maximum_count = 0, mix_count = 0, select_count = 0;
   for (ShaderNode *node : lowered.nodes) {
     nodes[node->name.string()] = node;
     if (const auto *math = dynamic_cast<MathNode *>(node)) {
+      select_count += math->get_math_type() == NODE_MATH_MATERIALX_SELECT;
       greater_count += math->get_math_type() == NODE_MATH_GREATER_THAN;
       less_count += math->get_math_type() == NODE_MATH_LESS_THAN;
       subtract_count += math->get_math_type() == NODE_MATH_SUBTRACT;
@@ -13138,7 +13139,9 @@ TEST(materialx_usdshade_reader, reads_and_lowers_linked_float_conditionals)
   EXPECT_EQ(subtract_count, 3);
   EXPECT_EQ(compare_count, 0);
   EXPECT_EQ(maximum_count, 0);
-  EXPECT_EQ(mix_count, 3);
+  /* Batch 49: true selects, not 0/1-factor Mix nodes (0 * NaN leaked). */
+  EXPECT_EQ(mix_count, 0);
+  EXPECT_EQ(select_count, 3);
 
   for (const char *name : {"Greater", "Greater.condition", "GreaterEqual",
                            "GreaterEqual.less", "GreaterEqual.condition", "Equal",
@@ -13147,10 +13150,10 @@ TEST(materialx_usdshade_reader, reads_and_lowers_linked_float_conditionals)
     ASSERT_NE(nodes[name], nullptr) << name;
   }
   for (const char *name : {"Greater", "GreaterEqual", "Equal"}) {
-    auto *mix = dynamic_cast<MixFloatNode *>(nodes[name]);
-    ASSERT_NE(mix, nullptr) << name;
-    EXPECT_TRUE(mix->get_use_clamp());
-    EXPECT_EQ(mix->input("Factor")->link,
+    auto *select = dynamic_cast<MathNode *>(nodes[name]);
+    ASSERT_NE(select, nullptr) << name;
+    EXPECT_EQ(select->get_math_type(), NODE_MATH_MATERIALX_SELECT);
+    EXPECT_EQ(select->input("Value1")->link,
               nodes[string(name) + ".condition"]->output("Value"));
   }
   EXPECT_EQ(nodes["Greater.condition"]->input("Value1")->link, nullptr);
@@ -13159,13 +13162,13 @@ TEST(materialx_usdshade_reader, reads_and_lowers_linked_float_conditionals)
   EXPECT_FLOAT_EQ(
       dynamic_cast<MathNode *>(nodes["Greater.condition"])->get_value2(), 1.0f);
   EXPECT_EQ(nodes["GreaterEqual.less"]->input("Value1")->link,
-            nodes["Greater"]->output("Result"));
+            nodes["Greater"]->output("Value"));
   EXPECT_EQ(nodes["GreaterEqual.condition"]->input("Value2")->link,
             nodes["GreaterEqual.less"]->output("Value"));
   EXPECT_EQ(nodes["Equal.less"]->input("Value1")->link,
-            nodes["GreaterEqual"]->output("Result"));
+            nodes["GreaterEqual"]->output("Value"));
   EXPECT_EQ(nodes["Equal.greater"]->input("Value1")->link,
-            nodes["GreaterEqual"]->output("Result"));
+            nodes["GreaterEqual"]->output("Value"));
   EXPECT_EQ(nodes["Equal.not_less"]->input("Value2")->link,
             nodes["Equal.less"]->output("Value"));
   EXPECT_EQ(nodes["Equal.condition"]->input("Value1")->link,
@@ -13173,17 +13176,17 @@ TEST(materialx_usdshade_reader, reads_and_lowers_linked_float_conditionals)
   EXPECT_EQ(nodes["Equal.condition"]->input("Value2")->link,
             nodes["Equal.greater"]->output("Value"));
   EXPECT_EQ(nodes["OpenPBR"]->input("Roughness")->link,
-            nodes["Equal"]->output("Result"));
+            nodes["Equal"]->output("Value"));
 
-  const auto *greater_mix = dynamic_cast<MixFloatNode *>(nodes["Greater"]);
-  const auto *greater_equal_mix = dynamic_cast<MixFloatNode *>(nodes["GreaterEqual"]);
-  const auto *equal_mix = dynamic_cast<MixFloatNode *>(nodes["Equal"]);
-  EXPECT_FLOAT_EQ(greater_mix->get_a(), 0.25f);
-  EXPECT_FLOAT_EQ(greater_mix->get_b(), 0.75f);
-  EXPECT_FLOAT_EQ(greater_equal_mix->get_a(), 0.0f);
-  EXPECT_FLOAT_EQ(greater_equal_mix->get_b(), 0.5f);
-  EXPECT_FLOAT_EQ(equal_mix->get_a(), 0.2f);
-  EXPECT_FLOAT_EQ(equal_mix->get_b(), 0.8f);
+  const auto *greater_select = dynamic_cast<MathNode *>(nodes["Greater"]);
+  const auto *greater_equal_select = dynamic_cast<MathNode *>(nodes["GreaterEqual"]);
+  const auto *equal_select = dynamic_cast<MathNode *>(nodes["Equal"]);
+  EXPECT_FLOAT_EQ(greater_select->get_value3(), 0.25f);
+  EXPECT_FLOAT_EQ(greater_select->get_value2(), 0.75f);
+  EXPECT_FLOAT_EQ(greater_equal_select->get_value3(), 0.0f);
+  EXPECT_FLOAT_EQ(greater_equal_select->get_value2(), 0.5f);
+  EXPECT_FLOAT_EQ(equal_select->get_value3(), 0.2f);
+  EXPECT_FLOAT_EQ(equal_select->get_value2(), 0.8f);
 }
 
 TEST(materialx_usdshade_reader, reads_and_lowers_linked_color3_conditionals)
@@ -34707,6 +34710,7 @@ float3 batch38_eval(ShaderOutput *output)
       case NODE_MATH_FLOORED_MODULO: r = b == 0.0f ? 0.0f : a - floorf(a / b) * b; break;
       case NODE_MATH_MATERIALX_DIVIDE: r = b == 0.0f ? std::nanf("") : a / b; break;
       case NODE_MATH_MATERIALX_MULTIPLY: r = a * b; break;
+      case NODE_MATH_MATERIALX_SELECT: r = a != 0.0f ? b : batch38_scalar(node, "Value3"); break;
       default: ADD_FAILURE() << "unsupported math type " << int(math->get_math_type());
     }
     return make_float3(r);
@@ -52048,6 +52052,94 @@ TEST(materialx_usdshade_reader, float_tiled_and_triplanar_images_unauthored_colo
     string error;
     EXPECT_FALSE(read(triplanar, {"acescg", "", ""}, &graph, &error));
     EXPECT_NE(error.find("unsupported authored colorspace 'acescg'"), string::npos) << error;
+  }
+}
+
+namespace {
+class Batch49FoldGraph : public ShaderGraph {
+ public:
+  void fold_constants()
+  {
+    constant_fold(nullptr);
+  }
+};
+}  // namespace
+
+/* Batch 49 (b81x anisotropy_strength_out L2): the real reader expansion of
+ * ND_standard_surface_to_gltf_pbr. With specular_roughness = 1 and default
+ * anisotropy, roughness_anisotropy gives outy = 1, so denumerator = 1 - outy = 0,
+ * anisotropy = sqrt(0 / 0) = NaN, and ifgreatereq(0, 0, in1 = 0, in2 = NaN)
+ * must select in1 = 0. The Mix-based select leaked 0 * NaN = NaN (the GPU lane
+ * read mask 0,0,0). D0 (all defaults) is the finite control: in2 = sqrt(0/0.96). */
+TEST(materialx_usdshade_reader, gltf_pbr_anisotropy_strength_zero_denominator_selects_zero)
+{
+  for (const bool boundary : {true, false}) {
+    SCOPED_TRACE(boundary ? "L2 specular_roughness=1 (1-outy == 0)" : "D0 defaults");
+    const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+    const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+        stage, pxr::SdfPath("/Looks/GltfAnisotropy"));
+    const auto shader = [&](const char *name, const char *id) {
+      pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+          stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+      result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+      return result;
+    };
+    pxr::UsdShadeShader translate = shader("Translate", "ND_standard_surface_to_gltf_pbr");
+    if (boundary) {
+      ASSERT_TRUE(translate
+                      .CreateInput(pxr::TfToken("specular_roughness"),
+                                   pxr::SdfValueTypeNames->Float)
+                      .Set(1.0f));
+    }
+    translate.CreateOutput(pxr::TfToken("anisotropy_strength_out"),
+                           pxr::SdfValueTypeNames->Float);
+    pxr::UsdShadeShader observed = shader("Observed", "ND_convert_float_color3");
+    observed.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Color3f);
+    ASSERT_TRUE(observed.CreateInput(pxr::TfToken("in"), pxr::SdfValueTypeNames->Float)
+                    .ConnectToSource(translate.ConnectableAPI(),
+                                     pxr::TfToken("anisotropy_strength_out")));
+    pxr::UsdShadeShader surface = shader("Surface", "ND_surface_unlit");
+    surface.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("emission"), pxr::SdfValueTypeNames->Float)
+                    .Set(1.0f));
+    ASSERT_TRUE(surface.CreateInput(pxr::TfToken("opacity"), pxr::SdfValueTypeNames->Float)
+                    .Set(1.0f));
+    ASSERT_TRUE(surface
+                    .CreateInput(pxr::TfToken("emission_color"),
+                                 pxr::SdfValueTypeNames->Color3f)
+                    .ConnectToSource(observed.ConnectableAPI(), pxr::TfToken("out")));
+    ASSERT_TRUE(material.CreateSurfaceOutput(pxr::TfToken("mtlx"))
+                    .ConnectToSource(surface.ConnectableAPI(), pxr::TfToken("out")));
+
+    materialx::Graph graph;
+    string error;
+    ASSERT_TRUE(materialx::read_usdshade_graph(material, &graph, &error)) << error;
+    const auto select = std::find_if(graph.nodes.begin(), graph.nodes.end(),
+                                     [](const materialx::Node &node) {
+                                       return node.nodedef == "ND_ifgreatereq_float";
+                                     });
+    ASSERT_NE(select, graph.nodes.end());
+    EXPECT_TRUE(std::any_of(graph.nodes.begin(), graph.nodes.end(),
+                            [](const materialx::Node &node) {
+                              return node.nodedef == "ND_divide_float";
+                            }));
+    Batch49FoldGraph lowered;
+    ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
+    EmissionNode *emission = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      if (auto *candidate = dynamic_cast<EmissionNode *>(node)) {
+        ASSERT_EQ(emission, nullptr);
+        emission = candidate;
+      }
+    }
+    ASSERT_NE(emission, nullptr);
+    lowered.fold_constants();
+    ASSERT_EQ(emission->input("Color")->link, nullptr);
+    const float3 color = emission->get_color();
+    for (const float channel : {color.x, color.y, color.z}) {
+      EXPECT_TRUE(std::isfinite(channel)) << channel;
+      EXPECT_EQ(std::bit_cast<uint32_t>(channel), std::bit_cast<uint32_t>(0.0f)) << channel;
+    }
   }
 }
 

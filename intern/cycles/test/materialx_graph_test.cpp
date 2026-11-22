@@ -6813,9 +6813,11 @@ TEST(materialx_graph, lowers_float_conditionals_with_exact_boundary_semantics)
         return dynamic_cast<MathNode *>(nodes[conditional.name + suffix]);
       };
       auto *condition = math(".condition");
-      auto *mix = dynamic_cast<MixFloatNode *>(nodes[conditional.name]);
+      /* Batch 49: a true select, not a 0/1-factor Mix (0 * NaN leaked). */
+      auto *select = math("");
       ASSERT_NE(condition, nullptr);
-      ASSERT_NE(mix, nullptr);
+      ASSERT_NE(select, nullptr);
+      EXPECT_EQ(select->get_math_type(), NODE_MATH_MATERIALX_SELECT);
       std::vector<MathNode *> predicates;
       if (conditional.nodedef == "ND_ifgreater_float") {
         EXPECT_EQ(condition->get_math_type(), NODE_MATH_GREATER_THAN);
@@ -6867,18 +6869,17 @@ TEST(materialx_graph, lowers_float_conditionals_with_exact_boundary_semantics)
         }
       }
       if (linked) {
-        EXPECT_EQ(mix->input("A")->link, nodes["PredicateOperand_in2"]->output("Value"));
-        EXPECT_EQ(mix->input("B")->link, nodes["PredicateOperand_in1"]->output("Value"));
+        EXPECT_EQ(select->input("Value3")->link, nodes["PredicateOperand_in2"]->output("Value"));
+        EXPECT_EQ(select->input("Value2")->link, nodes["PredicateOperand_in1"]->output("Value"));
       }
       else {
-        EXPECT_EQ(mix->input("A")->link, nullptr);
-        EXPECT_EQ(mix->input("B")->link, nullptr);
-        EXPECT_EQ(mix->get_a(), 0.25f);
-        EXPECT_EQ(mix->get_b(), 0.75f);
+        EXPECT_EQ(select->input("Value3")->link, nullptr);
+        EXPECT_EQ(select->input("Value2")->link, nullptr);
+        EXPECT_EQ(select->get_value3(), 0.25f);
+        EXPECT_EQ(select->get_value2(), 0.75f);
       }
-      EXPECT_TRUE(mix->get_use_clamp());
-      EXPECT_EQ(mix->input("Factor")->link, condition->output("Value"));
-      ASSERT_NE(mix->output("Result"), nullptr);
+      EXPECT_EQ(select->input("Value1")->link, condition->output("Value"));
+      ASSERT_NE(select->output("Value"), nullptr);
       EXPECT_EQ(math(".delta"), nullptr);
       EXPECT_EQ(math(".product"), nullptr);
       EXPECT_EQ(math(".equal"), nullptr);
@@ -24368,6 +24369,255 @@ TEST(materialx_graph, float_conditionals_consumer_preserves_selected_arm_without
     expect_materialx_select_consumer(
         "ND_ifgreater_float", 2.0f, 1.0f, 10.0f, 20.0f, 10.0f, linked);
   }
+}
+
+namespace {
+
+/* Batch 49: evaluate the UNFOLDED lowered graph with the kernel's own scalar
+ * functions -- svm_math() for every MathNode, and saturatef() +
+ * endvalue_preserving_mix() exactly as svm_node_mix_float() does -- so the
+ * runtime selection is observed, not ConstantFolder shortcuts. */
+float if_select_eval(ShaderOutput *output);
+float if_select_input(ShaderInput *input)
+{
+  if (input->link) {
+    return if_select_eval(input->link);
+  }
+  return input->parent->get_float(input->socket_type);
+}
+float if_select_eval(ShaderOutput *output)
+{
+  ShaderNode *node = output->parent;
+  if (auto *value = dynamic_cast<ValueNode *>(node)) {
+    return value->get_value();
+  }
+  if (auto *math = dynamic_cast<MathNode *>(node)) {
+    return svm_math(math->get_math_type(),
+                    if_select_input(math->input("Value1")),
+                    if_select_input(math->input("Value2")),
+                    if_select_input(math->input("Value3")));
+  }
+  if (auto *mix = dynamic_cast<MixFloatNode *>(node)) {
+    float t = if_select_input(mix->input("Factor"));
+    if (mix->get_use_clamp()) {
+      t = saturatef(t);
+    }
+    return endvalue_preserving_mix(if_select_input(mix->input("A")),
+                                   if_select_input(mix->input("B")), t);
+  }
+  ADD_FAILURE() << "unexpected producer in if-select graph: " << node->name.string();
+  return -999.0f;
+}
+
+/* One float branch operand: a literal, a linked ND_constant_float, or a
+ * linked ND_divide_float with literal operands (MaterialX IEEE divide: 0/0 is
+ * NaN, 2^100/2^-100 overflows to +-Inf). */
+struct IfSelectOperand {
+  enum Kind { Literal, Constant, Divide } kind;
+  float a;
+  float b;
+};
+
+materialx::Graph if_select_source(const char *nodedef,
+                                  const float value1,
+                                  const float value2,
+                                  const IfSelectOperand &in1,
+                                  const IfSelectOperand &in2,
+                                  const bool consumer)
+{
+  materialx::Graph source;
+  materialx::Node select;
+  select.name = "Select";
+  select.nodedef = nodedef;
+  select.outputs["out"] = materialx::Type::Float;
+  select.inputs["value1"] = value1;
+  select.inputs["value2"] = value2;
+  const std::pair<const char *, IfSelectOperand> operands[] = {{"in1", in1}, {"in2", in2}};
+  for (const auto &[port, operand] : operands) {
+    if (operand.kind == IfSelectOperand::Literal) {
+      select.inputs[port] = operand.a;
+      continue;
+    }
+    materialx::Node producer;
+    producer.name = string("Branch_") + port;
+    producer.outputs["out"] = materialx::Type::Float;
+    if (operand.kind == IfSelectOperand::Constant) {
+      producer.nodedef = "ND_constant_float";
+      producer.inputs["value"] = operand.a;
+    }
+    else {
+      producer.nodedef = "ND_divide_float";
+      producer.inputs["in1"] = operand.a;
+      producer.inputs["in2"] = operand.b;
+    }
+    select.links[port] = {producer.name, "out", materialx::Type::Float};
+    source.nodes.push_back(producer);
+  }
+  source.nodes.push_back(select);
+  if (consumer) {
+    materialx::Node color;
+    color.name = "ObservedColor";
+    color.nodedef = "ND_convert_float_color3";
+    color.links["in"] = {select.name, "out", materialx::Type::Float};
+    color.outputs["out"] = materialx::Type::Color3;
+    source.nodes.push_back(color);
+    materialx::Node surface;
+    surface.name = "Surface";
+    surface.nodedef = "ND_surface_unlit";
+    surface.inputs["emission"] = 1.0f;
+    surface.links["emission_color"] = {color.name, "out", materialx::Type::Color3};
+    surface.outputs["out"] = materialx::Type::SurfaceShader;
+    source.nodes.push_back(surface);
+  }
+  return source;
+}
+
+ShaderOutput *if_select_output(ShaderGraph &graph, const char *name)
+{
+  for (ShaderNode *node : graph.nodes) {
+    if (node->name == name) {
+      return node->outputs.empty() ? nullptr : node->outputs[0];
+    }
+  }
+  return nullptr;
+}
+
+}  // namespace
+
+TEST(materialx_graph, float_conditionals_unselected_nonfinite_branch_does_not_leak)
+{
+  /* b81x anisotropy_strength_out L2: ifgreatereq selects in1 = 0 while the
+   * unselected in2 is sqrt(0/0) = NaN. A Mix with factor exactly 1 still
+   * multiplies the unselected arm (0 * NaN = NaN), so the selected value must
+   * come from a true select. Checked for NaN, +Inf and -Inf in the unselected
+   * arm, on both arms, at runtime (unfolded) and through constant folding. */
+  struct Predicate {
+    const char *nodedef;
+    float value1;
+    float value2;
+    bool selects_in1;
+  };
+  const Predicate predicates[] = {{"ND_ifgreater_float", 2.0f, 1.0f, true},
+                                  {"ND_ifgreater_float", 1.0f, 2.0f, false},
+                                  {"ND_ifgreatereq_float", 0.0f, 0.0f, true},
+                                  {"ND_ifgreatereq_float", 1.0f, 2.0f, false},
+                                  {"ND_ifequal_float", 1.0f, 1.0f, true},
+                                  {"ND_ifequal_float", 1.0f, 2.0f, false}};
+  const IfSelectOperand nonfinite[] = {{IfSelectOperand::Divide, 0.0f, 0.0f},
+                                       {IfSelectOperand::Divide, 0x1p100f, 0x1p-100f},
+                                       {IfSelectOperand::Divide, -0x1p100f, 0x1p-100f}};
+  const IfSelectOperand selected[] = {{IfSelectOperand::Literal, 0.0f, 0.0f},
+                                      {IfSelectOperand::Literal, -0.75f, 0.0f},
+                                      {IfSelectOperand::Constant, 0x1p-13f, 0.0f},
+                                      {IfSelectOperand::Constant, -0.0f, 0.0f}};
+  for (const Predicate &predicate : predicates) {
+    for (const IfSelectOperand &bad : nonfinite) {
+      for (const IfSelectOperand &good : selected) {
+        SCOPED_TRACE(string(predicate.nodedef) + (predicate.selects_in1 ? " selects in1" :
+                                                                          " selects in2"));
+        SCOPED_TRACE("unselected " + std::to_string(bad.a) + "/" + std::to_string(bad.b));
+        SCOPED_TRACE("selected " + std::to_string(good.a) +
+                     (good.kind == IfSelectOperand::Literal ? " literal" : " linked"));
+        const IfSelectOperand &in1 = predicate.selects_in1 ? good : bad;
+        const IfSelectOperand &in2 = predicate.selects_in1 ? bad : good;
+        ShaderGraph runtime;
+        string error;
+        ASSERT_TRUE(materialx::lower(
+            if_select_source(predicate.nodedef, predicate.value1, predicate.value2, in1, in2,
+                             false),
+            &runtime, &error))
+            << error;
+        ShaderOutput *unselected = if_select_output(
+            runtime, predicate.selects_in1 ? "Branch_in2" : "Branch_in1");
+        ASSERT_NE(unselected, nullptr);
+        /* The unselected arm really is non-finite at runtime. */
+        EXPECT_FALSE(std::isfinite(if_select_eval(unselected)));
+        /* Expected = the selected arm's own runtime value as it reaches the
+         * select socket. (-0 authored as a literal or ND_constant_float reads
+         * +0 when the socket default is 0: Cycles' Node::set skips a value
+         * equal to the current one -- independent of the select.) */
+        auto *select = dynamic_cast<MathNode *>(if_select_output(runtime, "Select")->parent);
+        ASSERT_NE(select, nullptr);
+        EXPECT_EQ(select->get_math_type(), NODE_MATH_MATERIALX_SELECT);
+        const uint32_t expected = std::bit_cast<uint32_t>(
+            if_select_input(select->input(predicate.selects_in1 ? "Value2" : "Value3")));
+        ShaderOutput *result = if_select_output(runtime, "Select");
+        ASSERT_NE(result, nullptr);
+        EXPECT_EQ(std::bit_cast<uint32_t>(if_select_eval(result)), expected)
+            << "runtime select returned " << if_select_eval(result);
+
+        BaseContractFoldGraph folded;
+        ASSERT_TRUE(materialx::lower(
+            if_select_source(predicate.nodedef, predicate.value1, predicate.value2, in1, in2,
+                             true),
+            &folded, &error))
+            << error;
+        EmissionNode *emission = nullptr;
+        for (ShaderNode *node : folded.nodes) {
+          if (auto *candidate = dynamic_cast<EmissionNode *>(node)) {
+            emission = candidate;
+          }
+        }
+        ASSERT_NE(emission, nullptr);
+        folded.fold_constants();
+        ASSERT_EQ(emission->input("Color")->link, nullptr);
+        EXPECT_EQ(std::bit_cast<uint32_t>(emission->get_color().x), expected)
+            << "folded select returned " << emission->get_color().x;
+      }
+    }
+  }
+}
+
+TEST(materialx_graph, float_conditionals_finite_selection_is_bit_exact)
+{
+  /* For finite arms the runtime result must be the selected arm bit for bit.
+   * The former Mix form (1-t)*a + t*b agreed with that everywhere except the
+   * sign of a zero result (e.g. selected -0 with a non-negative unselected arm
+   * gave +0); any other old/new difference fails here. */
+  const float values[] = {0.0f,    -0.0f,   0x1p-149f, -0x1p-149f,   0x1p-126f,
+                          1.0f,    -1.0f,   0.1f,      -1.0f / 3.0f, 0x1p-13f,
+                          4096.0f, 0x1p26f, FLT_MAX,   -FLT_MAX};
+  int old_differs = 0;
+  for (const bool linked : {false, true}) {
+    for (const bool take_in1 : {false, true}) {
+      for (const float a : values) {
+        for (const float b : values) {
+          const IfSelectOperand::Kind kind = linked ? IfSelectOperand::Constant :
+                                                      IfSelectOperand::Literal;
+          ShaderGraph runtime;
+          string error;
+          ASSERT_TRUE(materialx::lower(
+              if_select_source("ND_ifgreater_float", take_in1 ? 2.0f : 1.0f,
+                               take_in1 ? 1.0f : 2.0f, {kind, a, 0.0f}, {kind, b, 0.0f},
+                               false),
+              &runtime, &error))
+              << error;
+          ShaderOutput *result = if_select_output(runtime, "Select");
+          ASSERT_NE(result, nullptr);
+          /* The arm's own runtime value at the select socket (see the -0 note
+           * in the non-finite test above). */
+          auto *select = dynamic_cast<MathNode *>(result->parent);
+          ASSERT_NE(select, nullptr);
+          const float arm1 = if_select_input(select->input("Value2"));
+          const float arm2 = if_select_input(select->input("Value3"));
+          const float selected = take_in1 ? arm1 : arm2;
+          const float actual = if_select_eval(result);
+          EXPECT_EQ(std::bit_cast<uint32_t>(actual), std::bit_cast<uint32_t>(selected))
+              << "in1=" << a << " in2=" << b << " take_in1=" << take_in1;
+          const float old_mix = endvalue_preserving_mix(arm2, arm1, take_in1 ? 1.0f : 0.0f);
+          if (std::bit_cast<uint32_t>(old_mix) != std::bit_cast<uint32_t>(actual)) {
+            ++old_differs;
+            EXPECT_TRUE(old_mix == 0.0f && actual == 0.0f)
+                << "old Mix and select differ beyond the sign of zero: in1=" << a
+                << " in2=" << b;
+          }
+        }
+      }
+    }
+  }
+  std::cout << "[ batch49 ] finite cases where the old Mix differed from the selected arm "
+               "(signed zero only): "
+            << old_differs << "\n";
 }
 
 TEST(materialx_graph, principled_independent_sss_selection_survives_constant_folding)

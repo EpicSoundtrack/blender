@@ -223,6 +223,9 @@ enum NodeMathType : uint {
   NODE_MATH_MATERIALX_SQRT,
   NODE_MATH_MATERIALX_SINE,
   NODE_MATH_MATERIALX_COSINE,
+  /* Internal MaterialX if* select: Value1 != 0 ? Value2 : Value3. No arithmetic
+   * touches either arm, so a NaN/Inf in the unselected arm cannot leak. */
+  NODE_MATH_MATERIALX_SELECT,
 };
 
 enum NodeVectorMathType : uint {

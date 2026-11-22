@@ -307,6 +307,8 @@ ccl_device float svm_math(NodeMathType type, const float a, float b, const float
       return materialx_sinf(a);
     case NODE_MATH_MATERIALX_COSINE:
       return materialx_cosf(a);
+    case NODE_MATH_MATERIALX_SELECT:
+      return (a != 0.0f) ? b : c;
     case NODE_MATH_COSINE:
       return cosf(a);
     case NODE_MATH_TANGENT:

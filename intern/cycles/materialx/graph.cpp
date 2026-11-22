@@ -1011,8 +1011,8 @@ constexpr const char *glossiness_anisotropy_id = "ND_glossiness_anisotropy";
  * clamp expression that reproduces both sides for every input (unlike
  * anisotropy's clamp(anisotropy, 0.0, 0.98) trick, clamping roughness.y
  * itself would destroy the >= 0 branch's real value). So this is lowered
- * with the same real compare+select primitive already used by
- * ifgreater_float_id above (MathNode LESS_THAN as a 0/1 factor, then the
+ * with the compare+select primitive ifgreater_float_id used before batch 49
+ * (MathNode LESS_THAN as a 0/1 factor, then the
  * exact select-by-arithmetic form result = in2 + factor*(in1-in2), with
  * in1 = result.x (isotropic pick) and in2 = clamp(roughness.y^2, EPS, 1)
  * (explicit pick) -- bit-for-bit equivalent to the if/else for every
@@ -15202,9 +15202,12 @@ ShaderOutput *lowered_output(const Link &link,
     if (triplanarprojection_type(source.nodedef, nullptr)) {
       return lowered->output("Value");
     }
+    if (is_float_conditional(source.nodedef)) {
+      return lowered->output("Value");
+    }
     if (source.nodedef == clamp_float_id || is_smoothstep_float(source.nodedef) ||
         is_linear_range_float(source.nodedef) || is_randomfloat(source.nodedef) ||
-        is_float_conditional(source.nodedef) || is_scalar_split(source.nodedef))
+        is_scalar_split(source.nodedef))
     {
       return lowered->output("Result");
     }
@@ -21583,17 +21586,20 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       lowered = math;
     }
     else if (is_float_conditional(node.nodedef)) {
+      /* True select (Value1 != 0 ? in1 : in2), not a 0/1-factor Mix: a Mix
+       * still multiplies the unselected arm, so 0 * NaN (e.g. an unselected
+       * 0/0 divide) or 0 * Inf leaked NaN into the selected result. */
       MathNode *condition = create_exact_float_predicate(node);
-      MixFloatNode *mix = graph->create_node<MixFloatNode>();
-      mix->set_use_clamp(true);
+      MathNode *select = graph->create_node<MathNode>();
+      select->set_math_type(NODE_MATH_MATERIALX_SELECT);
       if (const auto value = node.inputs.find("in1"); value != node.inputs.end()) {
-        mix->set_b(value->second);
+        select->set_value2(value->second);
       }
       if (const auto value = node.inputs.find("in2"); value != node.inputs.end()) {
-        mix->set_a(value->second);
+        select->set_value3(value->second);
       }
       lowered_nodes.emplace(condition->name, condition);
-      lowered = mix;
+      lowered = select;
     }
     else if (node.nodedef == convert_boolean_float_id || node.nodedef == convert_integer_float_id) {
       /* MaterialX stdlib's boolean/integer-to-float converts are exact
@@ -28340,16 +28346,16 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
 
     if (is_float_conditional(node.nodedef)) {
       MathNode *condition = static_cast<MathNode *>(lowered_nodes.at(node.name + ".condition"));
-      MixFloatNode *mix = static_cast<MixFloatNode *>(lowered_nodes.at(node.name));
+      MathNode *select = static_cast<MathNode *>(lowered_nodes.at(node.name));
       const auto connect_operand = [&](const char *input_name, ShaderInput *socket) {
         if (const auto input = node.links.find(input_name); input != node.links.end()) {
           graph->connect(lowered_output(input->second, nodes_by_name, lowered_nodes), socket);
         }
       };
       connect_exact_float_predicate(node);
-      connect_operand("in1", mix->input("B"));
-      connect_operand("in2", mix->input("A"));
-      graph->connect(condition->output("Value"), mix->input("Factor"));
+      connect_operand("in1", select->input("Value2"));
+      connect_operand("in2", select->input("Value3"));
+      graph->connect(condition->output("Value"), select->input("Value1"));
       continue;
     }
 
