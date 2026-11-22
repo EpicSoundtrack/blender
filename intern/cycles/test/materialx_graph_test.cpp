@@ -23079,27 +23079,50 @@ TEST(materialx_graph, rejects_chiang_hair_roughness_malformed_signature)
   EXPECT_FALSE(materialx::validate({{nonfinite}}));
 }
 
+/* Batch 54 (b85x P3 E2 == E4): energyCompensation 0 at roughness > 0 selects MaterialX's
+ * uncompensated Oren-Nayar lobe, which Cycles does not have; it used to lower to the
+ * compensated closure and is now refused (BSDF and SurfaceShader flavors). The roughness
+ * squaring/halving is still pinned with energyCompensation 1, and 0 still lowers at
+ * roughness 0 (both lobes Lambert). */
 TEST(materialx_graph, lowers_lama_diffuse_literal_energy_compensation_zero)
 {
-  materialx::Node node;
-  node.name = "LamaDiffuse";
-  node.nodedef = "ND_lama_diffuse";
-  node.color3_inputs["color"] = make_float3(0.4f, 0.2f, 0.1f);
-  node.inputs["roughness"] = 0.6f;
-  node.inputs["energyCompensation"] = 0.0f;
-  node.outputs["out"] = materialx::Type::BSDF;
+  for (const materialx::Type flavor : {materialx::Type::BSDF, materialx::Type::SurfaceShader}) {
+    materialx::Node node;
+    node.name = "LamaDiffuse";
+    node.nodedef = "ND_lama_diffuse";
+    node.color3_inputs["color"] = make_float3(0.4f, 0.2f, 0.1f);
+    node.inputs["roughness"] = 0.6f;
+    node.inputs["energyCompensation"] = 0.0f;
+    node.outputs["out"] = flavor;
+    EXPECT_FALSE(materialx::validate({{node}}));
+    ShaderGraph refused;
+    EXPECT_FALSE(materialx::lower({{node}}, &refused));
 
-  ShaderGraph graph;
-  ASSERT_TRUE(materialx::lower({{node}}, &graph));
+    node.inputs["energyCompensation"] = 1.0f;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{node}}, &graph));
+    MaterialXDiffuseBsdfNode *diffuse = nullptr;
+    for (ShaderNode *n : graph.nodes) {
+      diffuse = n->name == "LamaDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(n) : diffuse;
+    }
+    ASSERT_NE(diffuse, nullptr);
+    EXPECT_FLOAT_EQ(diffuse->get_color().x, 0.4f);
+    /* MaterialX libraries/bxdf/lama/lama_diffuse.mtlx squares roughness, then halves it. */
+    EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.18f);
 
-  MaterialXDiffuseBsdfNode *diffuse = nullptr;
-  for (ShaderNode *n : graph.nodes) {
-    diffuse = n->name == "LamaDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(n) : diffuse;
+    for (const bool authored_zero : {true, false}) {
+      materialx::Node lambert = node;
+      lambert.inputs["energyCompensation"] = 0.0f;
+      if (authored_zero) {
+        lambert.inputs["roughness"] = 0.0f;
+      }
+      else {
+        lambert.inputs.erase("roughness");
+      }
+      ShaderGraph lowered;
+      ASSERT_TRUE(materialx::lower({{lambert}}, &lowered)) << authored_zero;
+    }
   }
-  ASSERT_NE(diffuse, nullptr);
-  EXPECT_FLOAT_EQ(diffuse->get_color().x, 0.4f);
-  /* MaterialX libraries/bxdf/lama/lama_diffuse.mtlx squares roughness, then halves it. */
-  EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.18f);
 }
 
 /* Batch 51: energyCompensation 1 (the nodedef default) is admitted now, see

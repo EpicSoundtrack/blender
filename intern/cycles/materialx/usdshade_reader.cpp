@@ -29446,6 +29446,49 @@ bool require_unconnected_vector3(const pxr::UsdShadeShader &surface,
   return true;
 }
 
+/* Batch 54 (b85x gltf normal:L_probe): ND_gltf_pbr_surfaceshader `normal` and
+ * `clearcoat_normal` (defaultgeomprop Nworld, world space) were admitted and ignored.
+ * A declared, unvalued port keeps Nworld; a connection stays refused (above); a literal
+ * is read into vector3_inputs and lowered onto Principled Normal / Coat Normal. Cycles
+ * normalizes a closure normal and MaterialX 1.39.4 gltf_pbr does not, so only a finite
+ * unit-length literal (|len - 1| <= 1e-4) is admitted; others are refused by name. */
+bool read_gltf_pbr_literal_normal(const pxr::UsdShadeShader &surface,
+                                  const char *input_name,
+                                  Node *node,
+                                  string *error_message)
+{
+  if (!require_unconnected_vector3(surface, input_name, "gltf_pbr", error_message)) {
+    return false;
+  }
+  const pxr::UsdShadeInput input = surface.GetInput(pxr::TfToken(input_name));
+  if (!input || !input.GetAttr().HasAuthoredValue()) {
+    return true;
+  }
+  if (!is_usd_vector3_type(input.GetTypeName())) {
+    set_error(error_message, string("gltf_pbr ") + input_name + " must be a vector3");
+    return false;
+  }
+  pxr::GfVec3f value;
+  if (!input.Get(&value)) {
+    set_error(error_message, string("gltf_pbr ") + input_name + " literal could not be read");
+    return false;
+  }
+  const double length = std::sqrt(double(value[0]) * value[0] + double(value[1]) * value[1] +
+                                  double(value[2]) * value[2]);
+  if (!std::isfinite(value[0]) || !std::isfinite(value[1]) || !std::isfinite(value[2]) ||
+      !std::isfinite(length) || std::fabs(length - 1.0) > 1e-4)
+  {
+    set_error(error_message,
+              string("gltf_pbr ") + input_name +
+                  " literal must be a finite unit-length world-space vector: Cycles normalizes "
+                  "closure normals, the MaterialX reference does not (refused, not "
+                  "approximated)");
+    return false;
+  }
+  node->vector3_inputs[input_name] = make_float3(value[0], value[1], value[2]);
+  return true;
+}
+
 /* --- Generic <surface> closure-graph readers (hermes-generic-surface) --- */
 bool read_surface_float_input(const pxr::UsdShadeShader &shader,
                               const char *nodedef,
@@ -30447,16 +30490,18 @@ bool read_connected_surface_closure(
   else if (is_lama_leaf_bsdf(closure_node.nodedef)) {
     /* LAMA leaf nodegraphs verified against MaterialX 1.39
      * libraries/bxdf/lama: diffuse -> oren_nayar with roughness^2*0.5
-     * (energyCompensation 0 or 1, both lowered to Cycles' compensated
-     * Oren-Nayar closure as reviewed approximations); translucent -> translucent_bsdf
+     * (energyCompensation 1 lowered to Cycles' compensated Oren-Nayar closure as a
+     * reviewed approximation; 0 only at roughness 0, where both lobes are Lambert --
+     * batch 54); translucent -> translucent_bsdf
      * (roughness/energyCompensation are unused by the real reference graph);
      * sheen -> sheen_bsdf with pow(0.9 * roughness + 0.1, 2); sss ->
      * subsurface_bsdf with radius*sssScale*sssUnitLength. */
     if (closure_node.nodedef == lama_diffuse_id) {
       /* energyCompensation mixes the compensated (fg) and uncompensated (bg)
        * oren_nayar lobes; Cycles' Oren-Nayar closure is the compensated one (see
-       * graph.cpp validate()). The literal end points 0 and 1 are admitted; the
-       * nodedef default 1 also applies when the value is unauthored. */
+       * graph.cpp validate()). The literal end points 0 and 1 are admitted (0 only at
+       * roughness 0, below); the nodedef default 1 also applies when the value is
+       * unauthored. */
       float energy_value = 1.0f;
       const pxr::UsdShadeInput energy = closure.GetInput(pxr::TfToken("energyCompensation"));
       if (energy) {
@@ -30484,6 +30529,20 @@ bool read_connected_surface_closure(
           return finish(false);
         }
         closure_node.inputs["roughness"] = roughness_value;
+      }
+      /* Batch 54 (b85x P3 E2 == E4): energyCompensation 0 selects the uncompensated
+       * oren_nayar lobe, which Cycles does not have (bsdf_oren_nayar.h always adds the
+       * multi-scatter term). Both lobes are Lambert at roughness 0 -- the nodedef
+       * default -- so 0 is exact there and refused by name everywhere else. */
+      if (energy_value == 0.0f && closure_node.inputs.contains("roughness") &&
+          closure_node.inputs.at("roughness") != 0.0f)
+      {
+        set_error(error_message,
+                  string(lama_diffuse_id) +
+                      " energyCompensation 0 (uncompensated Oren-Nayar) with roughness > 0 has no "
+                      "Cycles equivalent: Cycles' Oren-Nayar closure is always energy-compensated "
+                      "(refused, not approximated)");
+        return finish(false);
       }
       if (!read_surface_color_input(closure, lama_diffuse_id, "color", graph, &closure_node, emitted_float_shaders, emitted_color4_shaders, error_message) ||
           !read_surface_vector3_input(closure, lama_diffuse_id, "normal", graph, &closure_node, error_message))
@@ -32957,9 +33016,13 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * meaningful, renderable surface. */
   has_supported_input = true;
 
-  if (!require_unconnected_vector3(surface, "normal", "gltf_pbr", error_message) ||
+  /* normal / clearcoat_normal literals lower onto Principled Normal / Coat Normal
+   * (batch 54). A tangent literal stays admitted and unused: the reference feeds it only
+   * to microfacet lobes whose roughness_uv is isotropic while anisotropy_strength is 0
+   * (required below), so it is inert there exactly as in Cycles. */
+  if (!read_gltf_pbr_literal_normal(surface, "normal", &gltf_pbr_node, error_message) ||
       !require_unconnected_vector3(surface, "tangent", "gltf_pbr", error_message) ||
-      !require_unconnected_vector3(surface, "clearcoat_normal", "gltf_pbr", error_message) ||
+      !read_gltf_pbr_literal_normal(surface, "clearcoat_normal", &gltf_pbr_node, error_message) ||
       !require_default_float(surface, "occlusion", 1.0f, "gltf_pbr", error_message) ||
       !require_default_float(surface, "transmission", 0.0f, "gltf_pbr", error_message) ||
       !require_default_float(surface, "specular", 1.0f, "gltf_pbr", error_message) ||

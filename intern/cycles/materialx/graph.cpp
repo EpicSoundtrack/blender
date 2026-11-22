@@ -1375,6 +1375,35 @@ bool lama_diffuse_energy_compensation_ok(const float value)
   return std::isfinite(value) && (value == 0.0f || value == 1.0f);
 }
 
+/* Batch 54 (b85x gltf normal:L_probe): a gltf_pbr literal normal / clearcoat_normal is
+ * admitted only as a finite unit-length vector (Cycles normalizes closure normals, the
+ * MaterialX 1.39.4 gltf_pbr reference does not). */
+bool gltf_pbr_literal_normal_ok(const float3 &value)
+{
+  if (!std::isfinite(value.x) || !std::isfinite(value.y) || !std::isfinite(value.z)) {
+    return false;
+  }
+  const double length = std::sqrt(double(value.x) * value.x + double(value.y) * value.y +
+                                  double(value.z) * value.z);
+  return std::isfinite(length) && std::fabs(length - 1.0) <= 1e-4;
+}
+
+/* Batch 54 (b85x P3 E2 == E4): energyCompensation 0 selects MaterialX's uncompensated
+ * oren_nayar lobe; Cycles' Oren-Nayar closure is always energy-compensated
+ * (kernel/closure/bsdf_oren_nayar.h), so 0 is admitted only where both lobes are Lambert:
+ * a literal (or unauthored, nodedef default 0) roughness of exactly 0. Callers refuse a
+ * linked roughness separately. */
+bool lama_diffuse_energy_compensation_zero_ok(const Node &node)
+{
+  const auto energy = node.inputs.find("energyCompensation");
+  if (energy == node.inputs.end() || energy->second != 0.0f) {
+    return true;
+  }
+  const auto roughness = node.inputs.find("roughness");
+  return !node.links.contains("roughness") &&
+         (roughness == node.inputs.end() || roughness->second == 0.0f);
+}
+
 bool chiang_roughness_subset_ok(const Node &node)
 {
   const bool explicit_r = node.vector2_inputs.contains("roughness_R");
@@ -12718,9 +12747,20 @@ bool validate(const Graph &source,
      * gltf_pbr_sheen_active(). */
     if (node.nodedef == gltf_pbr_id) {
       const auto output = node.outputs.find("out");
+      /* Batch 54: literal world-space `normal` / `clearcoat_normal` (finite, unit length;
+       * see usdshade_reader.cpp read_gltf_pbr_literal_normal) are the only vector3
+       * inputs; they are seeded onto Principled Normal / Coat Normal in the connect
+       * pass. Links stay refused. */
+      const bool vector3_inputs_ok = std::all_of(
+          node.vector3_inputs.begin(), node.vector3_inputs.end(), [](const auto &input) {
+            return (input.first == "normal" || input.first == "clearcoat_normal") &&
+                   gltf_pbr_literal_normal_ok(input.second);
+          });
       if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
           node.outputs.size() != 1 || !node.int_inputs.empty() || !node.vector2_inputs.empty() ||
-          !node.vector3_inputs.empty() || !node.vector4_inputs.empty() ||
+          !vector3_inputs_ok || node.links.contains("normal") ||
+          node.links.contains("clearcoat_normal") || node.links.contains("tangent") ||
+          !node.vector4_inputs.empty() ||
           !node.float4_inputs.empty() || !node.string_inputs.empty() ||
           !node.asset_inputs.empty() || !node.matrix33_inputs.empty() ||
           !node.matrix44_inputs.empty())
@@ -13272,7 +13312,8 @@ bool validate(const Graph &source,
           (node.nodedef == lama_diffuse_id && roughness != node.links.end()) ||
           (has_lama_energy_value &&
            (node.nodedef != lama_diffuse_id ||
-            !lama_diffuse_energy_compensation_ok(node.inputs.at("energyCompensation")))) ||
+            !lama_diffuse_energy_compensation_ok(node.inputs.at("energyCompensation")) ||
+            !lama_diffuse_energy_compensation_zero_ok(node))) ||
           (node.nodedef == lama_sss_id && (sss_radius != node.links.end() ||
                                            sss_scale != node.links.end() ||
                                            sss_unit_length != node.links.end())) ||
@@ -14749,15 +14790,18 @@ bool validate(const Graph &source,
          *
          * ND_lama_diffuse (libraries/bxdf/lama/lama_diffuse.mtlx) is
          * mix(fg = compensated, bg = uncompensated, mix = energyCompensation) over
-         * oren_nayar_diffuse_bsdf(roughness^2 * 0.5); both lobes lower to the same
-         * closure, so the literal end points 0 and 1 (the nodedef default, also used
-         * when unauthored) are admitted with the approximations above. A fractional
-         * blend and a linked value stay refused. */
+         * oren_nayar_diffuse_bsdf(roughness^2 * 0.5). energyCompensation 1 (the nodedef
+         * default, also used when unauthored) is admitted with the approximation above.
+         * Batch 54: 0 is admitted only at roughness 0, where both lobes are Lambert
+         * (lama_diffuse_energy_compensation_zero_ok); 0 at roughness > 0 would render
+         * the compensated lobe and is refused. A fractional blend and a linked value
+         * stay refused. */
         ok = weight_literal_ok(1.0f) && valid_float("roughness", 0.0f) &&
              valid_color3("color", make_float3(0.18f, 0.18f, 0.18f)) && valid_vector3_opt("normal") &&
              (node.nodedef != lama_diffuse_id ||
               ((!node.inputs.contains("energyCompensation") ||
-                lama_diffuse_energy_compensation_ok(node.inputs.at("energyCompensation"))) &&
+                (lama_diffuse_energy_compensation_ok(node.inputs.at("energyCompensation")) &&
+                 lama_diffuse_energy_compensation_zero_ok(node))) &&
                !node.links.contains("energyCompensation") && !node.links.contains("roughness")));
       }
       else if (node.nodedef == translucent_bsdf_id || node.nodedef == lama_translucent_id) {
@@ -33190,6 +33234,23 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       if (const auto ior = node.links.find("ior"); ior != node.links.end()) {
         graph->connect(lowered_output(ior->second, nodes_by_name, lowered_nodes), bsdf->input("IOR"));
       }
+      /* Batch 54 (b85x P1 K5): validate() admits a Vector3 link on ND_chiang_hair_bsdf
+       * absorption_coefficient for this SurfaceShader flavor too, but only the BSDF-typed
+       * connect dispatch below wired it, so a chiang under a generic <surface> rendered
+       * with the unauthored absorption 0. Wire it here; never connect a null socket. */
+      if (const auto absorption = node.links.find("absorption_coefficient");
+          absorption != node.links.end())
+      {
+        ShaderInput *absorption_input = bsdf->input("Absorption Coefficient");
+        if (absorption_input == nullptr) {
+          rollback();
+          return fail("MaterialX node '" + node.name + "' (" + node.nodedef +
+                      ") has a linked absorption_coefficient but its Cycles closure has no "
+                      "Absorption Coefficient input");
+        }
+        graph->connect(lowered_output(absorption->second, nodes_by_name, lowered_nodes),
+                       absorption_input);
+      }
       if (const auto extinction = node.links.find("extinction"); extinction != node.links.end()) {
         graph->connect(lowered_output(extinction->second, nodes_by_name, lowered_nodes),
                        bsdf->input("Extinction"));
@@ -33819,6 +33880,30 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       if (const auto link = node.links.find("emissive_strength"); link != node.links.end()) {
         graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                        surface_node->input("Emission Strength"));
+      }
+      /* Batch 54: seed literal world-space normals through a constant vector node (an
+       * unlinked Normal socket falls back to the shading normal), as the batch-15 BSDF
+       * leaves do. MaterialX 1.39.4 gltf_pbr: `normal` drives the base and sheen lobes
+       * (Principled Normal), `clearcoat_normal` the clearcoat lobe (Coat Normal). */
+      for (const auto &[field, socket] : {std::pair{"normal", "Normal"},
+                                         std::pair{"clearcoat_normal", "Coat Normal"}})
+      {
+        const auto literal = node.vector3_inputs.find(field);
+        if (literal == node.vector3_inputs.end()) {
+          continue;
+        }
+        ShaderInput *normal_input = surface_node->input(socket);
+        if (normal_input == nullptr) {
+          rollback();
+          return fail("MaterialX node '" + node.name + "' (" + node.nodedef + ") has a literal " +
+                      field + " but its Cycles closure has no " + socket + " input");
+        }
+        VectorMathNode *constant = graph->create_node<VectorMathNode>();
+        constant->name = node.name + "." + field;
+        constant->set_math_type(NODE_VECTOR_MATH_ADD);
+        constant->set_vector1(literal->second);
+        constant->set_vector2(zero_float3());
+        graph->connect(constant->output("Vector"), normal_input);
       }
       if (gltf_pbr_sheen_active(node)) {
         if (const auto link = node.links.find("sheen_color"); link != node.links.end()) {

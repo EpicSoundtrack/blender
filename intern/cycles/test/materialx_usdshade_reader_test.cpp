@@ -28158,8 +28158,11 @@ TEST(materialx_usdshade_reader, reads_lama_leaf_mix_add_and_emission_closures)
   diffuse.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
       .Set(pxr::GfVec3f(0.2f, 0.3f, 0.4f));
   diffuse.CreateInput(pxr::TfToken("roughness"), pxr::SdfValueTypeNames->Float).Set(0.6f);
+  /* Batch 54: energyCompensation 0 at roughness > 0 (the uncompensated Oren-Nayar lobe) is
+   * refused now (b54_lama_diffuse_energy_compensation_zero_refused_when_rough); this
+   * combinator test uses the admitted compensated value 1 at the same roughness. */
   diffuse.CreateInput(pxr::TfToken("energyCompensation"), pxr::SdfValueTypeNames->Float)
-      .Set(0.0f);
+      .Set(1.0f);
   diffuse.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
 
   translucent.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_translucent")));
@@ -52877,6 +52880,394 @@ TEST(materialx_usdshade_reader, b51_reads_lama_diffuse_default_energy_compensati
   string error;
   EXPECT_FALSE(b51_read_usda(fractional, &graph, &error));
   EXPECT_NE(error.find("energyCompensation"), string::npos) << error;
+}
+
+/* Batch 54 fixtures: the importer's canonical USDA shape (Material -> Root -> Nested
+ * NodeGraph outputs, shaders named root__<node>, every nodedef input declared and
+ * literal defaults authored), as retained in the b85x-20261122 GPU lane
+ * (r/p3/b85x-20261122.e1.usda-readback.json). */
+namespace {
+string b54_material(const string &shaders, const string &terminal_node = "root__srf")
+{
+  return "#usda 1.0\ndef Scope \"Looks\" {\n def Material \"Material\" {\n"
+         "  token outputs:mtlx:surface.connect = </Looks/Material/Root.outputs:surface>\n"
+         "  def NodeGraph \"Root\" {\n"
+         "   token outputs:surface.connect = </Looks/Material/Root/Nested.outputs:surface>\n"
+         "   def NodeGraph \"Nested\" {\n"
+         "    token outputs:surface.connect = </Looks/Material/Root/Nested/" +
+         terminal_node + ".outputs:out>\n" + shaders +
+         "   }\n"
+         "  }\n"
+         " }\n}\n";
+}
+
+const string b54_nested = "/Looks/Material/Root/Nested/";
+
+string b54_generic_surface(const string &bsdf_node)
+{
+  return "    def Shader \"root__srf\" {\n"
+         "     uniform token info:id = \"ND_surface\"\n"
+         "     token inputs:bsdf.connect = <" + b54_nested + bsdf_node + ".outputs:out>\n"
+         "     token inputs:edf\n"
+         "     float inputs:opacity = 1\n"
+         "     uniform bool inputs:thin_walled = 0\n"
+         "     token outputs:out\n"
+         "    }\n";
+}
+
+/* b85x P1 K5_hi / K5_lo: chiang_hair_absorption_from_color -> chiang_hair_bsdf
+ * absorption_coefficient, every other chiang input at its authored nodedef default. */
+string b54_chiang_absorption_usda(const float color, const float azimuthal_roughness)
+{
+  const string c = std::to_string(color);
+  return b54_material(
+      "    def Shader \"root__absorb\" {\n"
+      "     uniform token info:id = \"ND_chiang_hair_absorption_from_color\"\n"
+      "     float inputs:azimuthal_roughness = " + std::to_string(azimuthal_roughness) + "\n"
+      "     color3f inputs:color = (" + c + ", " + c + ", " + c + ")\n"
+      "     vector3f outputs:absorption\n"
+      "    }\n"
+      "    def Shader \"root__n\" {\n"
+      "     uniform token info:id = \"ND_chiang_hair_bsdf\"\n"
+      "     vector3f inputs:absorption_coefficient.connect = <" + b54_nested +
+      "root__absorb.outputs:absorption>\n"
+      "     float inputs:cuticle_angle = 0.5\n"
+      "     vector3f inputs:curve_direction\n"
+      "     float inputs:ior = 1.55\n"
+      "     vector3f inputs:normal\n"
+      "     float2 inputs:roughness_R = (0.1, 0.1)\n"
+      "     float2 inputs:roughness_TRT = (0.2, 0.2)\n"
+      "     float2 inputs:roughness_TT = (0.05, 0.05)\n"
+      "     color3f inputs:tint_R = (1, 1, 1)\n"
+      "     color3f inputs:tint_TRT = (1, 1, 1)\n"
+      "     color3f inputs:tint_TT = (1, 1, 1)\n"
+      "     token outputs:out\n"
+      "    }\n" +
+      b54_generic_surface("root__n"));
+}
+
+/* MaterialX 1.39.4 pbrlib/genglsl/mx_chiang_hair_bsdf.glsl
+ * mx_chiang_hair_absorption_from_color. */
+float b54_chiang_absorption_reference(const float color, const float b)
+{
+  const float b2 = b * b, b3 = b2 * b, b4 = b3 * b, b5 = b4 * b;
+  const float b_fac = 5.969f - 0.215f * b + 2.532f * b2 - 10.73f * b3 + 5.574f * b4 +
+                      0.245f * b5;
+  const float sigma = std::log(std::min(std::max(color, 0.001f), 1.0f)) / b_fac;
+  return sigma * sigma;
+}
+
+struct B54Scene {
+  Stats stats;
+  Profiler profiler;
+  unique_ptr<Device> device;
+  unique_ptr<Scene> scene;
+  B54Scene()
+  {
+    ColorSpaceManager::init_fallback_config();
+    device = Device::create(DeviceInfo(), stats, profiler, true);
+    scene = std::make_unique<Scene>(SceneParams(), device.get());
+  }
+};
+}  // namespace
+
+/* Batch 54 item 1 (b85x P1 K5): absorption linked from ND_chiang_hair_absorption_from_color
+ * must reach the Principled Hair "Absorption Coefficient" -- the GPU lane rendered K5_lo
+ * (color 0.9) and K5_hi (color 0.2) identically, i.e. as if the link were dropped. */
+TEST(materialx_usdshade_reader, b54_chiang_hair_linked_absorption_from_color_reaches_closure)
+{
+  B54Scene scene;
+  for (const float color : {0.2f, 0.9f}) {
+    SCOPED_TRACE(color);
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(b54_chiang_absorption_usda(color, 0.3f), &lowered, &error))
+        << error;
+    PrincipledHairBsdfNode *hair = nullptr;
+    for (ShaderNode *node : lowered.nodes) {
+      if (auto *candidate = dynamic_cast<PrincipledHairBsdfNode *>(node)) {
+        ASSERT_EQ(hair, nullptr);
+        hair = candidate;
+      }
+    }
+    ASSERT_NE(hair, nullptr);
+    EXPECT_EQ(hair->get_parametrization(), NODE_PRINCIPLED_HAIR_DIRECT_ABSORPTION);
+    ASSERT_NE(hair->input("Absorption Coefficient")->link, nullptr);
+    ASSERT_NE(lowered.output()->input("Surface")->link, nullptr);
+    lowered.finalize(scene.scene.get());
+    /* After the real finalize the constant chain is folded into the socket; the folded
+     * value must be MaterialX's sigma^2, not the unauthored default 0. */
+    ShaderInput *absorption = hair->input("Absorption Coefficient");
+    ASSERT_TRUE(absorption->link == nullptr) << "constant chain should fold";
+    const float expected = b54_chiang_absorption_reference(color, 0.3f);
+    const float3 value = hair->get_absorption_coefficient();
+    EXPECT_NEAR(value.x, expected, 1e-5f);
+    EXPECT_NEAR(value.y, expected, 1e-5f);
+    EXPECT_NEAR(value.z, expected, 1e-5f);
+    EXPECT_GT(value.x, 0.0f);
+  }
+}
+
+namespace {
+/* b85x gltf rows (r/gl/src): the gltf_pbr surface is the terminal shader; the importer
+ * declares normal/tangent/clearcoat_normal (defaultgeomprop, no value) and authors
+ * every other nodedef default. `extra` overrides or adds inputs. */
+string b54_gltf_usda(const string &extra, const string &sheen_roughness = "0")
+{
+  return b54_material(
+      "    def Shader \"root__n\" {\n"
+      "     uniform token info:id = \"ND_gltf_pbr_surfaceshader\"\n"
+      "     color3f inputs:base_color = (0.8, 0.8, 0.8)\n"
+      "     float inputs:metallic = 0\n"
+      "     float inputs:roughness = 0.5\n"
+      "     float inputs:clearcoat = 0\n"
+      "     float inputs:clearcoat_roughness = 0\n"
+      "     color3f inputs:emissive = (0, 0, 0)\n"
+      "     uniform float inputs:emissive_strength = 1\n"
+      "     float inputs:occlusion = 1\n"
+      "     float inputs:transmission = 0\n"
+      "     float inputs:specular = 1\n"
+      "     color3f inputs:specular_color = (1, 1, 1)\n"
+      "     uniform float inputs:ior = 1.5\n"
+      "     float inputs:alpha = 1\n"
+      "     uniform int inputs:alpha_mode = 0\n"
+      "     uniform float inputs:alpha_cutoff = 0.5\n"
+      "     float inputs:iridescence = 0\n"
+      "     float inputs:anisotropy_strength = 0\n"
+      "     float inputs:anisotropy_rotation = 0\n" +
+          (sheen_roughness.empty() ? string() :
+                                     "     float inputs:sheen_roughness = " + sheen_roughness + "\n") +
+          extra +
+          "     token outputs:out\n"
+          "    }\n",
+      "root__n");
+}
+
+/* Declared-but-unvalued geometry ports, as the importer writes them. */
+string b54_gltf_geometry_ports(const string &normal,
+                               const string &tangent = "",
+                               const string &clearcoat_normal = "")
+{
+  return "     vector3f inputs:normal" + normal + "\n"
+         "     vector3f inputs:tangent" + tangent + "\n"
+         "     vector3f inputs:clearcoat_normal" + clearcoat_normal + "\n";
+}
+
+PrincipledBsdfNode *b54_find_principled(ShaderGraph &graph)
+{
+  PrincipledBsdfNode *found = nullptr;
+  for (ShaderNode *node : graph.nodes) {
+    if (auto *candidate = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      if (found != nullptr) {
+        return nullptr;
+      }
+      found = candidate;
+    }
+  }
+  return found;
+}
+
+/* The value the closure will read for a Normal-like socket after the real finalize: a
+ * folded constant, or nullopt when it falls back to the geometry (shading) normal. */
+std::optional<float3> b54_folded_normal(ShaderInput *input)
+{
+  if (input->link != nullptr || !input->constant_folded_in) {
+    return std::nullopt;
+  }
+  return input->parent->get_float3(input->socket_type);
+}
+}  // namespace
+
+/* Batch 54 item 2 (b85x gltf normal:L_probe): a literal gltf_pbr normal was admitted and
+ * ignored (the Principled Normal fell back to the shading normal; render changed <2%).
+ * MaterialX 1.39.4 bxdf/gltf_pbr.mtlx wires `normal` (Nworld, world space) into every base
+ * and sheen BSDF and `clearcoat_normal` into the clearcoat BSDF; Cycles' Principled Normal
+ * and Coat Normal are world-space shading normals, so a unit literal is seeded on each. */
+TEST(materialx_usdshade_reader, b54_gltf_pbr_literal_normals_reach_principled)
+{
+  B54Scene scene;
+  struct Case {
+    const char *label;
+    string ports;
+    const char *socket;
+    float3 expected;
+  };
+  const Case cases[] = {
+      {"normal", b54_gltf_geometry_ports(" = (0.6, 0, 0.8)"), "Normal",
+       make_float3(0.6f, 0.0f, 0.8f)},
+      {"clearcoat_normal", b54_gltf_geometry_ports("", "", " = (0.6, 0, 0.8)"), "Coat Normal",
+       make_float3(0.6f, 0.0f, 0.8f)},
+  };
+  for (const Case &c : cases) {
+    SCOPED_TRACE(c.label);
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(b54_gltf_usda(c.ports), &lowered, &error)) << error;
+    PrincipledBsdfNode *principled = b54_find_principled(lowered);
+    ASSERT_NE(principled, nullptr);
+    lowered.finalize(scene.scene.get());
+    const std::optional<float3> folded = b54_folded_normal(principled->input(c.socket));
+    ASSERT_TRUE(folded.has_value()) << "literal " << c.label << " was dropped";
+    EXPECT_NEAR(folded->x, c.expected.x, 1e-6f);
+    EXPECT_NEAR(folded->y, c.expected.y, 1e-6f);
+    EXPECT_NEAR(folded->z, c.expected.z, 1e-6f);
+    /* The other normal socket keeps the geometry normal. */
+    const char *other = string(c.socket) == "Normal" ? "Coat Normal" : "Normal";
+    EXPECT_FALSE(b54_folded_normal(principled->input(other)).has_value()) << other;
+  }
+  /* Control: declared, unvalued ports keep Nworld (the shading normal). */
+  ShaderGraph lowered;
+  string error;
+  ASSERT_TRUE(lineage_lower_usda(b54_gltf_usda(b54_gltf_geometry_ports("")), &lowered, &error))
+      << error;
+  PrincipledBsdfNode *principled = b54_find_principled(lowered);
+  ASSERT_NE(principled, nullptr);
+  lowered.finalize(scene.scene.get());
+  EXPECT_FALSE(b54_folded_normal(principled->input("Normal")).has_value());
+  EXPECT_FALSE(b54_folded_normal(principled->input("Coat Normal")).has_value());
+}
+
+/* Literals the seeding cannot represent faithfully stay refused by name: Cycles
+ * normalizes a closure normal, MaterialX 1.39.4 gltf_pbr does not, so only a unit
+ * vector is admitted; zero and non-finite have no direction at all. */
+TEST(materialx_usdshade_reader, b54_gltf_pbr_refuses_non_unit_literal_normals_by_name)
+{
+  for (const char *port : {"normal", "clearcoat_normal"}) {
+    for (const char *value : {" = (0, 0, 0)", " = (0, 0, 2)", " = (0.5, 0, 0.5)", " = (inf, 0, 1)"})
+    {
+      SCOPED_TRACE(string(port) + value);
+      const string ports = string(port) == "normal" ? b54_gltf_geometry_ports(value) :
+                                                      b54_gltf_geometry_ports("", "", value);
+      materialx::Graph graph;
+      string error;
+      EXPECT_FALSE(b51_read_usda(b54_gltf_usda(ports), &graph, &error));
+      EXPECT_NE(error.find(string("gltf_pbr ") + port), string::npos) << error;
+      EXPECT_TRUE(graph.nodes.empty());
+    }
+  }
+}
+
+/* Batch 54 item 4 (b85x tangent:L_inert, s4 FAIL -0.24%): NOT a lowering defect. MaterialX
+ * 1.39.4 gltf_pbr feeds `tangent` only to microfacet lobes whose roughness_uv is isotropic
+ * while anisotropy_strength is 0 (the reader pins it to that default), so the reference is
+ * tangent-independent; the reader admits the literal and Cycles never receives it. The
+ * lowered graphs with and without the literal are identical; the measured difference is
+ * between two tile positions, not two graphs. */
+TEST(materialx_usdshade_reader, b54_gltf_pbr_literal_tangent_is_inert_and_not_lowered)
+{
+  const auto lower_signature = [](const string &usda, string *signature) {
+    ShaderGraph lowered;
+    string error;
+    if (!lineage_lower_usda(usda, &lowered, &error)) {
+      *signature = "ERROR " + error;
+      return;
+    }
+    PrincipledBsdfNode *principled = b54_find_principled(lowered);
+    ASSERT_NE(principled, nullptr);
+    EXPECT_EQ(principled->get_anisotropic(), 0.0f);
+    EXPECT_EQ(principled->input("Tangent")->link, nullptr);
+    std::vector<string> names;
+    for (ShaderNode *node : lowered.nodes) {
+      names.push_back(string(node->type->name.c_str()) + ":" + node->name.string());
+    }
+    std::sort(names.begin(), names.end());
+    for (const string &name : names) {
+      *signature += name + ";";
+    }
+  };
+  string without, with;
+  lower_signature(b54_gltf_usda(b54_gltf_geometry_ports("")), &without);
+  lower_signature(b54_gltf_usda(b54_gltf_geometry_ports("", " = (0, 1, 0)")), &with);
+  EXPECT_EQ(with, without);
+  EXPECT_EQ(without.find("ERROR"), string::npos) << without;
+}
+
+/* Batch 54 item 3 (b85x sheen_roughness:D, -0.49%): NOT reproduced at graph level. The
+ * importer authors the nodedef default sheen_roughness = 0 for the unauthored source, so
+ * both b85x columns carried byte-identical canonical USDA (sha256 502aa5842fea... in g3 and
+ * s3). Pin that an absent and an authored 0 lower to the same Principled sheen. */
+TEST(materialx_usdshade_reader, b54_gltf_pbr_sheen_roughness_default_equals_authored_zero)
+{
+  const string sheen = "     color3f inputs:sheen_color = (1, 1, 1)\n";
+  float roughness[2] = {-1.0f, -1.0f};
+  float weight[2] = {-1.0f, -1.0f};
+  int index = 0;
+  for (const string authored : {string(), string("0")}) {
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(b54_gltf_usda(sheen, authored), &lowered, &error)) << error;
+    PrincipledBsdfNode *principled = b54_find_principled(lowered);
+    ASSERT_NE(principled, nullptr);
+    EXPECT_EQ(principled->input("Sheen Roughness")->link, nullptr);
+    roughness[index] = principled->get_sheen_roughness();
+    weight[index] = principled->get_sheen_weight();
+    index++;
+  }
+  EXPECT_EQ(roughness[0], roughness[1]);
+  EXPECT_EQ(weight[0], 1.0f);
+  EXPECT_EQ(weight[1], 1.0f);
+}
+
+namespace {
+/* b85x P3 E-tiles (r/p3/src): ND_lama_diffuse under a generic <surface>. */
+string b54_lama_diffuse_usda(const string &energy, const string &roughness)
+{
+  return b54_material(
+      "    def Shader \"root__under_test\" {\n"
+      "     uniform token info:id = \"ND_lama_diffuse\"\n"
+      "     color3f inputs:color = (0.8, 0.8, 0.8)\n" +
+      energy + "     vector3f inputs:normal\n" + roughness +
+      "     token outputs:out\n"
+      "    }\n" +
+      b54_generic_surface("root__under_test"));
+}
+}  // namespace
+
+/* Batch 54 item 5 (b85x P3 E2 == E4): ND_lama_diffuse energyCompensation 0 selects
+ * MaterialX 1.39.4's uncompensated oren_nayar_diffuse_bsdf (bxdf/lama/lama_diffuse.mtlx
+ * mix bg). Cycles has only the compensated Oren-Nayar closure (kernel/closure/
+ * bsdf_oren_nayar.h always adds the multi-scatter term), so 0 at roughness > 0 lowered to
+ * the compensated lobe -- refused by name now. At roughness 0 both MaterialX lobes are
+ * Lambert and Cycles also dispatches to Lambert, so 0 stays exact and admitted (the
+ * certified q8ec0 contracts all use the unauthored roughness 0). */
+TEST(materialx_usdshade_reader, b54_lama_diffuse_energy_compensation_zero_refused_when_rough)
+{
+  for (const char *roughness : {"1", "0.6", "0.001"}) {
+    SCOPED_TRACE(roughness);
+    materialx::Graph graph;
+    string error;
+    EXPECT_FALSE(b51_read_usda(
+        b54_lama_diffuse_usda("     uniform float inputs:energyCompensation = 0\n",
+                              string("     float inputs:roughness = ") + roughness + "\n"),
+        &graph,
+        &error));
+    EXPECT_NE(error.find("ND_lama_diffuse"), string::npos) << error;
+    EXPECT_NE(error.find("energyCompensation"), string::npos) << error;
+    EXPECT_NE(error.find("uncompensated"), string::npos) << error;
+    EXPECT_TRUE(graph.nodes.empty());
+  }
+  /* Roughness 0 (authored, or unauthored = nodedef default 0) and compensation 1 lower. */
+  struct Case {
+    string energy, roughness;
+    float expected_roughness;
+  };
+  const Case admitted[] = {
+      {"     uniform float inputs:energyCompensation = 0\n", "     float inputs:roughness = 0\n", 0.0f},
+      {"     uniform float inputs:energyCompensation = 0\n", "", 0.0f},
+      {"     uniform float inputs:energyCompensation = 1\n", "     float inputs:roughness = 1\n", 0.5f},
+      {"", "     float inputs:roughness = 1\n", 0.5f},
+  };
+  for (const Case &c : admitted) {
+    SCOPED_TRACE(c.energy + c.roughness);
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(b54_lama_diffuse_usda(c.energy, c.roughness), &lowered, &error))
+        << error;
+    MaterialXDiffuseBsdfNode *diffuse = dynamic_cast<MaterialXDiffuseBsdfNode *>(
+        lineage_find(lowered, "root__under_test"));
+    ASSERT_NE(diffuse, nullptr);
+    EXPECT_FLOAT_EQ(diffuse->get_roughness(), c.expected_roughness);
+  }
 }
 
 CCL_NAMESPACE_END
