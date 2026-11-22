@@ -2514,7 +2514,7 @@ double mx_compensated_response(const double nv,
                                const double color,
                                const bool glsl_clamps)
 {
-  const double eps = 1.0e-6;
+  const double eps = 1.0e-8; /* M_FLOAT_EPS, libraries/stdlib/genglsl/lib/mx_math.glsl */
   const double nl = glsl_clamps ? std::clamp(nl_raw, eps, 1.0) : nl_raw;
   const double lv = glsl_clamps ? std::clamp(lv_raw, eps, 1.0) : lv_raw;
   const double c1 = 0.5 - 2.0 / (3.0 * M_PI);
@@ -2589,8 +2589,11 @@ TEST(materialx_oren_nayar_reference, compensated_lobe_vs_materialx_1_39_4)
                sigma, albedo, nv, cycles_albedo, mx_albedo, ratio);
         min_ratio = std::min(min_ratio, ratio);
         max_ratio = std::max(max_ratio, ratio);
-        EXPECT_GT(ratio, 0.5);
-        EXPECT_LT(ratio, 2.0);
+        /* Pin the measured envelope [0.927, 1.000] with a small margin, so drift in
+         * the closure or the transcription fails here (D2's 0.5-2x band is far
+         * looser). */
+        EXPECT_GT(ratio, 0.90);
+        EXPECT_LE(ratio, 1.005);
       }
     }
   }

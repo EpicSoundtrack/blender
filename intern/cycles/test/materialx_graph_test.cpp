@@ -30869,11 +30869,24 @@ TEST(materialx_graph, b51_rejects_chiang_hair_linked_normal_in_validate)
   EXPECT_FALSE(materialx::validate({{b51_normal_source(),
                                      b51_chiang_with_linked_normal(materialx::Type::SurfaceShader),
                                      b51_surface_over("ChiangHair")}}));
+  /* Positive controls: the same fixtures without the normal link validate, so the
+   * refusals above are caused by the link. */
+  for (const materialx::Type type : {materialx::Type::BSDF, materialx::Type::SurfaceShader}) {
+    materialx::Node hair = b51_chiang_with_linked_normal(type);
+    hair.links.erase("normal");
+    materialx::Graph control;
+    control.nodes = {b51_normal_source(), hair};
+    if (type == materialx::Type::SurfaceShader) {
+      control.nodes.push_back(b51_surface_over("ChiangHair"));
+    }
+    EXPECT_TRUE(materialx::validate(control)) << int(type);
+  }
 }
 
 /* Same fixture through lower(): must return false with no partial graph, never connect
  * into the missing socket (the pre-fix build dereferenced a null ShaderInput in
- * ShaderGraph::connect). */
+ * ShaderGraph::connect: SEH 0xc0000005). validate() refuses first; the connect-phase
+ * null guard in graph.cpp is defence in depth and is not reached here. */
 TEST(materialx_graph, b51_chiang_hair_linked_normal_lower_fails_closed)
 {
   for (const materialx::Type type : {materialx::Type::BSDF, materialx::Type::SurfaceShader}) {
@@ -30886,6 +30899,9 @@ TEST(materialx_graph, b51_chiang_hair_linked_normal_lower_fails_closed)
     const size_t nodes_before = graph.nodes.size();
     string error;
     EXPECT_FALSE(materialx::lower(source, &graph, &error));
+    EXPECT_NE(error.find("'ChiangHair' (ND_chiang_hair_bsdf) was rejected by validate()"),
+              string::npos)
+        << error;
     EXPECT_EQ(graph.nodes.size(), nodes_before);
   }
 }
@@ -30922,7 +30938,13 @@ TEST(materialx_graph, b51_chiang_hair_linked_absorption_still_lowers)
  * entirely, and genmdl stdlib_1_6.mdl mx_surfacematerial only uses `backface` when
  * thin_walled, which ND_surface defaults to false (pbrlib_1_6.mdl mx_surface). Both use
  * the front surface on both sides, which is what this lowering already does. This test
- * pins that behaviour until a ruling chooses otherwise. */
+ * pins that behaviour until a ruling chooses otherwise.
+ *
+ * OPEN RULING (review b51-review-20261122-7c4e): the lowering is not internally
+ * consistent. A CONNECTED materialBack gets a Backfacing split (nodegraph reading),
+ * which the same OSL/MDL back ends would also ignore; the nodegraph reading for an
+ * UNCONNECTED materialBack would be an empty (black, presence-cut) back face. The
+ * genglsl surfacematerial back-face behaviour (C++ MaterialNode) is unverified. */
 TEST(materialx_graph, b51_lama_surface_unconnected_back_keeps_front_on_both_faces)
 {
   materialx::Node front;

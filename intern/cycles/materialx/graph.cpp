@@ -14739,12 +14739,13 @@ bool validate(const Graph &source,
          * multi-scatter term by the closure weight (= color) as well, i.e. color^3
          * instead of color^2, and the MaterialX GLSL caller clamps L.V to >= eps
          * where Cycles uses the raw dot. Directional albedo Cycles/MaterialX-GLSL
-         * stays in [0.927, 1.000] over sigma 0.02-0.5, albedo 0.18-0.99. So
-         * energy_compensation=true is a close, reviewed APPROXIMATION (inside the D2
-         * 0.5-2x energy band), not bit-exact. energy_compensation=false
+         * stays in [0.927, 1.000] over sigma 0.02-0.5, albedo 0.18-0.99 (pinned by
+         * that test). So energy_compensation=true is a close, reviewed APPROXIMATION,
+         * not bit-exact. energy_compensation=false
          * (the classic qualitative Oren-Nayar, A/B = 1-0.5s2/(s2+0.33), 0.45s2/(s2+0.09))
          * has no separate Cycles closure and lowers to the same compensated
-         * closure as a documented APPROXIMATION (identical at roughness 0).
+         * closure as a documented APPROXIMATION (identical at roughness 0); its
+         * energy difference has NOT been measured.
          *
          * ND_lama_diffuse (libraries/bxdf/lama/lama_diffuse.mtlx) is
          * mix(fg = compensated, bg = uncompensated, mix = energyCompensation) over

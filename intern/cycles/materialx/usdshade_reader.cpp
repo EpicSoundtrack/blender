@@ -29662,9 +29662,13 @@ bool b51_resolve_connection(const pxr::UsdShadeConnectionSourceInfo &start,
  * agree exactly only when scale_TT = 0.5 and scale_TRT = 2.0 (the nodedef defaults) and
  * every lobe already lies inside [0.001, 1]: 0.25 v >= 0.001, 4 v <= 1,
  * 0.001 <= s <= 1. That subset is folded here into the literal (v, s) triple the
- * existing literal path lowers (chiang_roughness_subset_ok accepts it by ratio); the
- * controls must be literal so the bounds can be proven. Everything else is refused by
- * name. Returns true without touching *node when no roughness input is connected. */
+ * existing literal path lowers (chiang_roughness_subset_ok accepts it by ratio; lower()
+ * recovers the controls by 32-step bisection, so the result is exact to float
+ * precision). The controls must be literal so the bounds can be proven; an unauthored
+ * control on the shader takes the ND_chiang_hair_roughness nodedef default, while a
+ * connection to an unvalued NodeGraph interface input is refused. Everything else is
+ * refused by name.
+ * Returns true without touching *node when no roughness input is connected. */
 bool read_chiang_hair_linked_roughness(const pxr::UsdShadeShader &hair,
                                        Node *node,
                                        string *error_message)
@@ -29702,6 +29706,14 @@ bool read_chiang_hair_linked_roughness(const pxr::UsdShadeShader &hair,
                     "' must be one vector2 connection to an ND_chiang_hair_roughness output");
       return false;
     }
+    const pxr::UsdShadeOutput resolved_output = shader.GetOutput(output_name);
+    if (!resolved_output ||
+        resolved_output.GetTypeName() != pxr::SdfValueTypeNames->Float2)
+    {
+      set_error(error_message,
+                prefix + "input '" + lobe + "' must connect to a vector2 (float2) output");
+      return false;
+    }
     if (output_name.GetString() != lobe) {
       set_error(error_message,
                 prefix + "input '" + lobe + "' must connect to output '" + lobe + "', not '" +
@@ -29735,6 +29747,14 @@ bool read_chiang_hair_linked_roughness(const pxr::UsdShadeShader &hair,
         set_error(error_message,
                   prefix + "requires a literal '" + name +
                       "' (a computed value cannot be proven to stay inside the exact subset)");
+        return false;
+      }
+      if (!literal.HasAuthoredValue()) {
+        /* An unvalued interface input's default is the enclosing graph's, which is not
+         * provably this nodedef's default: refuse rather than guess. */
+        set_error(error_message,
+                  prefix + "requires a literal '" + name +
+                      "' (connected to an interface input without a value)");
         return false;
       }
       attribute = literal;
