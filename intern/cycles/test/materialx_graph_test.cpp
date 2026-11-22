@@ -24413,7 +24413,7 @@ float if_select_eval(ShaderOutput *output)
  * linked ND_divide_float with literal operands (MaterialX IEEE divide: 0/0 is
  * NaN, 2^100/2^-100 overflows to +-Inf). */
 struct IfSelectOperand {
-  enum Kind { Literal, Constant, Divide } kind;
+  enum Kind { Literal, Constant, Divide, Frame } kind;
   float a;
   float b;
 };
@@ -24444,6 +24444,9 @@ materialx::Graph if_select_source(const char *nodedef,
     if (operand.kind == IfSelectOperand::Constant) {
       producer.nodedef = "ND_constant_float";
       producer.inputs["value"] = operand.a;
+    }
+    else if (operand.kind == IfSelectOperand::Frame) {
+      producer.nodedef = "ND_frame_float"; /* runtime value, never folds */
     }
     else {
       producer.nodedef = "ND_divide_float";
@@ -24539,8 +24542,14 @@ TEST(materialx_graph, float_conditionals_unselected_nonfinite_branch_does_not_le
         auto *select = dynamic_cast<MathNode *>(if_select_output(runtime, "Select")->parent);
         ASSERT_NE(select, nullptr);
         EXPECT_EQ(select->get_math_type(), NODE_MATH_MATERIALX_SELECT);
-        const uint32_t expected = std::bit_cast<uint32_t>(
-            if_select_input(select->input(predicate.selects_in1 ? "Value2" : "Value3")));
+        const float expected_value = if_select_input(
+            select->input(predicate.selects_in1 ? "Value2" : "Value3"));
+        /* Absolute anchor (float == tolerates only the +-0 socket artifact):
+         * the socket read must be the authored finite arm, so an in1/in2 swap
+         * cannot make NaN == NaN pass. */
+        ASSERT_TRUE(std::isfinite(expected_value));
+        ASSERT_EQ(expected_value, good.a);
+        const uint32_t expected = std::bit_cast<uint32_t>(expected_value);
         ShaderOutput *result = if_select_output(runtime, "Select");
         ASSERT_NE(result, nullptr);
         EXPECT_EQ(std::bit_cast<uint32_t>(if_select_eval(result)), expected)
@@ -24564,6 +24573,45 @@ TEST(materialx_graph, float_conditionals_unselected_nonfinite_branch_does_not_le
         EXPECT_EQ(std::bit_cast<uint32_t>(emission->get_color().x), expected)
             << "folded select returned " << emission->get_color().x;
       }
+    }
+  }
+}
+
+TEST(materialx_graph, float_conditionals_constant_predicate_bypasses_to_runtime_arm)
+{
+  /* MathNode::constant_fold for MATERIALX_SELECT: once the predicate folds
+   * to a constant, a linked runtime arm is bypassed through and the other
+   * arm is dropped; a literal selected arm becomes the constant. */
+  for (const bool take_in1 : {true, false}) {
+    SCOPED_TRACE(take_in1 ? "selects runtime in1" : "selects literal in2");
+    BaseContractFoldGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower(
+        if_select_source("ND_ifgreater_float", take_in1 ? 2.0f : 1.0f, take_in1 ? 1.0f : 2.0f,
+                         {IfSelectOperand::Frame, 0.0f, 0.0f},
+                         {IfSelectOperand::Literal, 0.25f, 0.0f}, true),
+        &graph, &error))
+        << error;
+    EmissionNode *emission = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      if (auto *candidate = dynamic_cast<EmissionNode *>(node)) {
+        emission = candidate;
+      }
+    }
+    ASSERT_NE(emission, nullptr);
+    graph.fold_constants();
+    if (take_in1) {
+      ShaderOutput *color = emission->input("Color")->link;
+      ASSERT_NE(color, nullptr);
+      ShaderInput *red = color->parent->input("Red");
+      ASSERT_NE(red, nullptr);
+      ASSERT_NE(red->link, nullptr);
+      EXPECT_NE(dynamic_cast<SceneTimeNode *>(red->link->parent), nullptr)
+          << red->link->parent->name.string();
+    }
+    else {
+      ASSERT_EQ(emission->input("Color")->link, nullptr);
+      EXPECT_EQ(emission->get_color(), make_float3(0.25f));
     }
   }
 }
@@ -24601,6 +24649,8 @@ TEST(materialx_graph, float_conditionals_finite_selection_is_bit_exact)
           const float arm1 = if_select_input(select->input("Value2"));
           const float arm2 = if_select_input(select->input("Value3"));
           const float selected = take_in1 ? arm1 : arm2;
+          ASSERT_EQ(arm1, a);
+          ASSERT_EQ(arm2, b);
           const float actual = if_select_eval(result);
           EXPECT_EQ(std::bit_cast<uint32_t>(actual), std::bit_cast<uint32_t>(selected))
               << "in1=" << a << " in2=" << b << " take_in1=" << take_in1;
