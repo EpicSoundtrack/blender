@@ -31897,13 +31897,16 @@ TEST(materialx_usdshade_reader, rejects_gltf_pbr_sheen_with_clearcoat_naming_lay
   }
 }
 
-TEST(materialx_usdshade_reader, rejects_gltf_pbr_active_sheen_with_active_emission)
+TEST(materialx_usdshade_reader, admits_gltf_pbr_active_sheen_with_active_emission)
 {
-  /* Batch 50 root decision: literal or connected emissive x active or
-   * inactive sheen. Active sheen with active emission is refused (Principled
-   * attenuates emission by the sheen layer, the reference does not), with a
-   * message naming it, and the output graph is left untouched; inactive sheen
-   * or a literal-0 emissive_strength admits. */
+  /* Batch 55, user ruling policy-rulings-20261122c Q6 ("Measure, then
+   * decide"): literal or connected emissive x active or inactive sheen x
+   * literal-0 emissive_strength. The batch-50 refusal of active sheen with
+   * active emission is removed: Principled attenuates emission by the sheen
+   * layer (the reference does not), but the measured dimming (lane
+   * loc-20261122 q6v2-evaluation.json, sheen 0.846-0.981 at 0 and 60 degrees)
+   * is inside the 0.5-2x band. Every combination now reads, validates and
+   * lowers, and active sheen reaches Principled together with the emission. */
   for (const bool connected_emissive : {false, true}) {
     for (const bool sheen_active : {false, true}) {
       for (const bool zero_strength : {false, true}) {
@@ -31933,37 +31936,41 @@ TEST(materialx_usdshade_reader, rejects_gltf_pbr_active_sheen_with_active_emissi
         }
         materialx::Graph graph;
         string error;
-        const bool refused = sheen_active && !zero_strength;
-        const bool read = materialx::read_usdshade_graph(s.material, &graph, &error);
-        EXPECT_EQ(read, !refused) << error;
-        if (refused) {
-          EXPECT_NE(error.find("gltf_pbr sheen_color with emissive"), string::npos) << error;
-          EXPECT_NE(error.find("attenuates emission by the sheen layer"), string::npos) << error;
-          EXPECT_TRUE(graph.nodes.empty());
+        ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &graph, &error)) << error;
+        EXPECT_TRUE(materialx::validate(graph));
+        ShaderGraph shader_graph;
+        ASSERT_TRUE(materialx::lower(graph, &shader_graph));
+        PrincipledBsdfNode *principled = nullptr;
+        for (ShaderNode *node : shader_graph.nodes) {
+          principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+        }
+        ASSERT_NE(principled, nullptr);
+        EXPECT_FLOAT_EQ(principled->get_sheen_weight(), sheen_active ? 1.0f : 0.0f);
+        if (connected_emissive) {
+          EXPECT_NE(principled->input("Emission Color")->link, nullptr);
         }
         else {
-          EXPECT_TRUE(materialx::validate(graph));
+          EXPECT_EQ(principled->get_emission_color(), make_float3(0.4f, 0.3f, 0.2f));
         }
+        EXPECT_FLOAT_EQ(principled->get_emission_strength(), zero_strength ? 0.0f : 1.0f);
       }
     }
   }
-  /* With active literal sheen: a zero emissive admits; a negative emissive
-   * channel and any connected emissive_strength are refused, matching
-   * validate() (a connection is active whatever it evaluates to; here the
-   * source is the translation's metallic_out). */
+  /* With active literal sheen: zero, negative-channel and positive emissive,
+   * with a literal or connected emissive_strength (here the translation's
+   * metallic_out), are all admitted; batch 50 refused the negative-channel and
+   * the connected-strength cases. */
   struct Case {
     const char *name;
     pxr::GfVec3f emissive;
     bool linked_strength;
-    bool refused;
   };
-  for (const Case &c : {Case{"zero emissive", pxr::GfVec3f(0.0f, 0.0f, 0.0f), false, false},
-                        Case{"negative emissive", pxr::GfVec3f(-0.1f, 0.0f, 0.0f), false, true},
-                        Case{"linked strength", pxr::GfVec3f(0.4f, 0.3f, 0.2f), true, true},
+  for (const Case &c : {Case{"zero emissive", pxr::GfVec3f(0.0f, 0.0f, 0.0f), false},
+                        Case{"negative emissive", pxr::GfVec3f(-0.1f, 0.0f, 0.0f), false},
+                        Case{"linked strength", pxr::GfVec3f(0.4f, 0.3f, 0.2f), true},
                         Case{"zero emissive, linked strength",
                              pxr::GfVec3f(0.0f, 0.0f, 0.0f),
-                             true,
-                             false}})
+                             true}})
   {
     SCOPED_TRACE(c.name);
     GltfSheenStage s = gltf_sheen_stage(c.linked_strength);
@@ -31979,15 +31986,10 @@ TEST(materialx_usdshade_reader, rejects_gltf_pbr_active_sheen_with_active_emissi
         .Set(c.emissive);
     materialx::Graph graph;
     string error;
-    const bool read = materialx::read_usdshade_graph(s.material, &graph, &error);
-    EXPECT_EQ(read, !c.refused) << error;
-    if (c.refused) {
-      EXPECT_NE(error.find("gltf_pbr sheen_color with emissive"), string::npos) << error;
-      EXPECT_TRUE(graph.nodes.empty());
-    }
-    else {
-      EXPECT_TRUE(materialx::validate(graph));
-    }
+    ASSERT_TRUE(materialx::read_usdshade_graph(s.material, &graph, &error)) << error;
+    EXPECT_TRUE(materialx::validate(graph));
+    ShaderGraph shader_graph;
+    EXPECT_TRUE(materialx::lower(graph, &shader_graph));
   }
 }
 

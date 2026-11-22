@@ -1090,8 +1090,10 @@ constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshad
  *  sheen_roughness lower onto Principled sheen as an APPROXIMATION (see
  *  gltf_pbr_sheen_active()): the reference sheen_bsdf is Conty-Kulla,
  *  Cycles' is microfiber, bridged by the energy-matched roughness remap also
- *  used by ND_sheen_bsdf; sheen together with a clearcoat (layer order) or
- *  with emission (Principled attenuates it by the sheen) stays fail-closed.
+ *  used by ND_sheen_bsdf; sheen together with a clearcoat (layer order)
+ *  stays fail-closed. Emission under sheen or clearcoat is a documented,
+ *  measured approximation (Principled attenuates it; see
+ *  gltf_pbr_sheen_active()).
  *  transmission, specular/specular_color, iridescence, anisotropy, alpha
  *  MASK/BLEND modes, and connected normal/tangent/clearcoat_normal have no
  *  faithful Cycles equivalent yet
@@ -3292,15 +3294,18 @@ float sheen_microfiber_literal_roughness(const Node &node)
  * channel to 0 and saturates the layer throughput; the reference does
  * neither.
  *
- * Principled also attenuates its emission by the sheen layer (closure.h
- * "Emission (attenuated by sheen and coat)"), while the reference surface
- * adds the edf beside the BSDF layer stack (believed unattenuated, not yet
- * measured). Active sheen with active emission (see
- * gltf_pbr_emission_active()) is therefore refused (fail-closed) until the
- * reference behaviour is measured; it is not approximated. Principled
- * attenuates emission by the coat too: active clearcoat with emission is a
- * pre-existing admitted approximation (findings.json
- * approximated_in_current_lowering), not changed here; root ruling open.
+ * Emission under sheen or clearcoat is a documented APPROXIMATION (user ruling
+ * policy-rulings-20261122c Q6, "Measure, then decide": keep both admitted if
+ * inside the 0.5-2x energy band). Principled attenuates its emission by the
+ * sheen and coat layers (closure.h "Emission (attenuated by sheen and coat)");
+ * the reference adds the edf beside the BSDF layer stack, unattenuated.
+ * Measured on the real Cycles path through Blender MCP (lane loc-20261122,
+ * q6v2-evaluation.json, C1 == C2), emission under the layer / emission alone:
+ * clearcoat 0.910-0.986, sheen 0.846-0.981 (Principled sheen diagnostic), at
+ * view angles 0 and 60 degrees. Both are inside 0.5-2x, so the batch-50
+ * sheen+emission refusal is removed (batch 55). Caveat: the attenuation grows
+ * with the layer Fresnel towards grazing view; the dimming is estimated to
+ * fall below 0.5 only near 83 degrees, which was not rendered.
  *
  * Sheen is active when sheen_color is linked or is a literal with a positive
  * channel: genglsl mx_sheen_bsdf returns no sheen for weight < eps, so the
@@ -3326,21 +3331,6 @@ bool gltf_pbr_clearcoat_active(const Node &node)
   }
   const auto clearcoat = node.inputs.find("clearcoat");
   return clearcoat != node.inputs.end() && clearcoat->second != 0.0f;
-}
-
-/* gltf_pbr emission = emissive * emissive_strength (defaults (0,0,0) and 1).
- * Active when emissive is linked or a literal with a non-zero channel, unless
- * emissive_strength is a literal 0. */
-bool gltf_pbr_emission_active(const Node &node)
-{
-  const auto emissive = node.color3_inputs.find("emissive");
-  const bool emissive_active =
-      node.links.contains("emissive") ||
-      (emissive != node.color3_inputs.end() &&
-       (emissive->second.x != 0.0f || emissive->second.y != 0.0f || emissive->second.z != 0.0f));
-  const auto strength = node.inputs.find("emissive_strength");
-  return emissive_active && !(strength != node.inputs.end() && strength->second == 0.0f &&
-                              !node.links.contains("emissive_strength"));
 }
 
 bool is_matrix33_conditional(const string &nodedef)
@@ -12743,7 +12733,8 @@ bool validate(const Graph &source,
      * into a node of this nodedef; every other real input on the 28-input
      * gltf_pbr nodedef is checked at admission time to be absent or inert
      * and is never stored. Active sheen with an active clearcoat (layer
-     * order) or active emission (sheen-attenuated emission) is refused; see
+     * order) is refused; active sheen with active emission is admitted as a
+     * measured approximation (batch 55, ruling 20261122c Q6); see
      * gltf_pbr_sheen_active(). */
     if (node.nodedef == gltf_pbr_id) {
       const auto output = node.outputs.find("out");
@@ -12809,9 +12800,7 @@ bool validate(const Graph &source,
       {
         return false;
       }
-      if (gltf_pbr_sheen_active(node) &&
-          (gltf_pbr_clearcoat_active(node) || gltf_pbr_emission_active(node)))
-      {
+      if (gltf_pbr_sheen_active(node) && gltf_pbr_clearcoat_active(node)) {
         return false;
       }
       continue;
@@ -14785,8 +14774,21 @@ bool validate(const Graph &source,
          * not bit-exact. energy_compensation=false
          * (the classic qualitative Oren-Nayar, A/B = 1-0.5s2/(s2+0.33), 0.45s2/(s2+0.09))
          * has no separate Cycles closure and lowers to the same compensated
-         * closure as a documented APPROXIMATION (identical at roughness 0); its
-         * energy difference has NOT been measured.
+         * closure as a documented APPROXIMATION (identical at roughness 0; user
+         * ruling policy-rulings-20261122d Q11, "Document approximation"). Measured
+         * (audit out/continuous-finish/oren-nayar-ec-audit-20261122/findings.json,
+         * ports of bsdf_oren_nayar.h and MaterialX 1.39.4 mx_microfacet_diffuse.glsl
+         * mx_oren_nayar_diffuse): directional albedo Cycles / MaterialX-uncompensated
+         * is in [0.981, 1.595] for roughness 0-1 (N.V 0.1-1, albedo 0.18-0.99), i.e.
+         * Cycles is up to ~27% brighter at roughness <= 0.5 and up to ~59% at
+         * roughness 1; for roughness > 1 (Cycles clamps sigma to 1, MaterialX does
+         * not) it stays below 1.99. That is inside the D2 0.5-2x energy band. The
+         * point-wise lobe shape is NOT inside it at roughness near 1 (0.32-1.70:
+         * Fujii keeps negative t, Cycles adds a retro-reflective multi-scatter
+         * term). The envelope is pinned against the actual CPU closure by
+         * materialx_oren_nayar_reference.uncompensated_lobe_envelope_vs_materialx_1_39_4.
+         * A linked roughness lowers the same way. An exact uncompensated kernel
+         * mode is a later upstream-proposal candidate, not implemented.
          *
          * ND_lama_diffuse (libraries/bxdf/lama/lama_diffuse.mtlx) is
          * mix(fg = compensated, bg = uncompensated, mix = energyCompensation) over
@@ -25930,6 +25932,14 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           principled->set_metallic(input->second);
         }
         if (const auto input = node.inputs.find("diffuse_roughness"); input != node.inputs.end()) {
+          /* Documented APPROXIMATION (user ruling policy-rulings-20261122d Q11):
+           * Standard Surface's diffuse lobe is the UNcompensated oren_nayar_diffuse_bsdf
+           * (libraries/bxdf/standard_surface.mtlx, energy_compensation false), while
+           * Principled Diffuse Roughness > 0 uses Cycles' compensated Oren-Nayar
+           * closure. Same gap and same measured energy envelope as
+           * ND_oren_nayar_diffuse_bsdf with energy_compensation=false (see the
+           * validate() comment there): directional albedo ratio [0.981, 1.595] for
+           * roughness 0-1, below 1.99 beyond. Identical (Lambert) at 0. */
           principled->set_diffuse_roughness(input->second);
         }
         if (const auto input = node.inputs.find("specular"); input != node.inputs.end()) {

@@ -2601,4 +2601,119 @@ TEST(materialx_oren_nayar_reference, compensated_lobe_vs_materialx_1_39_4)
          min_ratio, max_ratio);
 }
 
+namespace {
+/* MaterialX 1.39.4 pbrlib/genglsl/lib/mx_microfacet_diffuse.glsl mx_oren_nayar_diffuse (the
+ * qualitative, UNcompensated lobe used when energy_compensation is false, and by
+ * standard_surface's diffuse_bsdf), with the GLSL caller's clamps from
+ * mx_oren_nayar_diffuse_bsdf.glsl (NdotV, NdotL, LdotV clamped to [M_FLOAT_EPS, 1]).
+ * Returns the BSDF response color * diffuse * NdotL / pi for one colour channel. */
+double mx_uncompensated_response(const double nv_raw,
+                                 const double nl_raw,
+                                 const double lv_raw,
+                                 const double roughness,
+                                 const double color)
+{
+  const double eps = 1.0e-8; /* M_FLOAT_EPS */
+  const double nv = std::clamp(nv_raw, eps, 1.0);
+  const double nl = std::clamp(nl_raw, eps, 1.0);
+  const double lv = std::clamp(lv_raw, eps, 1.0);
+  const double s = lv - nl * nv;
+  const double stinv = s > 0.0 ? s / std::max(nl, nv) : 0.0;
+  const double sigma2 = roughness * roughness;
+  const double a = 1.0 - 0.5 * (sigma2 / (sigma2 + 0.33));
+  const double b = 0.45 * sigma2 / (sigma2 + 0.09);
+  return color * (a + b * stinv) * nl / M_PI;
+}
+}  // namespace
+
+/* Batch 55 (user ruling policy-rulings-20261122d Q11, "Document approximation"):
+ * ND_oren_nayar_diffuse_bsdf energy_compensation=false (the nodedef default) and
+ * ND_standard_surface diffuse_roughness > 0 lower to Cycles' compensated Oren-Nayar
+ * closure. This pins the measured energy envelope of that approximation: the directional
+ * albedo of the actual CPU closure (set up as svm_node_materialx_closure_bsdf does:
+ * weight = albedo = colour) over the transcribed MaterialX 1.39.4 uncompensated lobe.
+ * Grid and bounds are those of out/continuous-finish/oren-nayar-ec-audit-20261122
+ * (findings.json / ratio-grid.json: roughness 0.05-1, N.V 0.1-1, albedo 0.18-0.99, 160x160
+ * midpoint), each per-roughness band widened by 0.01. Beyond roughness 1 Cycles clamps
+ * sigma while MaterialX does not; the ratio must still stay below 2 (D2 0.5-2x). */
+TEST(materialx_oren_nayar_reference, uncompensated_lobe_envelope_vs_materialx_1_39_4)
+{
+  struct Band {
+    float roughness;
+    double lo, hi;
+  };
+  /* findings.json directional_albedo_ratio_cycles_over_mx_uncompensated.by_roughness;
+   * roughness 2 and 5 lie outside the audit grid and pin only the D2 bound. */
+  const Band bands[] = {{0.05f, 0.98931, 1.00349},
+                        {0.1f, 0.98318, 1.01435},
+                        {0.2f, 0.98075, 1.05597},
+                        {0.3f, 0.99237, 1.11817},
+                        {0.4f, 1.01684, 1.19257},
+                        {0.5f, 1.04819, 1.27137},
+                        {0.6f, 1.07963, 1.34873},
+                        {0.7f, 1.10718, 1.42099},
+                        {0.8f, 1.13038, 1.48630},
+                        {0.9f, 1.14895, 1.54410},
+                        {1.0f, 1.16317, 1.59458},
+                        {2.0f, 0.5, 2.0},
+                        {5.0f, 0.5, 2.0}};
+  const double margin = 0.01;
+  double min_ratio = 1.0e9, max_ratio = 0.0;
+  for (const Band &band : bands) {
+    const bool in_audit_grid = band.roughness <= 1.0f;
+    double band_min = 1.0e9, band_max = 0.0;
+    for (const float nv : {0.1f, 0.25f, 0.5f, 0.75f, 0.95f, 1.0f}) {
+      for (const float albedo : {0.18f, 0.2f, 0.5f, 0.8f, 0.99f}) {
+        ShaderData sd{};
+        sd.N = sd.Ng = make_float3(0.0f, 0.0f, 1.0f);
+        sd.wi = make_float3(std::sqrt(std::max(0.0f, 1.0f - nv * nv)), 0.0f, nv);
+        sd.num_closure_left = MAX_CLOSURE;
+        const Spectrum color = make_spectrum(albedo);
+        bsdf_oren_nayar_setup(&sd, sd.N, color, band.roughness, color);
+        ASSERT_EQ(sd.num_closure, 1);
+        const ccl_private ShaderClosure *sc = &sd.closure[0];
+        double cycles_albedo = 0.0, mx_albedo = 0.0;
+        const int n_mu = 160, n_phi = 160;
+        const double dw = (1.0 / n_mu) * (2.0 * M_PI / n_phi);
+        for (int i = 0; i < n_mu; i++) {
+          const double mu = (i + 0.5) / n_mu;
+          const double sin_t = std::sqrt(1.0 - mu * mu);
+          for (int j = 0; j < n_phi; j++) {
+            const double phi = 2.0 * M_PI * (j + 0.5) / n_phi;
+            const float3 wo = make_float3(
+                float(sin_t * std::cos(phi)), float(sin_t * std::sin(phi)), float(mu));
+            float pdf;
+            const Spectrum eval = bsdf_oren_nayar_eval(sc, sd.wi, wo, &pdf);
+            cycles_albedo += double(eval.x) * double(sc->weight.x) * dw;
+            mx_albedo += mx_uncompensated_response(
+                             nv, mu, double(dot(sd.wi, wo)), band.roughness, albedo) *
+                         dw;
+          }
+        }
+        const double ratio = cycles_albedo / mx_albedo;
+        band_min = std::min(band_min, ratio);
+        band_max = std::max(band_max, ratio);
+        EXPECT_GE(ratio, band.lo - (in_audit_grid ? margin : 0.0))
+            << "roughness=" << band.roughness << " albedo=" << albedo << " nv=" << nv;
+        EXPECT_LE(ratio, band.hi + (in_audit_grid ? margin : 0.0))
+            << "roughness=" << band.roughness << " albedo=" << albedo << " nv=" << nv;
+        EXPECT_LT(ratio, 2.0);
+      }
+    }
+    printf("[ oren-nayar uncomp] roughness=%.2f ratio Cycles/MaterialX-uncompensated in "
+           "[%.5f, %.5f]\n",
+           band.roughness,
+           band_min,
+           band_max);
+    if (in_audit_grid) {
+      min_ratio = std::min(min_ratio, band_min);
+      max_ratio = std::max(max_ratio, band_max);
+    }
+  }
+  /* findings.json "all": [0.98075, 1.59458] over roughness 0.05-1. */
+  printf("[ oren-nayar uncomp] roughness 0.05-1 envelope [%.5f, %.5f]\n", min_ratio, max_ratio);
+  EXPECT_GT(min_ratio, 0.98075 - margin);
+  EXPECT_LT(max_ratio, 1.59458 + margin);
+}
+
 CCL_NAMESPACE_END

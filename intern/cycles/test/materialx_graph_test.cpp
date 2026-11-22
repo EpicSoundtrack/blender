@@ -21324,13 +21324,16 @@ TEST(materialx_graph, validates_gltf_pbr_sheen_link_types_and_refuses_sheen_with
   }
 }
 
-TEST(materialx_graph, validates_gltf_pbr_refuses_active_sheen_with_active_emission)
+TEST(materialx_graph, validates_gltf_pbr_admits_active_sheen_with_active_emission)
 {
-  /* Batch 50 root decision: Principled attenuates emission by the sheen
-   * layer, the reference adds the edf beside the BSDF layers, so active sheen
-   * with active emission (emissive linked or non-zero, unless
-   * emissive_strength is a literal 0) is refused until measured. Every
-   * admitted combination still lowers. */
+  /* Batch 55, user ruling policy-rulings-20261122c Q6 ("Measure, then
+   * decide"): the batch-50 refusal of active sheen with active emission is
+   * removed. Principled still attenuates emission by the sheen layer (the
+   * reference does not), but the measured dimming (lane loc-20261122
+   * q6v2-evaluation.json: sheen 0.846-0.981, clearcoat 0.910-0.986 at 0 and
+   * 60 degrees) is inside the 0.5-2x band, so it is a documented
+   * approximation. The former refusal matrix now has to validate AND lower
+   * every combination, with sheen and emission both reaching Principled. */
   materialx::Node color;
   color.name = "C";
   color.nodedef = "ND_constant_color3";
@@ -21386,11 +21389,33 @@ TEST(materialx_graph, validates_gltf_pbr_refuses_active_sheen_with_active_emissi
                                       emissive == EmissiveLinked) &&
                                      strength != StrengthZero;
         const materialx::Graph source{{color, scalar, surface}};
-        const bool refused = sheen_active && emission_active;
-        EXPECT_EQ(materialx::validate(source), !refused);
-        if (!refused) {
-          ShaderGraph graph;
-          EXPECT_TRUE(materialx::lower(source, &graph));
+        EXPECT_TRUE(materialx::validate(source));
+        ShaderGraph graph;
+        ASSERT_TRUE(materialx::lower(source, &graph));
+        if (!(sheen_active && emission_active)) {
+          continue;
+        }
+        PrincipledBsdfNode *principled = gltf_principled(graph);
+        ASSERT_NE(principled, nullptr);
+        EXPECT_FLOAT_EQ(principled->get_sheen_weight(), 1.0f);
+        if (sheen == SheenLinked) {
+          EXPECT_NE(principled->input("Sheen Tint")->link, nullptr);
+        }
+        else {
+          EXPECT_EQ(principled->get_sheen_tint(), make_float3(0.3f, 0.2f, 0.1f));
+        }
+        if (emissive == EmissiveLinked) {
+          EXPECT_NE(principled->input("Emission Color")->link, nullptr);
+        }
+        else {
+          EXPECT_EQ(principled->get_emission_color(), make_float3(0.0f, 0.0f, 0.2f));
+        }
+        if (strength == StrengthLinked) {
+          EXPECT_NE(principled->input("Emission Strength")->link, nullptr);
+        }
+        else {
+          EXPECT_FLOAT_EQ(principled->get_emission_strength(),
+                          strength == StrengthLiteral ? 2.0f : 1.0f);
         }
       }
     }
@@ -24158,6 +24183,74 @@ TEST(materialx_graph, standard_surface_base_literal_preserves_original_rough_dif
     ASSERT_NE(base, nullptr);
     EXPECT_EQ(base->link, nullptr);
     EXPECT_FLOAT_EQ(node->get_float(base->socket_type), weight);
+  }
+}
+
+TEST(materialx_graph, b55_uncompensated_oren_nayar_lowers_as_documented_approximation)
+{
+  /* Batch 55, user ruling policy-rulings-20261122d Q11 ("Document approximation"):
+   * behaviour unchanged, now pinned. ND_oren_nayar_diffuse_bsdf with
+   * energy_compensation false (explicit 0, or unauthored = the nodedef default) at
+   * roughness > 0, literal or linked, validates and lowers to the same (compensated)
+   * Cycles diffuse closure as energy_compensation 1, with the roughness passed through.
+   * ND_standard_surface diffuse_roughness > 0 (MaterialX: uncompensated oren_nayar)
+   * likewise lowers to Principled Diffuse Roughness. The energy envelope of both is
+   * pinned by materialx_oren_nayar_reference.uncompensated_lobe_envelope_vs_materialx_1_39_4. */
+  for (const float roughness : {0.3f, 1.0f, 2.0f}) {
+    for (const int ec : {-1, 0, 1}) {
+      SCOPED_TRACE(std::to_string(roughness) + "/" + std::to_string(ec));
+      materialx::Node node;
+      node.name = "OrenNayar";
+      node.nodedef = "ND_oren_nayar_diffuse_bsdf";
+      if (ec >= 0) {
+        node.int_inputs["energy_compensation"] = ec;
+      }
+      node.inputs["roughness"] = roughness;
+      node.outputs["out"] = materialx::Type::BSDF;
+      ASSERT_TRUE(materialx::validate({{node}}));
+      ShaderGraph graph;
+      ASSERT_TRUE(materialx::lower({{node}}, &graph));
+      MaterialXDiffuseBsdfNode *diffuse = nullptr;
+      for (ShaderNode *n : graph.nodes) {
+        diffuse = n->name == "OrenNayar" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(n) : diffuse;
+      }
+      ASSERT_NE(diffuse, nullptr);
+      EXPECT_FLOAT_EQ(diffuse->get_roughness(), roughness);
+    }
+  }
+  {
+    materialx::Node scalar;
+    scalar.name = "F";
+    scalar.nodedef = "ND_constant_float";
+    scalar.inputs["value"] = 0.7f;
+    scalar.outputs["out"] = materialx::Type::Float;
+    materialx::Node node;
+    node.name = "OrenNayar";
+    node.nodedef = "ND_oren_nayar_diffuse_bsdf";
+    node.int_inputs["energy_compensation"] = 0;
+    node.links["roughness"] = {"F", "out", materialx::Type::Float};
+    node.outputs["out"] = materialx::Type::BSDF;
+    const materialx::Graph source{{scalar, node}};
+    ASSERT_TRUE(materialx::validate(source));
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower(source, &graph));
+    MaterialXDiffuseBsdfNode *diffuse = nullptr;
+    for (ShaderNode *n : graph.nodes) {
+      diffuse = n->name == "OrenNayar" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(n) : diffuse;
+    }
+    ASSERT_NE(diffuse, nullptr);
+    EXPECT_NE(diffuse->input("Roughness")->link, nullptr);
+  }
+  for (const float diffuse_roughness : {0.3f, 1.0f}) {
+    SCOPED_TRACE(diffuse_roughness);
+    auto source = base_contract_source();
+    source.inputs["diffuse_roughness"] = diffuse_roughness;
+    ASSERT_TRUE(materialx::validate({{source}}));
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{source}}, &graph));
+    auto *principled = base_contract_principled(graph);
+    ASSERT_NE(principled, nullptr);
+    EXPECT_FLOAT_EQ(principled->get_diffuse_roughness(), diffuse_roughness);
   }
 }
 
