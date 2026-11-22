@@ -23100,12 +23100,14 @@ TEST(materialx_graph, lowers_lama_diffuse_literal_energy_compensation_zero)
   EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.18f);
 }
 
-TEST(materialx_graph, rejects_lama_diffuse_default_energy_compensation)
+/* Batch 51: energyCompensation 1 (the nodedef default) is admitted now, see
+ * b51_lama_diffuse_energy_compensation_default_lowers; a fractional blend is not. */
+TEST(materialx_graph, rejects_lama_diffuse_fractional_energy_compensation)
 {
   materialx::Node node;
   node.name = "LamaDiffuse";
   node.nodedef = "ND_lama_diffuse";
-  node.inputs["energyCompensation"] = 1.0f;
+  node.inputs["energyCompensation"] = 0.5f;
   node.outputs["out"] = materialx::Type::BSDF;
 
   EXPECT_FALSE(materialx::validate({{node}}));
@@ -30816,6 +30818,202 @@ TEST(materialx_graph, hextilednormalmap_textured_validate_is_strict)
   materialx::Node nonfinite = hex;
   nonfinite.inputs["strength"] = std::numeric_limits<float>::infinity();
   EXPECT_FALSE(materialx::validate({{uv, n, nonfinite}}));
+}
+
+namespace {
+/* Batch 51 item 1 fixtures: a chiang_hair_bsdf whose `normal` is linked to a vector3
+ * source, in both IR flavours (standalone BSDF and SurfaceShader-typed under a
+ * generic <surface>). */
+materialx::Node b51_chiang_with_linked_normal(const materialx::Type output_type)
+{
+  materialx::Node hair;
+  hair.name = "ChiangHair";
+  hair.nodedef = "ND_chiang_hair_bsdf";
+  hair.vector2_inputs["roughness_R"] = make_float2(0.09f, 0.2f);
+  hair.vector2_inputs["roughness_TT"] = make_float2(0.0225f, 0.2f);
+  hair.vector2_inputs["roughness_TRT"] = make_float2(0.36f, 0.2f);
+  hair.links["normal"] = {"NormalSource", "out", materialx::Type::Vector3};
+  hair.outputs["out"] = output_type;
+  return hair;
+}
+
+materialx::Node b51_normal_source()
+{
+  materialx::Node normal_source;
+  normal_source.name = "NormalSource";
+  normal_source.nodedef = "ND_constant_vector3";
+  normal_source.vector3_inputs["value"] = make_float3(0.0f, 0.0f, 1.0f);
+  normal_source.outputs["out"] = materialx::Type::Vector3;
+  return normal_source;
+}
+
+materialx::Node b51_surface_over(const string &bsdf_name)
+{
+  materialx::Node surface;
+  surface.name = "Surface";
+  surface.nodedef = "ND_surface";
+  surface.links["bsdf"] = {bsdf_name, "out", materialx::Type::SurfaceShader};
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  return surface;
+}
+}  // namespace
+
+/* Batch 51 item 1 (findings out/continuous-finish/chiang-hair-curves-20261122 B4):
+ * PrincipledHairBsdfNode has no Normal socket (scene/shader_nodes.cpp
+ * NODE_DEFINE(PrincipledHairBsdfNode)), so a linked chiang `normal` has no Cycles
+ * equivalent. validate() must refuse it in both IR flavours. */
+TEST(materialx_graph, b51_rejects_chiang_hair_linked_normal_in_validate)
+{
+  EXPECT_FALSE(materialx::validate(
+      {{b51_normal_source(), b51_chiang_with_linked_normal(materialx::Type::BSDF)}}));
+  EXPECT_FALSE(materialx::validate({{b51_normal_source(),
+                                     b51_chiang_with_linked_normal(materialx::Type::SurfaceShader),
+                                     b51_surface_over("ChiangHair")}}));
+}
+
+/* Same fixture through lower(): must return false with no partial graph, never connect
+ * into the missing socket (the pre-fix build dereferenced a null ShaderInput in
+ * ShaderGraph::connect). */
+TEST(materialx_graph, b51_chiang_hair_linked_normal_lower_fails_closed)
+{
+  for (const materialx::Type type : {materialx::Type::BSDF, materialx::Type::SurfaceShader}) {
+    materialx::Graph source;
+    source.nodes = {b51_normal_source(), b51_chiang_with_linked_normal(type)};
+    if (type == materialx::Type::SurfaceShader) {
+      source.nodes.push_back(b51_surface_over("ChiangHair"));
+    }
+    ShaderGraph graph;
+    const size_t nodes_before = graph.nodes.size();
+    string error;
+    EXPECT_FALSE(materialx::lower(source, &graph, &error));
+    EXPECT_EQ(graph.nodes.size(), nodes_before);
+  }
+}
+
+/* A literal chiang `normal` stays admitted (unchanged behaviour, see the item 1 note
+ * in the batch-51 receipt) and the linked-normal refusal does not touch the linked
+ * absorption path. */
+TEST(materialx_graph, b51_chiang_hair_linked_absorption_still_lowers)
+{
+  materialx::Node absorption;
+  absorption.name = "AbsorptionSource";
+  absorption.nodedef = "ND_constant_vector3";
+  absorption.vector3_inputs["value"] = make_float3(0.2f, 0.3f, 0.4f);
+  absorption.outputs["out"] = materialx::Type::Vector3;
+  materialx::Node hair = b51_chiang_with_linked_normal(materialx::Type::BSDF);
+  hair.links.erase("normal");
+  hair.links["absorption_coefficient"] = {"AbsorptionSource", "out", materialx::Type::Vector3};
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower({{absorption, hair}}, &graph, &error)) << error;
+  PrincipledHairBsdfNode *lowered = nullptr;
+  for (ShaderNode *n : graph.nodes) {
+    lowered = n->name == "ChiangHair" ? dynamic_cast<PrincipledHairBsdfNode *>(n) : lowered;
+  }
+  ASSERT_NE(lowered, nullptr);
+  EXPECT_NE(lowered->input("Absorption Coefficient")->link, nullptr);
+  EXPECT_EQ(lowered->input("Normal"), nullptr);
+}
+
+/* Batch 51 item 3 (lama_surface, materialBack unconnected): NOT changed. MaterialX
+ * 1.39.4 NG_lama_surface wires back = <surface bsdf=materialBack> into
+ * surfacematerial.backsurfaceshader, but the reference back ends do not render that
+ * back surface for ND_lama_surface: genosl mx_surfacematerial.osl ignores `back`
+ * entirely, and genmdl stdlib_1_6.mdl mx_surfacematerial only uses `backface` when
+ * thin_walled, which ND_surface defaults to false (pbrlib_1_6.mdl mx_surface). Both use
+ * the front surface on both sides, which is what this lowering already does. This test
+ * pins that behaviour until a ruling chooses otherwise. */
+TEST(materialx_graph, b51_lama_surface_unconnected_back_keeps_front_on_both_faces)
+{
+  materialx::Node front;
+  front.name = "FrontDiffuse";
+  front.nodedef = "ND_lama_diffuse";
+  front.color3_inputs["color"] = make_float3(0.8f, 0.1f, 0.1f);
+  front.inputs["energyCompensation"] = 0.0f;
+  front.outputs["out"] = materialx::Type::SurfaceShader;
+  materialx::Node surface;
+  surface.name = "LamaSurface";
+  surface.nodedef = "ND_lama_surface";
+  surface.links["materialFront"] = {"FrontDiffuse", "out", materialx::Type::SurfaceShader};
+  surface.inputs["presence"] = 0.5f;
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  ShaderGraph graph;
+  string error;
+  ASSERT_TRUE(materialx::lower({{front, surface}}, &graph, &error)) << error;
+  MixClosureNode *presence = nullptr;
+  MaterialXDiffuseBsdfNode *front_native = nullptr;
+  bool has_side = false, has_geometry = false;
+  for (ShaderNode *node : graph.nodes) {
+    presence = node->name == "LamaSurface" ? dynamic_cast<MixClosureNode *>(node) : presence;
+    front_native = node->name == "FrontDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) :
+                                                  front_native;
+    has_side = has_side || node->name == "LamaSurface.side";
+    has_geometry = has_geometry || node->name == "LamaSurface.geometry";
+  }
+  ASSERT_NE(presence, nullptr);
+  ASSERT_NE(front_native, nullptr);
+  EXPECT_FALSE(has_side);
+  EXPECT_FALSE(has_geometry);
+  EXPECT_EQ(presence->input("Closure2")->link, front_native->output("BSDF"));
+  EXPECT_FLOAT_EQ(presence->get_fac(), 0.5f);
+}
+
+/* Batch 51 item 4: ND_lama_diffuse energyCompensation 1 (the nodedef default) and an
+ * absent value lower to the same compensated Oren-Nayar closure as 0, with the
+ * reference graph's roughness^2 * 0.5 remap; fractional and non-finite values stay
+ * refused. */
+TEST(materialx_graph, b51_lama_diffuse_energy_compensation_default_lowers)
+{
+  for (const int mode : {0, 1, 2}) { /* 0: literal 1.0, 1: absent, 2: SurfaceShader flavour */
+    materialx::Node node;
+    node.name = "LamaDiffuse";
+    node.nodedef = "ND_lama_diffuse";
+    node.color3_inputs["color"] = make_float3(0.4f, 0.2f, 0.1f);
+    node.inputs["roughness"] = 0.6f;
+    if (mode != 1) {
+      node.inputs["energyCompensation"] = 1.0f;
+    }
+    node.outputs["out"] = mode == 2 ? materialx::Type::SurfaceShader : materialx::Type::BSDF;
+    materialx::Graph source;
+    source.nodes = {node};
+    if (mode == 2) {
+      source.nodes.push_back(b51_surface_over("LamaDiffuse"));
+    }
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower(source, &graph, &error)) << "mode=" << mode << ": " << error;
+    MaterialXDiffuseBsdfNode *diffuse = nullptr;
+    for (ShaderNode *n : graph.nodes) {
+      diffuse = n->name == "LamaDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(n) : diffuse;
+    }
+    ASSERT_NE(diffuse, nullptr) << mode;
+    EXPECT_EQ(diffuse->get_method(), CLOSURE_BSDF_DIFFUSE_ID) << mode;
+    EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.18f) << mode;
+    EXPECT_FLOAT_EQ(diffuse->get_color().x, 0.4f) << mode;
+  }
+}
+
+TEST(materialx_graph, b51_lama_diffuse_energy_compensation_fractional_or_linked_refused)
+{
+  for (const float value : {0.5f, 0.999f, -1.0f, 2.0f, std::numeric_limits<float>::quiet_NaN()}) {
+    materialx::Node node;
+    node.name = "LamaDiffuse";
+    node.nodedef = "ND_lama_diffuse";
+    node.inputs["energyCompensation"] = value;
+    node.outputs["out"] = materialx::Type::BSDF;
+    EXPECT_FALSE(materialx::validate({{node}})) << value;
+  }
+  materialx::Node source;
+  source.name = "EnergySource";
+  source.nodedef = "ND_constant_float";
+  source.inputs["value"] = 1.0f;
+  source.outputs["out"] = materialx::Type::Float;
+  materialx::Node linked;
+  linked.name = "LamaDiffuse";
+  linked.nodedef = "ND_lama_diffuse";
+  linked.links["energyCompensation"] = {"EnergySource", "out", materialx::Type::Float};
+  linked.outputs["out"] = materialx::Type::BSDF;
+  EXPECT_FALSE(materialx::validate({{source, linked}}));
 }
 
 CCL_NAMESPACE_END

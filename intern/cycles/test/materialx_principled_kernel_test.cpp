@@ -2490,4 +2490,112 @@ TEST_F(materialx_principled_kernel, gooch_shade_specular_uses_camera_to_surface_
 }
 #endif
 
+namespace {
+/* MaterialX 1.39.4 pbrlib/genglsl/lib/mx_microfacet_diffuse.glsl, transcribed term for
+ * term (FUJII constants, dir/avg albedo, compensated lobe) for one colour channel. When
+ * glsl_clamps is true the GLSL caller's clamps (mx_oren_nayar_diffuse_bsdf.glsl:
+ * NdotL and LdotV clamped to [M_FLOAT_EPS, 1]) are applied; otherwise L.V is raw, as in
+ * the OpenPBR/Fujii formulation. Returns the BSDF response diffuse * NdotL / pi. */
+double mx_fujii_dir_albedo(const double cos_theta, const double roughness)
+{
+  const double c1 = 0.5 - 2.0 / (3.0 * M_PI);
+  const double a = 1.0 / (1.0 + c1 * roughness);
+  const double b = roughness * a;
+  const double si = std::sqrt(std::max(0.0, 1.0 - cos_theta * cos_theta));
+  const double g = si * (std::acos(std::clamp(cos_theta, -1.0, 1.0)) - si * cos_theta) +
+                   2.0 * ((si / cos_theta) * (1.0 - si * si * si) - si) / 3.0;
+  return a + b * g / M_PI;
+}
+
+double mx_compensated_response(const double nv,
+                               const double nl_raw,
+                               const double lv_raw,
+                               const double roughness,
+                               const double color,
+                               const bool glsl_clamps)
+{
+  const double eps = 1.0e-6;
+  const double nl = glsl_clamps ? std::clamp(nl_raw, eps, 1.0) : nl_raw;
+  const double lv = glsl_clamps ? std::clamp(lv_raw, eps, 1.0) : lv_raw;
+  const double c1 = 0.5 - 2.0 / (3.0 * M_PI);
+  const double c2 = 2.0 / 3.0 - 28.0 / (15.0 * M_PI);
+  const double s = lv - nl * nv;
+  const double stinv = s > 0.0 ? s / std::max(nl, nv) : s;
+  const double a = 1.0 / (1.0 + c1 * roughness);
+  const double single = color * a * (1.0 + roughness * stinv);
+  const double ev = mx_fujii_dir_albedo(nv, roughness);
+  const double el = mx_fujii_dir_albedo(nl, roughness);
+  const double avg = a * (1.0 + c2 * roughness);
+  const double color_ms = color * color * avg / (1.0 - color * std::max(0.0, 1.0 - avg));
+  const double multi = color_ms * std::max(eps, 1.0 - ev) * std::max(eps, 1.0 - el) /
+                       std::max(eps, 1.0 - avg);
+  return (single + multi) * nl / M_PI;
+}
+}  // namespace
+
+/* Batch 51 item 4 (ND_lama_diffuse energyCompensation): the actual CPU Oren-Nayar
+ * closure, set up exactly as svm_node_materialx_closure_bsdf does (closure weight =
+ * colour, albedo = colour), against the transcribed MaterialX 1.39.4 compensated lobe.
+ * Pins two measured facts: (1) single scattering matches the raw-L.V Fujii lobe and the
+ * multiple-scattering term carries ONE extra factor of albedo (weight x sqr(albedo));
+ * (2) the directional albedo (energy) ratio Cycles / MaterialX-GLSL stays inside the D2
+ * 0.5-2x band, and its observed range is printed for the review record. */
+TEST(materialx_oren_nayar_reference, compensated_lobe_vs_materialx_1_39_4)
+{
+  double min_ratio = 1.0e9, max_ratio = 0.0;
+  for (const float sigma : {0.02f, 0.125f, 0.5f}) {
+    for (const float albedo : {0.18f, 0.5f, 0.8f, 0.99f}) {
+      for (const float nv : {0.15f, 0.5f, 0.95f}) {
+        ShaderData sd{};
+        sd.N = sd.Ng = make_float3(0.0f, 0.0f, 1.0f);
+        sd.wi = make_float3(std::sqrt(1.0f - nv * nv), 0.0f, nv);
+        sd.num_closure_left = MAX_CLOSURE;
+        const Spectrum color = make_spectrum(albedo);
+        bsdf_oren_nayar_setup(&sd, sd.N, color, sigma, color);
+        ASSERT_EQ(sd.num_closure, 1);
+        const ccl_private ShaderClosure *sc = &sd.closure[0];
+        double cycles_albedo = 0.0, mx_albedo = 0.0;
+        const int n_mu = 192, n_phi = 192;
+        for (int i = 0; i < n_mu; i++) {
+          const double mu = (i + 0.5) / n_mu;
+          const double sin_t = std::sqrt(1.0 - mu * mu);
+          for (int j = 0; j < n_phi; j++) {
+            const double phi = 2.0 * M_PI * (j + 0.5) / n_phi;
+            const float3 wo = make_float3(
+                float(sin_t * std::cos(phi)), float(sin_t * std::sin(phi)), float(mu));
+            float pdf;
+            const Spectrum eval = bsdf_oren_nayar_eval(sc, sd.wi, wo, &pdf);
+            const double cycles = double(eval.x) * double(sc->weight.x);
+            const double lv = double(dot(sd.wi, wo));
+            /* Fact (1): point-wise decomposition with raw L.V. */
+            if ((i % 37) == 0 && (j % 41) == 0) {
+              const double raw = mx_compensated_response(nv, mu, lv, sigma, albedo, false);
+              const double c1 = 0.5 - 2.0 / (3.0 * M_PI);
+              const double s = lv - mu * nv;
+              const double stinv = s > 0.0 ? s / std::max(mu, double(nv)) : s;
+              const double single =
+                  albedo * (1.0 / (1.0 + c1 * sigma)) * (1.0 + sigma * stinv) * mu / M_PI;
+              const double multi = raw - single;
+              EXPECT_NEAR(cycles, single + albedo * multi, 2e-5 + 2e-4 * cycles)
+                  << "sigma=" << sigma << " albedo=" << albedo << " nv=" << nv;
+            }
+            const double dw = (1.0 / n_mu) * (2.0 * M_PI / n_phi);
+            cycles_albedo += cycles * dw;
+            mx_albedo += mx_compensated_response(nv, mu, lv, sigma, albedo, true) * dw;
+          }
+        }
+        const double ratio = cycles_albedo / mx_albedo;
+        printf("[ oren-nayar] sigma=%.3f albedo=%.2f nv=%.2f cycles=%.5f mx_glsl=%.5f ratio=%.4f\n",
+               sigma, albedo, nv, cycles_albedo, mx_albedo, ratio);
+        min_ratio = std::min(min_ratio, ratio);
+        max_ratio = std::max(max_ratio, ratio);
+        EXPECT_GT(ratio, 0.5);
+        EXPECT_LT(ratio, 2.0);
+      }
+    }
+  }
+  printf("[ oren-nayar] directional-albedo ratio Cycles/MaterialX-GLSL in [%.4f, %.4f]\n",
+         min_ratio, max_ratio);
+}
+
 CCL_NAMESPACE_END

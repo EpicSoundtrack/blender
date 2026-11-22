@@ -1367,6 +1367,14 @@ bool is_default_white(const float3 &value)
   return value.x == 1.0f && value.y == 1.0f && value.z == 1.0f;
 }
 
+/* ND_lama_diffuse energyCompensation: only the literal end points 0 and 1 (see the
+ * oren_nayar/lama_diffuse comment in validate()). isfinite first: under fast-math a
+ * NaN can compare equal to 0. */
+bool lama_diffuse_energy_compensation_ok(const float value)
+{
+  return std::isfinite(value) && (value == 0.0f || value == 1.0f);
+}
+
 bool chiang_roughness_subset_ok(const Node &node)
 {
   const bool explicit_r = node.vector2_inputs.contains("roughness_R");
@@ -13096,7 +13104,10 @@ bool validate(const Graph &source,
       const bool has_ior = node.inputs.contains("ior");
       const bool has_cuticle = node.inputs.contains("cuticle_angle");
       const bool has_absorption = node.vector3_inputs.contains("absorption_coefficient");
-      const bool has_normal = node.vector3_inputs.contains("normal") || node.links.contains("normal");
+      /* A literal normal is admitted and unused (Cycles' hair frame comes from the
+       * curve). A LINKED normal is refused: PrincipledHairBsdfNode has no Normal socket
+       * (scene/shader_nodes.cpp), so there is nothing to connect it to. */
+      const bool has_normal = node.vector3_inputs.contains("normal");
       const float3 tint_r = node.color3_inputs.contains("tint_R") ?
                                 node.color3_inputs.at("tint_R") :
                                 make_float3(1.0f, 1.0f, 1.0f);
@@ -13106,16 +13117,13 @@ bool validate(const Graph &source,
       const float3 tint_trt = node.color3_inputs.contains("tint_TRT") ?
                                   node.color3_inputs.at("tint_TRT") :
                                   make_float3(1.0f, 1.0f, 1.0f);
-      const auto normal = node.links.find("normal");
       const auto absorption = node.links.find("absorption_coefficient");
       const bool ok = output != node.outputs.end() && output->second == Type::SurfaceShader &&
                       node.outputs.size() == 1 &&
                       (!has_ior || std::isfinite(node.inputs.at("ior"))) &&
                       (!has_cuticle || std::isfinite(node.inputs.at("cuticle_angle"))) &&
                       (!has_absorption || finite_float3(node.vector3_inputs.at("absorption_coefficient"))) &&
-                      (normal == node.links.end() ||
-                       (normal->second.type == Type::Vector3 &&
-                        validate_link(normal->second, Type::Vector3, *nodes_by_name))) &&
+                      !node.links.contains("normal") &&
                       (absorption == node.links.end() ||
                        (absorption->second.type == Type::Vector3 &&
                         validate_link(absorption->second, Type::Vector3, *nodes_by_name))) &&
@@ -13126,13 +13134,12 @@ bool validate(const Graph &source,
                       !node.links.contains("cuticle_angle") && chiang_roughness_subset_ok(node) &&
                       is_default_white(tint_r) && is_default_white(tint_tt) &&
                       is_default_white(tint_trt) &&
-                      node.links.size() == size_t(normal != node.links.end()) +
-                                               size_t(absorption != node.links.end()) &&
+                      node.links.size() == size_t(absorption != node.links.end()) &&
                       node.inputs.size() == size_t(has_ior) + size_t(has_cuticle) &&
                       node.color3_inputs.size() == size_t(node.color3_inputs.contains("tint_R")) +
                                                      size_t(node.color3_inputs.contains("tint_TT")) +
                                                      size_t(node.color3_inputs.contains("tint_TRT")) &&
-                      node.vector3_inputs.size() == size_t(has_absorption) + size_t(has_normal && normal == node.links.end()) &&
+                      node.vector3_inputs.size() == size_t(has_absorption) + size_t(has_normal) &&
                       (node.vector2_inputs.size() == 3 || node.vector2_inputs.empty()) &&
                       node.int_inputs.empty() &&
                       node.float4_inputs.empty() && node.vector4_inputs.empty() &&
@@ -13262,10 +13269,10 @@ bool validate(const Graph &source,
            (has_tint_value || tint != node.links.end() || weight != node.links.end() ||
             (has_weight_value &&
              (node.inputs.at("weight") < 0.0f || node.inputs.at("weight") > 1.0f)))) ||
-          (node.nodedef == lama_diffuse_id &&
-           (!has_lama_energy_value || roughness != node.links.end())) ||
-          (has_lama_energy_value && (!std::isfinite(node.inputs.at("energyCompensation")) ||
-                                     node.inputs.at("energyCompensation") != 0.0f)) ||
+          (node.nodedef == lama_diffuse_id && roughness != node.links.end()) ||
+          (has_lama_energy_value &&
+           (node.nodedef != lama_diffuse_id ||
+            !lama_diffuse_energy_compensation_ok(node.inputs.at("energyCompensation")))) ||
           (node.nodedef == lama_sss_id && (sss_radius != node.links.end() ||
                                            sss_scale != node.links.end() ||
                                            sss_unit_length != node.links.end())) ||
@@ -14721,21 +14728,36 @@ bool validate(const Graph &source,
         /* energy_compensation: Cycles' MaterialXDiffuseBsdfNode with roughness > 0
          * lowers to CLOSURE_BSDF_OREN_NAYAR_ID (kernel/closure/
          * bsdf_oren_nayar.h), which is Fujii's improved Oren-Nayar plus the
-         * OpenPBR energy-preserving multi-scatter term. That is term for term
+         * OpenPBR energy-preserving multi-scatter term, structurally the same as
          * MaterialX 1.39's mx_oren_nayar_compensated_diffuse
          * (pbrlib/genglsl/lib/mx_microfacet_diffuse.glsl):
          *   A/pi = 1/(pi + sigma*(pi/2 - 2/3)), Eavg = A*(1 + FUJII_CONSTANT_2*sigma),
          *   Ems = color^2*Eavg/(1 - color*(1 - Eavg)) * (1-Ev)(1-El)/(1-Eavg).
-         * energy_compensation=true is therefore EXACT. energy_compensation=false
+         * Measured against the actual CPU closure (test
+         * materialx_oren_nayar_reference.compensated_lobe_vs_materialx_1_39_4, batch 51):
+         * single scattering matches the raw-L.V Fujii lobe, but Cycles multiplies the
+         * multi-scatter term by the closure weight (= color) as well, i.e. color^3
+         * instead of color^2, and the MaterialX GLSL caller clamps L.V to >= eps
+         * where Cycles uses the raw dot. Directional albedo Cycles/MaterialX-GLSL
+         * stays in [0.927, 1.000] over sigma 0.02-0.5, albedo 0.18-0.99. So
+         * energy_compensation=true is a close, reviewed APPROXIMATION (inside the D2
+         * 0.5-2x energy band), not bit-exact. energy_compensation=false
          * (the classic qualitative Oren-Nayar, A/B = 1-0.5s2/(s2+0.33), 0.45s2/(s2+0.09))
          * has no separate Cycles closure and lowers to the same compensated
-         * closure as a documented APPROXIMATION (identical at roughness 0). */
+         * closure as a documented APPROXIMATION (identical at roughness 0).
+         *
+         * ND_lama_diffuse (libraries/bxdf/lama/lama_diffuse.mtlx) is
+         * mix(fg = compensated, bg = uncompensated, mix = energyCompensation) over
+         * oren_nayar_diffuse_bsdf(roughness^2 * 0.5); both lobes lower to the same
+         * closure, so the literal end points 0 and 1 (the nodedef default, also used
+         * when unauthored) are admitted with the approximations above. A fractional
+         * blend and a linked value stay refused. */
         ok = weight_literal_ok(1.0f) && valid_float("roughness", 0.0f) &&
              valid_color3("color", make_float3(0.18f, 0.18f, 0.18f)) && valid_vector3_opt("normal") &&
              (node.nodedef != lama_diffuse_id ||
-              (node.inputs.contains("energyCompensation") &&
-               node.inputs.at("energyCompensation") == 0.0f &&
-               !node.links.contains("roughness")));
+              ((!node.inputs.contains("energyCompensation") ||
+                lama_diffuse_energy_compensation_ok(node.inputs.at("energyCompensation"))) &&
+               !node.links.contains("energyCompensation") && !node.links.contains("roughness")));
       }
       else if (node.nodedef == translucent_bsdf_id || node.nodedef == lama_translucent_id) {
         allowed_float = {"weight"};
@@ -14867,6 +14889,9 @@ bool validate(const Graph &source,
              !node.links.contains("tint_TRT") && !node.links.contains("roughness_R") &&
              !node.links.contains("roughness_TT") && !node.links.contains("roughness_TRT") &&
              !node.links.contains("cuticle_angle") && !node.links.contains("curve_direction") &&
+             /* No Normal socket on PrincipledHairBsdfNode: a linked normal has no
+              * target (see the SurfaceShader-typed chiang branch). */
+             !node.links.contains("normal") &&
              chiang_roughness_subset_ok(node) && is_default_white(tint_r) &&
              is_default_white(tint_tt) && is_default_white(tint_trt);
       }
@@ -33672,8 +33697,16 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
                        bsdf->input("Absorption Coefficient"));
       }
       if (const auto link = node.links.find("normal"); link != node.links.end()) {
-        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                       bsdf->input("Normal"));
+        /* validate() refuses a linked normal on closures without a Normal socket
+         * (chiang_hair_bsdf -> PrincipledHairBsdfNode); never hand
+         * ShaderGraph::connect a null input if that ever regresses. */
+        ShaderInput *normal_input = bsdf->input("Normal");
+        if (normal_input == nullptr) {
+          rollback();
+          return fail("MaterialX node '" + node.name + "' (" + node.nodedef +
+                      ") has a linked normal but its Cycles closure has no Normal input");
+        }
+        graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes), normal_input);
       }
       if (node.nodedef == conductor_bsdf_id) {
         if (const auto link = node.links.find("tangent"); link != node.links.end()) {

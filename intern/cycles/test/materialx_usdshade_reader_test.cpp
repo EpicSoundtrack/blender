@@ -28461,7 +28461,9 @@ TEST(materialx_usdshade_reader, lowers_generalized_schlick_edf_directional_over_
   EXPECT_FALSE(factor->get_use_clamp());
 }
 
-TEST(materialx_usdshade_reader, rejects_lama_diffuse_compensated_default_without_mutation)
+/* Batch 51: energyCompensation 1 is admitted now (b51_reads_lama_diffuse_default_energy_
+ * compensation); a fractional blend is still refused without mutating the graph. */
+TEST(materialx_usdshade_reader, rejects_lama_diffuse_fractional_energy_compensation_without_mutation)
 {
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -28474,7 +28476,7 @@ TEST(materialx_usdshade_reader, rejects_lama_diffuse_compensated_default_without
 
   diffuse.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_lama_diffuse")));
   diffuse.CreateInput(pxr::TfToken("energyCompensation"), pxr::SdfValueTypeNames->Float)
-      .Set(1.0f);
+      .Set(0.5f);
   diffuse.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
   surface.CreateIdAttr(pxr::VtValue(pxr::TfToken("ND_surface")));
   ASSERT_TRUE(surface.CreateInput(pxr::TfToken("bsdf"), pxr::SdfValueTypeNames->Token)
@@ -28488,7 +28490,7 @@ TEST(materialx_usdshade_reader, rejects_lama_diffuse_compensated_default_without
   graph.volume_absorption.value = make_float3(42.0f, 0.0f, 0.0f);
   string error;
   EXPECT_FALSE(materialx::read_usdshade_graph(material, &graph, &error));
-  EXPECT_NE(error.find("energyCompensation=0.0"), string::npos) << error;
+  EXPECT_NE(error.find("energyCompensation must be 0 or 1"), string::npos) << error;
   EXPECT_TRUE(graph.has_volume);
   EXPECT_FLOAT_EQ(graph.volume_absorption.value.x, 42.0f);
 }
@@ -52486,6 +52488,219 @@ TEST(materialx_usdshade_reader, gltf_pbr_anisotropy_strength_zero_denominator_se
       EXPECT_EQ(std::bit_cast<uint32_t>(channel), std::bit_cast<uint32_t>(0.0f)) << channel;
     }
   }
+}
+
+namespace {
+/* Batch 51 fixtures: chiang_hair_bsdf under a generic <surface>, with caller-supplied
+ * roughness/normal wiring, in the importer's USDA shape. */
+string b51_chiang_usda(const string &hair_inputs, const string &extra_shaders)
+{
+  return lineage_material("/Looks/Material/surface.outputs:out",
+                          extra_shaders +
+                              "  def Shader \"hair\" {\n"
+                              "   uniform token info:id = \"ND_chiang_hair_bsdf\"\n" +
+                              hair_inputs +
+                              "   token outputs:out\n"
+                              "  }\n"
+                              "  def Shader \"surface\" {\n"
+                              "   uniform token info:id = \"ND_surface\"\n"
+                              "   token inputs:bsdf.connect = </Looks/Material/hair.outputs:out>\n"
+                              "   token outputs:out\n"
+                              "  }\n");
+}
+
+string b51_chiang_roughness_shader(const string &inputs)
+{
+  return "  def Shader \"rough\" {\n"
+         "   uniform token info:id = \"ND_chiang_hair_roughness\"\n" +
+         inputs +
+         "   float2 outputs:roughness_R\n"
+         "   float2 outputs:roughness_TT\n"
+         "   float2 outputs:roughness_TRT\n"
+         "  }\n";
+}
+
+const string b51_linked_roughness_triple =
+    "   float2 inputs:roughness_R.connect = </Looks/Material/rough.outputs:roughness_R>\n"
+    "   float2 inputs:roughness_TT.connect = </Looks/Material/rough.outputs:roughness_TT>\n"
+    "   float2 inputs:roughness_TRT.connect = </Looks/Material/rough.outputs:roughness_TRT>\n";
+
+bool b51_read_usda(const string &usda, materialx::Graph *graph, string *error)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  if (!stage->GetRootLayer()->ImportFromString(usda)) {
+    *error = "USDA fixture did not parse";
+    return false;
+  }
+  const pxr::UsdShadeMaterial material(stage->GetPrimAtPath(pxr::SdfPath("/Looks/Material")));
+  return material && materialx::read_usdshade_graph(material, graph, error);
+}
+
+PrincipledHairBsdfNode *b51_find_hair(ShaderGraph &graph)
+{
+  return dynamic_cast<PrincipledHairBsdfNode *>(lineage_find(graph, "hair"));
+}
+}  // namespace
+
+/* Batch 51 item 1 (findings chiang-hair-curves-20261122 B4): a linked chiang `normal`
+ * is refused by name in the reader (Cycles' Principled Hair BSDF has no Normal input)
+ * instead of reaching lower(), where it was connected to a null socket. */
+TEST(materialx_usdshade_reader, b51_rejects_chiang_hair_linked_normal_by_name)
+{
+  const string usda = b51_chiang_usda(
+      "   float3 inputs:normal.connect = </Looks/Material/n.outputs:out>\n",
+      "  def Shader \"n\" {\n"
+      "   uniform token info:id = \"ND_constant_vector3\"\n"
+      "   float3 inputs:value = (0, 0, 1)\n"
+      "   float3 outputs:out\n"
+      "  }\n");
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(b51_read_usda(usda, &graph, &error));
+  EXPECT_NE(error.find("ND_chiang_hair_bsdf"), string::npos) << error;
+  EXPECT_NE(error.find("normal"), string::npos) << error;
+  EXPECT_NE(error.find("Normal input"), string::npos) << error;
+}
+
+/* Batch 51 item 2 (findings B5): roughness_R/TT/TRT linked from the matching outputs
+ * of one ND_chiang_hair_roughness with the default scale_TT 0.5 / scale_TRT 2.0 are
+ * Cycles' fixed TT = 0.25 v / TRT = 4 v ratios with one shared s
+ * (bsdf_principled_hair_chiang.h), so the longitudinal/azimuthal controls lower to
+ * Roughness/Radial Roughness exactly while every lobe stays inside MaterialX's
+ * [0.001, 1] clamp. */
+TEST(materialx_usdshade_reader, b51_reads_and_lowers_chiang_hair_roughness_default_scales)
+{
+  struct Case {
+    string inputs;
+    float longitudinal, azimuthal;
+  };
+  const Case cases[] = {
+      {"   float inputs:longitudinal = 0.3\n   float inputs:azimuthal = 0.4\n"
+       "   float inputs:scale_TT = 0.5\n   float inputs:scale_TRT = 2\n",
+       0.3f,
+       0.4f},
+      /* Unauthored controls take the nodedef defaults 0.1 / 0.2 / 0.5 / 2.0. */
+      {"", 0.1f, 0.2f},
+  };
+  for (const Case &c : cases) {
+    const string usda = b51_chiang_usda(
+        b51_linked_roughness_triple +
+            "   float3 inputs:absorption_coefficient = (0.2, 0.3, 0.4)\n"
+            "   float inputs:ior = 1.6\n",
+        b51_chiang_roughness_shader(c.inputs));
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << c.longitudinal << ": " << error;
+    PrincipledHairBsdfNode *hair = b51_find_hair(lowered);
+    ASSERT_NE(hair, nullptr);
+    EXPECT_EQ(hair->get_model(), NODE_PRINCIPLED_HAIR_CHIANG);
+    EXPECT_EQ(hair->get_parametrization(), NODE_PRINCIPLED_HAIR_DIRECT_ABSORPTION);
+    EXPECT_NEAR(hair->get_roughness(), c.longitudinal, 2e-5f);
+    EXPECT_NEAR(hair->get_radial_roughness(), c.azimuthal, 2e-5f);
+    EXPECT_FLOAT_EQ(hair->get_coat(), 0.0f);
+    EXPECT_FLOAT_EQ(hair->get_ior(), 1.6f);
+    for (ShaderInput *input : hair->inputs) {
+      EXPECT_EQ(input->link, nullptr) << input->name();
+    }
+  }
+}
+
+/* Everything outside the exact subset stays refused by name: non-default scales,
+ * per-lobe variance outside MaterialX's [0.001, 1] clamp (Cycles does not clamp 4 v or
+ * s, nor floor 0.25 v), linked controls, crossed or partial wiring. */
+TEST(materialx_usdshade_reader, b51_rejects_chiang_hair_roughness_outside_exact_subset)
+{
+  struct Case {
+    const char *label;
+    string rough_inputs;
+    string hair_inputs;
+    string extra;
+    const char *needle;
+  };
+  const string triple = b51_linked_roughness_triple;
+  const Case cases[] = {
+      {"scale_TT 0.6", "   float inputs:scale_TT = 0.6\n", triple, "", "scale_TT"},
+      {"scale_TRT 3", "   float inputs:scale_TRT = 3\n", triple, "", "scale_TRT"},
+      {"TRT variance > 1", "   float inputs:longitudinal = 0.6\n", triple, "", "[0.001, 1]"},
+      {"TT variance < 0.001", "   float inputs:longitudinal = 0.05\n", triple, "", "[0.001, 1]"},
+      {"azimuthal s > 1", "   float inputs:azimuthal = 0.9\n", triple, "", "[0.001, 1]"},
+      {"linked longitudinal",
+       "   float inputs:longitudinal.connect = </Looks/Material/lr.outputs:out>\n",
+       triple,
+       "  def Shader \"lr\" {\n   uniform token info:id = \"ND_constant_float\"\n"
+       "   float inputs:value = 0.3\n   float outputs:out\n  }\n",
+       "literal"},
+      {"crossed outputs",
+       "",
+       "   float2 inputs:roughness_R.connect = </Looks/Material/rough.outputs:roughness_R>\n"
+       "   float2 inputs:roughness_TT.connect = </Looks/Material/rough.outputs:roughness_TRT>\n"
+       "   float2 inputs:roughness_TRT.connect = </Looks/Material/rough.outputs:roughness_TT>\n",
+       "",
+       "roughness_TT"},
+      {"partial wiring",
+       "",
+       "   float2 inputs:roughness_R.connect = </Looks/Material/rough.outputs:roughness_R>\n"
+       "   float2 inputs:roughness_TT = (0.05, 0.05)\n"
+       "   float2 inputs:roughness_TRT = (0.2, 0.2)\n",
+       "",
+       "all three"},
+  };
+  for (const Case &c : cases) {
+    const string usda = b51_chiang_usda(c.hair_inputs,
+                                        c.extra + b51_chiang_roughness_shader(c.rough_inputs));
+    materialx::Graph graph;
+    string error;
+    EXPECT_FALSE(b51_read_usda(usda, &graph, &error)) << c.label;
+    EXPECT_NE(error.find("ND_chiang_hair_roughness"), string::npos) << c.label << ": " << error;
+    EXPECT_NE(error.find(c.needle), string::npos) << c.label << ": " << error;
+  }
+}
+
+/* Batch 51 item 4: the importer writes the ND_lama_diffuse nodedef default
+ * energyCompensation = 1.0. It (and an unauthored value) now reads and lowers to the
+ * compensated Oren-Nayar closure; a fractional value is still refused by name. */
+TEST(materialx_usdshade_reader, b51_reads_lama_diffuse_default_energy_compensation)
+{
+  for (const string energy : {string("   float inputs:energyCompensation = 1\n"), string()}) {
+    const string usda = lineage_material(
+        "/Looks/Material/surface.outputs:out",
+        "  def Shader \"diffuse\" {\n"
+        "   uniform token info:id = \"ND_lama_diffuse\"\n"
+        "   color3f inputs:color = (0.4, 0.2, 0.1)\n"
+        "   float inputs:roughness = 0.6\n" +
+            energy +
+            "   token outputs:out\n"
+            "  }\n"
+            "  def Shader \"surface\" {\n"
+            "   uniform token info:id = \"ND_surface\"\n"
+            "   token inputs:bsdf.connect = </Looks/Material/diffuse.outputs:out>\n"
+            "   token outputs:out\n"
+            "  }\n");
+    ShaderGraph lowered;
+    string error;
+    ASSERT_TRUE(lineage_lower_usda(usda, &lowered, &error)) << energy << error;
+    MaterialXDiffuseBsdfNode *diffuse = dynamic_cast<MaterialXDiffuseBsdfNode *>(
+        lineage_find(lowered, "diffuse"));
+    ASSERT_NE(diffuse, nullptr) << energy;
+    EXPECT_FLOAT_EQ(diffuse->get_roughness(), 0.18f) << energy;
+    EXPECT_FLOAT_EQ(diffuse->get_color().x, 0.4f) << energy;
+  }
+  const string fractional = lineage_material(
+      "/Looks/Material/surface.outputs:out",
+      "  def Shader \"diffuse\" {\n"
+      "   uniform token info:id = \"ND_lama_diffuse\"\n"
+      "   float inputs:energyCompensation = 0.5\n"
+      "   token outputs:out\n"
+      "  }\n"
+      "  def Shader \"surface\" {\n"
+      "   uniform token info:id = \"ND_surface\"\n"
+      "   token inputs:bsdf.connect = </Looks/Material/diffuse.outputs:out>\n"
+      "   token outputs:out\n"
+      "  }\n");
+  materialx::Graph graph;
+  string error;
+  EXPECT_FALSE(b51_read_usda(fractional, &graph, &error));
+  EXPECT_NE(error.find("energyCompensation"), string::npos) << error;
 }
 
 CCL_NAMESPACE_END

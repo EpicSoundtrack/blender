@@ -29590,6 +29590,214 @@ bool read_surface_vector3_input(const pxr::UsdShadeShader &shader,
   return true;
 }
 
+/* Follow a USDShade connection through NodeGraph outputs/interface inputs. Ends either
+ * at a Shader output (*shader, *output_name set) or at an unconnected NodeGraph
+ * interface input/output carrying a literal (*literal set). */
+bool b51_resolve_connection(const pxr::UsdShadeConnectionSourceInfo &start,
+                            pxr::UsdShadeShader *shader,
+                            pxr::TfToken *output_name,
+                            pxr::UsdAttribute *literal)
+{
+  pxr::UsdShadeConnectionSourceInfo info = start;
+  for (int depth = 0; depth < 64; depth++) {
+    const pxr::UsdPrim prim = info.source.GetPrim();
+    if (!prim) {
+      return false;
+    }
+    const pxr::UsdShadeNodeGraph node_graph(prim);
+    if (node_graph && !pxr::UsdShadeShader(prim)) {
+      pxr::UsdAttribute attribute;
+      pxr::UsdShadeSourceInfoVector sources;
+      if (info.sourceType == pxr::UsdShadeAttributeType::Output) {
+        const pxr::UsdShadeOutput output = node_graph.GetOutput(info.sourceName);
+        if (!output) {
+          return false;
+        }
+        attribute = output.GetAttr();
+        sources = output.GetConnectedSources();
+      }
+      else if (info.sourceType == pxr::UsdShadeAttributeType::Input) {
+        const pxr::UsdShadeInput input = node_graph.GetInput(info.sourceName);
+        if (!input) {
+          return false;
+        }
+        attribute = input.GetAttr();
+        sources = input.GetConnectedSources();
+      }
+      else {
+        return false;
+      }
+      if (sources.empty()) {
+        *literal = attribute;
+        return true;
+      }
+      if (sources.size() != 1) {
+        return false;
+      }
+      info = sources[0];
+      continue;
+    }
+    const pxr::UsdShadeShader source_shader(prim);
+    if (!source_shader || info.sourceType != pxr::UsdShadeAttributeType::Output) {
+      return false;
+    }
+    *shader = source_shader;
+    *output_name = info.sourceName;
+    return true;
+  }
+  return false;
+}
+
+/* ND_chiang_hair_bsdf roughness_R/TT/TRT linked from ND_chiang_hair_roughness
+ * (findings out/continuous-finish/chiang-hair-curves-20261122 B5).
+ *
+ * MaterialX 1.39.4 pbrlib/genglsl/mx_chiang_hair_bsdf.glsl mx_chiang_hair_roughness:
+ *   lr = clamp(longitudinal, 0.001, 1), ar = clamp(azimuthal, 0.001, 1),
+ *   v = (0.726 lr + 0.812 lr^2 + 3.7 lr^20)^2, s = 0.265 ar + 1.194 ar^2 + 5.372 ar^22,
+ *   R = (v, s), TT = (v scale_TT^2, s), TRT = (v scale_TRT^2, s);
+ * mx_chiang_hair_bsdf then clamps every lobe's (v, s) to [0.001, 1] and uses TRT for
+ * TRRT+. Cycles (kernel/closure/bsdf_principled_hair_chiang.h) clamps Roughness/Radial
+ * Roughness to [0.001, 1], applies the same v/s polynomials and hard-codes R = v,
+ * TT = 0.25 v, TRT = TRRT = 4 v with one shared s, WITHOUT a per-lobe clamp. The two
+ * agree exactly only when scale_TT = 0.5 and scale_TRT = 2.0 (the nodedef defaults) and
+ * every lobe already lies inside [0.001, 1]: 0.25 v >= 0.001, 4 v <= 1,
+ * 0.001 <= s <= 1. That subset is folded here into the literal (v, s) triple the
+ * existing literal path lowers (chiang_roughness_subset_ok accepts it by ratio); the
+ * controls must be literal so the bounds can be proven. Everything else is refused by
+ * name. Returns true without touching *node when no roughness input is connected. */
+bool read_chiang_hair_linked_roughness(const pxr::UsdShadeShader &hair,
+                                       Node *node,
+                                       string *error_message)
+{
+  static const char *const lobes[3] = {"roughness_R", "roughness_TT", "roughness_TRT"};
+  const string prefix = string(chiang_hair_roughness_id) + " -> " + chiang_hair_bsdf_id + ": ";
+  int connected = 0;
+  for (const char *lobe : lobes) {
+    const pxr::UsdShadeInput input = hair.GetInput(pxr::TfToken(lobe));
+    connected += (input && input.HasConnectedSource()) ? 1 : 0;
+  }
+  if (connected == 0) {
+    return true;
+  }
+  if (connected != 3) {
+    set_error(error_message,
+              prefix + "all three of roughness_R/TT/TRT must be connected to the matching "
+                       "outputs of one node (a partial link is not exact)");
+    return false;
+  }
+  pxr::UsdShadeShader roughness_shader;
+  for (const char *lobe : lobes) {
+    const pxr::UsdShadeInput input = hair.GetInput(pxr::TfToken(lobe));
+    const auto sources = input.GetConnectedSources();
+    pxr::UsdShadeShader shader;
+    pxr::TfToken output_name;
+    pxr::UsdAttribute literal;
+    pxr::TfToken id;
+    if (input.GetTypeName() != pxr::SdfValueTypeNames->Float2 || sources.size() != 1 ||
+        !b51_resolve_connection(sources[0], &shader, &output_name, &literal) || !shader ||
+        !shader.GetShaderId(&id) || id.GetString() != chiang_hair_roughness_id)
+    {
+      set_error(error_message,
+                prefix + "input '" + lobe +
+                    "' must be one vector2 connection to an ND_chiang_hair_roughness output");
+      return false;
+    }
+    if (output_name.GetString() != lobe) {
+      set_error(error_message,
+                prefix + "input '" + lobe + "' must connect to output '" + lobe + "', not '" +
+                    output_name.GetString() + "'");
+      return false;
+    }
+    if (roughness_shader && roughness_shader.GetPath() != shader.GetPath()) {
+      set_error(error_message,
+                prefix + "roughness_R/TT/TRT must all come from the same node");
+      return false;
+    }
+    roughness_shader = shader;
+  }
+
+  const auto read_control = [&](const char *name, const float fallback, float *value) {
+    *value = fallback;
+    const pxr::UsdShadeInput input = roughness_shader.GetInput(pxr::TfToken(name));
+    if (!input) {
+      return true;
+    }
+    pxr::UsdAttribute attribute = input.GetAttr();
+    if (input.HasConnectedSource()) {
+      const auto sources = input.GetConnectedSources();
+      pxr::UsdShadeShader shader;
+      pxr::TfToken output_name;
+      pxr::UsdAttribute literal;
+      if (sources.size() != 1 ||
+          !b51_resolve_connection(sources[0], &shader, &output_name, &literal) || shader ||
+          !literal)
+      {
+        set_error(error_message,
+                  prefix + "requires a literal '" + name +
+                      "' (a computed value cannot be proven to stay inside the exact subset)");
+        return false;
+      }
+      attribute = literal;
+    }
+    if (attribute.GetTypeName() != pxr::SdfValueTypeNames->Float) {
+      set_error(error_message, prefix + "input '" + name + "' must be a float");
+      return false;
+    }
+    if (!attribute.HasAuthoredValue()) {
+      return true;
+    }
+    if (!attribute.Get(value) || !std::isfinite(*value)) {
+      set_error(error_message, prefix + "requires a literal finite '" + name + "'");
+      return false;
+    }
+    return true;
+  };
+  float longitudinal, azimuthal, scale_tt, scale_trt;
+  if (!read_control("longitudinal", 0.1f, &longitudinal) ||
+      !read_control("azimuthal", 0.2f, &azimuthal) ||
+      !read_control("scale_TT", 0.5f, &scale_tt) || !read_control("scale_TRT", 2.0f, &scale_trt))
+  {
+    return false;
+  }
+  if (scale_tt != 0.5f) {
+    set_error(error_message,
+              prefix + "scale_TT must be 0.5: Cycles fixes the TT variance at 0.25 R");
+    return false;
+  }
+  if (scale_trt != 2.0f) {
+    set_error(error_message,
+              prefix + "scale_TRT must be 2.0: Cycles fixes the TRT variance at 4 R");
+    return false;
+  }
+  for (const pxr::UsdShadeInput &input : roughness_shader.GetInputs()) {
+    const string name = input.GetBaseName().GetString();
+    if (name != "longitudinal" && name != "azimuthal" && name != "scale_TT" &&
+        name != "scale_TRT")
+    {
+      set_error(error_message, prefix + "unknown input '" + name + "'");
+      return false;
+    }
+  }
+  const float lr = std::clamp(longitudinal, 0.001f, 1.0f);
+  const float ar = std::clamp(azimuthal, 0.001f, 1.0f);
+  const float v_root = 0.726f * lr + 0.812f * lr * lr + 3.7f * std::pow(lr, 20.0f);
+  const float v = v_root * v_root;
+  const float s = 0.265f * ar + 1.194f * ar * ar + 5.372f * std::pow(ar, 22.0f);
+  const float v_tt = v * scale_tt * scale_tt;
+  const float v_trt = v * scale_trt * scale_trt;
+  if (!(v_tt >= 0.001f && v_trt <= 1.0f && s >= 0.001f && s <= 1.0f)) {
+    set_error(error_message,
+              prefix + "per-lobe (v, s) must lie inside MaterialX's [0.001, 1] clamp (TT v " +
+                  std::to_string(v_tt) + ", TRT v " + std::to_string(v_trt) + ", s " +
+                  std::to_string(s) + "); Cycles does not clamp per lobe");
+    return false;
+  }
+  node->vector2_inputs["roughness_R"] = make_float2(v, s);
+  node->vector2_inputs["roughness_TT"] = make_float2(v_tt, s);
+  node->vector2_inputs["roughness_TRT"] = make_float2(v_trt, s);
+  return true;
+}
+
 bool read_surface_vector2_literal_input(const pxr::UsdShadeShader &shader,
                                         const char *nodedef,
                                         const char *input_name,
@@ -30131,6 +30339,22 @@ bool read_connected_surface_closure(
     }
   }
   else if (closure_node.nodedef == chiang_hair_bsdf_id) {
+    /* Cycles' Principled Hair BSDF has no Normal input (its fiber frame comes from
+     * the curve tangent), so a connected `normal` has nothing to drive. Refuse it by
+     * name here instead of letting it reach lower(). A literal normal stays admitted
+     * and unused, as before. */
+    if (const pxr::UsdShadeInput normal = closure.GetInput(pxr::TfToken("normal"));
+        normal && normal.HasConnectedSource())
+    {
+      set_error(error_message,
+                string(chiang_hair_bsdf_id) +
+                    " input 'normal' is connected, but Cycles' Principled Hair BSDF has no "
+                    "Normal input");
+      return finish(false);
+    }
+    if (!read_chiang_hair_linked_roughness(closure, &closure_node, error_message)) {
+      return finish(false);
+    }
     if (!read_surface_color_input(closure,
                                   chiang_hair_bsdf_id,
                                   "tint_R",
@@ -30163,12 +30387,13 @@ bool read_connected_surface_closure(
                                   emitted_float_shaders,
                                   emitted_color4_shaders,
                                   error_message) ||
-        !read_surface_vector2_literal_input(
-            closure, chiang_hair_bsdf_id, "roughness_R", &closure_node, error_message) ||
-        !read_surface_vector2_literal_input(
-            closure, chiang_hair_bsdf_id, "roughness_TT", &closure_node, error_message) ||
-        !read_surface_vector2_literal_input(
-            closure, chiang_hair_bsdf_id, "roughness_TRT", &closure_node, error_message) ||
+        (!closure_node.vector2_inputs.contains("roughness_R") &&
+         (!read_surface_vector2_literal_input(
+              closure, chiang_hair_bsdf_id, "roughness_R", &closure_node, error_message) ||
+          !read_surface_vector2_literal_input(
+              closure, chiang_hair_bsdf_id, "roughness_TT", &closure_node, error_message) ||
+          !read_surface_vector2_literal_input(
+              closure, chiang_hair_bsdf_id, "roughness_TRT", &closure_node, error_message))) ||
         !read_surface_float_input(closure,
                                   chiang_hair_bsdf_id,
                                   "cuticle_angle",
@@ -30201,21 +30426,30 @@ bool read_connected_surface_closure(
   else if (is_lama_leaf_bsdf(closure_node.nodedef)) {
     /* LAMA leaf nodegraphs verified against MaterialX 1.39
      * libraries/bxdf/lama: diffuse -> oren_nayar with roughness^2*0.5
-     * (only energyCompensation=0 is admitted because Cycles has no exposed
-     * compensated Oren-Nayar closure); translucent -> translucent_bsdf
+     * (energyCompensation 0 or 1, both lowered to Cycles' compensated
+     * Oren-Nayar closure as reviewed approximations); translucent -> translucent_bsdf
      * (roughness/energyCompensation are unused by the real reference graph);
      * sheen -> sheen_bsdf with pow(0.9 * roughness + 0.1, 2); sss ->
      * subsurface_bsdf with radius*sssScale*sssUnitLength. */
     if (closure_node.nodedef == lama_diffuse_id) {
+      /* energyCompensation mixes the compensated (fg) and uncompensated (bg)
+       * oren_nayar lobes; Cycles' Oren-Nayar closure is the compensated one (see
+       * graph.cpp validate()). The literal end points 0 and 1 are admitted; the
+       * nodedef default 1 also applies when the value is unauthored. */
+      float energy_value = 1.0f;
       const pxr::UsdShadeInput energy = closure.GetInput(pxr::TfToken("energyCompensation"));
-      if (!energy || energy.GetTypeName() != pxr::SdfValueTypeNames->Float || energy.HasConnectedSource()) {
-        set_error(error_message, string(lama_diffuse_id) + " requires literal energyCompensation=0.0 in this delivery phase");
-        return finish(false);
-      }
-      float energy_value = 0.0f;
-      if (!energy.Get(&energy_value) || energy_value != 0.0f) {
-        set_error(error_message, string(lama_diffuse_id) + " requires energyCompensation=0.0 because Cycles exposes no compensated Oren-Nayar closure");
-        return finish(false);
+      if (energy) {
+        if (energy.GetTypeName() != pxr::SdfValueTypeNames->Float || energy.HasConnectedSource()) {
+          set_error(error_message, string(lama_diffuse_id) + " requires a literal float energyCompensation (0 or 1)");
+          return finish(false);
+        }
+        if (energy.GetAttr().HasAuthoredValue() &&
+            (!energy.Get(&energy_value) || !std::isfinite(energy_value) ||
+             (energy_value != 0.0f && energy_value != 1.0f)))
+        {
+          set_error(error_message, string(lama_diffuse_id) + " energyCompensation must be 0 or 1: a fractional blend of the compensated and uncompensated Oren-Nayar lobes is not admitted");
+          return finish(false);
+        }
       }
       closure_node.inputs["energyCompensation"] = energy_value;
       const pxr::UsdShadeInput roughness = closure.GetInput(pxr::TfToken("roughness"));
