@@ -26393,13 +26393,13 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         lowered = mix;
       }
       else if (node.nodedef == surface_material_id) {
-        /* Two-sided surfacematerial: Backfacing selects backsurfaceshader. */
-        GeometryNode *geometry = graph->create_node<GeometryNode>();
-        geometry->name = node.name + ".geometry";
-        lowered_nodes.emplace(geometry->name, geometry);
-        MixClosureNode *side = graph->create_node<MixClosureNode>();
-        side->name = node.name;
-        lowered = side;
+        /* Two-sided surfacematerial: NO Backfacing split; the front surface shades
+         * both faces (see the connect-phase comment, user ruling 2026-11-22 Q9).
+         * An AddClosure placeholder keeps the node name for any SurfaceShader
+         * consumer; the connect phase gives it Closure1 = front. */
+        AddClosureNode *placeholder = graph->create_node<AddClosureNode>();
+        placeholder->name = node.name;
+        lowered = placeholder;
         preserve_lowered_name = true;
       }
       else if (node.nodedef == lama_surface_id) {
@@ -33336,8 +33336,27 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     }
 
     if (node.nodedef == surface_material_id) {
-      ShaderNode *side = lowered_nodes.at(node.name);
-      ShaderNode *geometry = lowered_nodes.at(node.name + ".geometry");
+      /* surfaceshader shades BOTH faces even with backsurfaceshader connected
+       * (user rulings 2026-11-22 Q9 "Yes, align it" and Q9b "Align and recertify",
+       * receipt out/continuous-finish/hermes-divide-zero-fix-20261014/
+       * policy-rulings-20261122c.receipt.json). No MaterialX 1.39.4 reference back
+       * end renders the back surface here:
+       *  - genosl stdlib/genosl/mx_surfacematerial.osl:1-5 takes `back` but never
+       *    reads it;
+       *  - genglsl and genmsl register IM_surfacematerial with C++ MaterialNode
+       *    (GlslShaderGenerator.cpp:119, MslShaderGenerator.cpp:124), whose
+       *    emitFunctionCall (MaterialXGenShader/Nodes/MaterialNode.cpp:30-55) emits
+       *    only the `surfaceshader` input;
+       *  - genmdl mdl/materialx/stdlib_1_6.mdl:39-56 passes it as MDL `backface`,
+       *    used only when thin_walled (front || back thin_walled), and ND_surface
+       *    thin_walled defaults to false (pbrlib_defs.mtlx:244; pbrlib_1_6.mdl:583-585
+       *    notes non-thin-walled MDL uses the same surface on both faces) -- so OVRTX
+       *    shows the front on both sides.
+       * The backsurfaceshader operand is still validated in validate() (an invalid
+       * back is refused as before) and its subgraph is still lowered, but it is
+       * deliberately left unconnected: no Geometry.Backfacing split exists for this
+       * nodedef. Displacement is a graph-level terminal and is unaffected. */
+      ShaderNode *placeholder = lowered_nodes.at(node.name);
       /* Same operand unwrapping as mix_surfaceshader above: a unit-opacity
        * ND_surface with only bsdf or only edf contributes that closure. */
       const auto surface_shader_closure = [&](const Link &link) -> ShaderOutput * {
@@ -33355,13 +33374,12 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         }
         return lowered_output(link, nodes_by_name, lowered_nodes);
       };
-      graph->connect(surface_shader_closure(node.links.at("surfaceshader")),
-                     side->input("Closure1"));
-      graph->connect(surface_shader_closure(node.links.at("backsurfaceshader")),
-                     side->input("Closure2"));
-      graph->connect(geometry->output("Backfacing"), side->input("Fac"));
-      if (!surface_shader_node_has_surface_shader_consumer(source, node.name)) {
-        graph->connect(side->output("Closure"), graph->output()->input("Surface"));
+      ShaderOutput *front = surface_shader_closure(node.links.at("surfaceshader"));
+      if (surface_shader_node_has_surface_shader_consumer(source, node.name)) {
+        graph->connect(front, placeholder->input("Closure1"));
+      }
+      else {
+        graph->connect(front, graph->output()->input("Surface"));
       }
       continue;
     }

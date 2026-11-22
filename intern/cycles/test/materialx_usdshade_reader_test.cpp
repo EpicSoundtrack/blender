@@ -30128,14 +30128,33 @@ TwoSidedSurfaceMaterial make_two_sided_surface_material()
   return f;
 }
 
+/* Batch 53 (user ruling 2026-11-22 Q9): no Geometry node, no ".geometry"/".side"
+ * node and no input driven by a Backfacing output anywhere in the lowered graph. */
+void b53_expect_no_backfacing_split(ShaderGraph &graph)
+{
+  for (ShaderNode *node : graph.nodes) {
+    EXPECT_EQ(dynamic_cast<GeometryNode *>(node), nullptr) << node->name;
+    EXPECT_EQ(node->name.find(".geometry"), string::npos) << node->name;
+    EXPECT_EQ(node->name.find(".side"), string::npos) << node->name;
+    for (ShaderInput *input : node->inputs) {
+      if (input->link) {
+        EXPECT_NE(input->link->name(), ustring("Backfacing")) << node->name;
+      }
+    }
+  }
+}
+
 }  // namespace
 
-TEST(materialx_usdshade_reader, lowers_surfacematerial_back_surface_as_backfacing_split)
+TEST(materialx_usdshade_reader, lowers_surfacematerial_back_surface_front_on_both_faces)
 {
-  /* MaterialX 1.39 ND_surfacematerial: backsurfaceshader shades back-facing
-   * geometry, surfaceshader front-facing. Cycles: MixClosure(Fac=Backfacing,
-   * Closure1=front, Closure2=back). (ND_lama_surface materialBack no longer splits:
-   * user ruling 2026-11-22 Q8.) */
+  /* MaterialX 1.39 ND_surfacematerial with a connected backsurfaceshader. User
+   * rulings 2026-11-22 Q9 "Yes, align it" / Q9b "Align and recertify" (receipt
+   * policy-rulings-20261122c) replace the former Backfacing split assertions:
+   * the front surfaceshader drives Surface on both faces, matching genosl/genglsl/
+   * genmsl (back never emitted) and genmdl/OVRTX (back only when thin_walled).
+   * The back operand is still read and lowered but feeds nothing; displacement is
+   * unchanged. (ND_lama_surface materialBack likewise: Q8.) */
   TwoSidedSurfaceMaterial f = make_two_sided_surface_material();
   pxr::UsdShadeShader displacement = pxr::UsdShadeShader::Define(
       f.stage, pxr::SdfPath("/Looks/TwoSided/Displacement"));
@@ -30160,25 +30179,18 @@ TEST(materialx_usdshade_reader, lowers_surfacematerial_back_surface_as_backfacin
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  MixClosureNode *side = nullptr;
-  GeometryNode *geometry = nullptr;
+  b53_expect_no_backfacing_split(lowered);
   MaterialXDiffuseBsdfNode *red = nullptr;
   MaterialXDiffuseBsdfNode *blue = nullptr;
   for (ShaderNode *node : lowered.nodes) {
-    side = node->name == "SurfaceMaterial" ? dynamic_cast<MixClosureNode *>(node) : side;
-    geometry = node->name == "SurfaceMaterial.geometry" ? dynamic_cast<GeometryNode *>(node) :
-                                                          geometry;
+    EXPECT_EQ(dynamic_cast<MixClosureNode *>(node), nullptr) << node->name;
     red = node->name == "RedDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : red;
     blue = node->name == "BlueDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : blue;
   }
-  ASSERT_NE(side, nullptr);
-  ASSERT_NE(geometry, nullptr);
   ASSERT_NE(red, nullptr);
   ASSERT_NE(blue, nullptr);
-  EXPECT_EQ(side->input("Fac")->link, geometry->output("Backfacing"));
-  EXPECT_EQ(side->input("Closure1")->link, red->output("BSDF"));
-  EXPECT_EQ(side->input("Closure2")->link, blue->output("BSDF"));
-  EXPECT_EQ(lowered.output()->input("Surface")->link, side->output("Closure"));
+  EXPECT_EQ(lowered.output()->input("Surface")->link, red->output("BSDF"));
+  EXPECT_TRUE(blue->output("BSDF")->links.empty());
   EXPECT_NE(lowered.output()->input("Displacement")->link, nullptr);
 }
 
@@ -30222,6 +30234,158 @@ TEST(materialx_usdshade_reader, surfacematerial_back_surface_contract_refusals)
     ASSERT_TRUE(materialx::read_usdshade_graph(f.material, &source, &error)) << error;
     source.nodes.back().links.erase("backsurfaceshader");
     EXPECT_FALSE(materialx::validate(source));
+  }
+}
+
+/* Batch 53: user rulings 2026-11-22 Q9 "Yes, align it" and Q9b "Align and
+ * recertify (Recommended)" (out/continuous-finish/hermes-divide-zero-fix-20261014/
+ * policy-rulings-20261122c.receipt.json): ND_surfacematerial with a connected
+ * backsurfaceshader renders the FRONT surface on both faces in Cycles -- no
+ * Geometry.Backfacing split -- matching MaterialX 1.39.4 genosl/genglsl/genmsl
+ * (back never emitted) and genmdl/OVRTX (back used only when thin_walled). */
+TEST(materialx_usdshade_reader, b53_surfacematerial_connected_back_renders_front_on_both_faces)
+{
+  TwoSidedSurfaceMaterial f = make_two_sided_surface_material();
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(f.material, &source, &error)) << error;
+  ASSERT_TRUE(source.nodes.back().links.contains("backsurfaceshader"));
+  ASSERT_TRUE(materialx::validate(source));
+
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+  b53_expect_no_backfacing_split(lowered);
+  MaterialXDiffuseBsdfNode *red = nullptr;
+  MaterialXDiffuseBsdfNode *blue = nullptr;
+  AddClosureNode *placeholder = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    EXPECT_EQ(dynamic_cast<MixClosureNode *>(node), nullptr) << node->name;
+    red = node->name == "RedDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : red;
+    blue = node->name == "BlueDiffuse" ? dynamic_cast<MaterialXDiffuseBsdfNode *>(node) : blue;
+    placeholder = node->name == "SurfaceMaterial" ? dynamic_cast<AddClosureNode *>(node) :
+                                                    placeholder;
+  }
+  ASSERT_NE(red, nullptr);
+  ASSERT_NE(blue, nullptr);
+  /* Front on both faces: the front closure IS the surface output (no per-face
+   * selection exists); the back closure is lowered but feeds nothing. */
+  EXPECT_EQ(lowered.output()->input("Surface")->link, red->output("BSDF"));
+  EXPECT_TRUE(blue->output("BSDF")->links.empty());
+  /* No SurfaceShader consumer: the name-keeping placeholder stays unconnected. */
+  ASSERT_NE(placeholder, nullptr);
+  EXPECT_EQ(placeholder->input("Closure1")->link, nullptr);
+  EXPECT_EQ(placeholder->input("Closure2")->link, nullptr);
+  EXPECT_TRUE(placeholder->output("Closure")->links.empty());
+}
+
+/* Batch 53: the b40x B_edf_two_sided graph shape (front uniform_edf
+ * (0.4,0.1,0.6), back (0.1,0.6,0.3)): under Q9 both faces emit the FRONT colour. */
+TEST(materialx_usdshade_reader, b53_surfacematerial_two_sided_emission_front_on_both_faces)
+{
+  const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
+  const pxr::UsdShadeMaterial material = pxr::UsdShadeMaterial::Define(
+      stage, pxr::SdfPath("/Looks/TwoSidedEmission"));
+  const auto shader = [&](const char *name, const char *id) {
+    pxr::UsdShadeShader result = pxr::UsdShadeShader::Define(
+        stage, material.GetPath().AppendChild(pxr::TfToken(name)));
+    result.CreateIdAttr(pxr::VtValue(pxr::TfToken(id)));
+    result.CreateOutput(pxr::TfToken("out"), pxr::SdfValueTypeNames->Token);
+    return result;
+  };
+  pxr::UsdShadeShader front_edf = shader("FrontEdf", "ND_uniform_edf");
+  front_edf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.4f, 0.1f, 0.6f));
+  pxr::UsdShadeShader back_edf = shader("BackEdf", "ND_uniform_edf");
+  back_edf.CreateInput(pxr::TfToken("color"), pxr::SdfValueTypeNames->Color3f)
+      .Set(pxr::GfVec3f(0.1f, 0.6f, 0.3f));
+  pxr::UsdShadeShader front = shader("FrontSurface", "ND_surface");
+  ASSERT_TRUE(front.CreateInput(pxr::TfToken("edf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(front_edf.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader back = shader("BackSurface", "ND_surface");
+  ASSERT_TRUE(back.CreateInput(pxr::TfToken("edf"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(back_edf.ConnectableAPI(), pxr::TfToken("out")));
+  pxr::UsdShadeShader surface_material = shader("SurfaceMaterial", "ND_surfacematerial");
+  ASSERT_TRUE(surface_material
+                  .CreateInput(pxr::TfToken("surfaceshader"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(front.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(surface_material
+                  .CreateInput(pxr::TfToken("backsurfaceshader"), pxr::SdfValueTypeNames->Token)
+                  .ConnectToSource(back.ConnectableAPI(), pxr::TfToken("out")));
+  ASSERT_TRUE(material.CreateSurfaceOutput().ConnectToSource(surface_material.ConnectableAPI(),
+                                                             pxr::TfToken("out")));
+
+  materialx::Graph source;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(material, &source, &error)) << error;
+  ASSERT_EQ(source.nodes.back().nodedef, "ND_surfacematerial");
+  ASSERT_TRUE(materialx::validate(source));
+  ShaderGraph lowered;
+  ASSERT_TRUE(materialx::lower(source, &lowered, &error)) << error;
+  b53_expect_no_backfacing_split(lowered);
+  EmissionNode *front_emission = nullptr;
+  EmissionNode *back_emission = nullptr;
+  for (ShaderNode *node : lowered.nodes) {
+    EXPECT_EQ(dynamic_cast<MixClosureNode *>(node), nullptr) << node->name;
+    front_emission = node->name == "FrontEdf" ? dynamic_cast<EmissionNode *>(node) :
+                                                front_emission;
+    back_emission = node->name == "BackEdf" ? dynamic_cast<EmissionNode *>(node) :
+                                              back_emission;
+  }
+  ASSERT_NE(front_emission, nullptr);
+  ASSERT_NE(back_emission, nullptr);
+  EXPECT_EQ(front_emission->get_color(), make_float3(0.4f, 0.1f, 0.6f));
+  EXPECT_EQ(back_emission->get_color(), make_float3(0.1f, 0.6f, 0.3f));
+  EXPECT_EQ(lowered.output()->input("Surface")->link, front_emission->output("Emission"));
+  EXPECT_TRUE(back_emission->output("Emission")->links.empty());
+}
+
+/* Batch 53: the back operand is no longer rendered but is still validated: an
+ * invalid back refuses the whole graph and lower() leaves the target untouched. */
+TEST(materialx_usdshade_reader, b53_surfacematerial_invalid_back_is_still_refused)
+{
+  TwoSidedSurfaceMaterial f = make_two_sided_surface_material();
+  materialx::Graph valid;
+  string error;
+  ASSERT_TRUE(materialx::read_usdshade_graph(f.material, &valid, &error)) << error;
+  ASSERT_TRUE(materialx::validate(valid)); /* positive control */
+  const auto node_index = [](const materialx::Graph &graph, const char *name) {
+    for (size_t i = 0; i < graph.nodes.size(); i++) {
+      if (graph.nodes[i].name == name) {
+        return int(i);
+      }
+    }
+    return -1;
+  };
+  ASSERT_GE(node_index(valid, "BackSurface"), 0);
+
+  for (int variant = 0; variant < 4; variant++) {
+    SCOPED_TRACE(variant);
+    materialx::Graph source = valid;
+    ASSERT_EQ(source.nodes.back().nodedef, "ND_surfacematerial");
+    switch (variant) {
+      case 0: /* back link to a missing node */
+        source.nodes.back().links.at("backsurfaceshader").source_node = "MissingBack";
+        break;
+      case 1: /* back link typed BSDF */
+        source.nodes.back().links.at("backsurfaceshader").type = materialx::Type::BSDF;
+        break;
+      case 2: /* back ND_surface with non-unit opacity */
+        source.nodes[node_index(source, "BackSurface")].inputs["opacity"] = 0.5f;
+        break;
+      case 3: /* back ND_surface removed from the graph */
+        source.nodes.erase(source.nodes.begin() + node_index(source, "BackSurface"));
+        break;
+    }
+    EXPECT_FALSE(materialx::validate(source));
+
+    ShaderGraph graph;
+    EmissionNode *sentinel = graph.create_node<EmissionNode>();
+    graph.connect(sentinel->output("Emission"), graph.output()->input("Surface"));
+    const size_t original_node_count = graph.nodes.size();
+    ShaderOutput *const original_surface_link = graph.output()->input("Surface")->link;
+    EXPECT_FALSE(materialx::lower(source, &graph));
+    EXPECT_EQ(graph.nodes.size(), original_node_count);
+    EXPECT_EQ(graph.output()->input("Surface")->link, original_surface_link);
   }
 }
 
@@ -51610,10 +51774,12 @@ TEST(materialx_usdshade_reader, hextilednormalmap_general_path_refusals)
 }
 
 /* Batch 36: a two-sided ND_surfacematerial with OpenPBR front and back
- * (the retained next-surfacematerial-current585-v1 back-surface graph shape)
- * lowers to MixClosure(Fac = Backfacing, Closure1 = front Principled,
- * Closure2 = back Principled); a non-unit or linked back geometry_opacity and
- * an unsupported non-default OpenPBR input stay refused. */
+ * (the retained next-surfacematerial-current585-v1 back-surface graph shape) is
+ * admitted; a non-unit or linked back geometry_opacity and an unsupported
+ * non-default OpenPBR input stay refused. Batch 53 (user rulings 2026-11-22
+ * Q9/Q9b, policy-rulings-20261122c): the former MixClosure(Fac = Backfacing)
+ * assertions are replaced -- the FRONT Principled (base_weight 1) drives Surface
+ * on both faces; the back Principled (base_weight 0.5) is lowered but unconnected. */
 TEST(materialx_usdshade_reader, two_sided_surfacematerial_admits_unit_opacity_open_pbr)
 {
   for (const int variant : {0, 1, 2, 3, 4}) {
@@ -51677,29 +51843,28 @@ TEST(materialx_usdshade_reader, two_sided_surfacematerial_admits_unit_opacity_op
     ASSERT_TRUE(materialx::validate(graph));
     ShaderGraph lowered;
     ASSERT_TRUE(materialx::lower(graph, &lowered, &error)) << error;
-    MixClosureNode *side = nullptr;
+    b53_expect_no_backfacing_split(lowered);
+    PrincipledBsdfNode *front_bsdf = nullptr;
+    PrincipledBsdfNode *back_bsdf = nullptr;
     int principled = 0;
     for (ShaderNode *node : lowered.nodes) {
-      principled += dynamic_cast<PrincipledBsdfNode *>(node) != nullptr;
-      if (node->name == "SurfaceMaterial") {
-        side = dynamic_cast<MixClosureNode *>(node);
+      EXPECT_EQ(dynamic_cast<MixClosureNode *>(node), nullptr) << node->name;
+      if (auto *bsdf = dynamic_cast<PrincipledBsdfNode *>(node)) {
+        principled++;
+        front_bsdf = node->name == "Front" ? bsdf : front_bsdf;
+        back_bsdf = node->name == "Back" ? bsdf : back_bsdf;
       }
     }
     EXPECT_EQ(principled, 2);
-    ASSERT_NE(side, nullptr);
-    ShaderInput *fac = side->input("Fac");
-    ASSERT_NE(fac->link, nullptr);
-    EXPECT_NE(dynamic_cast<GeometryNode *>(fac->link->parent), nullptr);
-    EXPECT_EQ(fac->link->name(), "Backfacing");
-    auto *front_bsdf = dynamic_cast<PrincipledBsdfNode *>(side->input("Closure1")->link->parent);
-    auto *back_bsdf = dynamic_cast<PrincipledBsdfNode *>(side->input("Closure2")->link->parent);
     ASSERT_NE(front_bsdf, nullptr);
     ASSERT_NE(back_bsdf, nullptr);
-    EXPECT_NE(front_bsdf, back_bsdf);
     EXPECT_FLOAT_EQ(back_bsdf->get_alpha(), 1.0f);
     ShaderInput *surface = lowered.output()->input("Surface");
     ASSERT_NE(surface->link, nullptr);
-    EXPECT_EQ(surface->link->parent, side);
+    EXPECT_EQ(surface->link->parent, front_bsdf);
+    for (ShaderOutput *output : back_bsdf->outputs) {
+      EXPECT_TRUE(output->links.empty()) << output->name();
+    }
   }
 }
 

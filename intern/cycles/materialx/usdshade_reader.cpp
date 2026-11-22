@@ -1227,7 +1227,8 @@ constexpr const char *mix_volumeshader_id = "ND_mix_volumeshader";
  * compiler already stores surface and displacement terminals directly, so a
  * surfacematerial found at the material surface output is unwrapped to those
  * slots rather than lowered as a fabricated material-valued node. A connected
- * backsurfaceshader is lowered as a backface closure split; see
+ * backsurfaceshader is read and validated but does not shade the back face
+ * (user ruling 2026-11-22 Q9: front on both faces); see
  * read_two_sided_surface_material(). */
 constexpr const char *surface_material_id = "ND_surfacematerial";
 /* MaterialX 1.39 pbrlib/pbrlib_defs.mtlx declares ND_light as a lightshader
@@ -32361,10 +32362,11 @@ bool read_surface_material_displacement(const pxr::UsdShadeShader &surface_mater
 /** Two-sided ND_surfacematerial (MaterialX 1.39 stdlib_defs.mtlx): a connected
  *  backsurfaceshader shades back-facing geometry and surfaceshader shades
  *  front-facing geometry. Lowered as one IR node (nodedef ND_surfacematerial,
- *  links surfaceshader/backsurfaceshader) that graph.cpp turns into
- *  MixClosure(Fac = Geometry.Backfacing, Closure1 = front, Closure2 = back).
- *  (ND_lama_surface materialBack no longer uses this split: user ruling
- *  2026-11-22 Q8 renders its front on both faces.) Both operands go
+ *  links surfaceshader/backsurfaceshader). graph.cpp renders the front
+ *  surfaceshader on BOTH faces with no Geometry.Backfacing split (user rulings
+ *  2026-11-22 Q9/Q9b, matching the MaterialX 1.39.4 genosl/genglsl/genmsl/genmdl
+ *  back ends; ND_lama_surface materialBack likewise, Q8); the back operand is
+ *  still read, validated and lowered, but left unconnected. Both operands go
  *  through the ND_mix_surfaceshader operand reader, so the admitted surface
  *  models and the unit-opacity restriction are exactly mix_surfaceshader's
  *  (batch 36: including unit-opacity OpenPBR); anything else stays an explicit
