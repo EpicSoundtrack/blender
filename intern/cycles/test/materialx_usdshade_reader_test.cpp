@@ -31904,7 +31904,8 @@ TEST(materialx_usdshade_reader, admits_gltf_pbr_active_sheen_with_active_emissio
    * literal-0 emissive_strength. The batch-50 refusal of active sheen with
    * active emission is removed: Principled attenuates emission by the sheen
    * layer (the reference does not), but the measured dimming (lane
-   * loc-20261122 q6v2-evaluation.json, sheen 0.846-0.981 at 0 and 60 degrees)
+   * loc-20261122 q6v2-evaluation.json, sheen 0.846-0.981 at 0 and 60 degrees,
+   * measured on a native Principled diagnostic, not a lowered gltf_pbr graph)
    * is inside the 0.5-2x band. Every combination now reads, validates and
    * lowers, and active sheen reaches Principled together with the emission. */
   for (const bool connected_emissive : {false, true}) {

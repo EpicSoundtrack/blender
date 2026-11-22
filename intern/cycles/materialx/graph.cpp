@@ -3298,14 +3298,17 @@ float sheen_microfiber_literal_roughness(const Node &node)
  * policy-rulings-20261122c Q6, "Measure, then decide": keep both admitted if
  * inside the 0.5-2x energy band). Principled attenuates its emission by the
  * sheen and coat layers (closure.h "Emission (attenuated by sheen and coat)");
- * the reference adds the edf beside the BSDF layer stack, unattenuated.
- * Measured on the real Cycles path through Blender MCP (lane loc-20261122,
- * q6v2-evaluation.json, C1 == C2), emission under the layer / emission alone:
- * clearcoat 0.910-0.986, sheen 0.846-0.981 (Principled sheen diagnostic), at
- * view angles 0 and 60 degrees. Both are inside 0.5-2x, so the batch-50
- * sheen+emission refusal is removed (batch 55). Caveat: the attenuation grows
- * with the layer Fresnel towards grazing view; the dimming is estimated to
- * fall below 0.5 only near 83 degrees, which was not rendered.
+ * the reference adds the edf beside the BSDF layer stack (unattenuated per the
+ * MaterialX source; the reference side was not rendered). Measured in Cycles
+ * through Blender MCP (lane loc-20261122, q6v2-evaluation.json, C1 == C2),
+ * emission under the layer / emission alone, at view angles 0 and 60 degrees:
+ * clearcoat 0.910-0.986 on the lowered gltf_pbr graph; sheen 0.846-0.981 on a
+ * native Principled diagnostic (white Sheen Tint), not on a lowered gltf_pbr
+ * sheen graph. Both are inside 0.5-2x, so the batch-50 sheen+emission refusal
+ * is removed (batch 55). Caveat: the dimming grows towards grazing view. An
+ * unsourced Schlick estimate (F0 0.04, one coat pass) puts the clearcoat
+ * dimming below 0.5 only near 83 degrees; sheen attenuation is not
+ * Fresnel-shaped. Neither was rendered at grazing angles.
  *
  * Sheen is active when sheen_color is linked or is a literal with a positive
  * channel: genglsl mx_sheen_bsdf returns no sheen for weight < eps, so the
@@ -14782,8 +14785,8 @@ bool validate(const Graph &source,
          * is in [0.981, 1.595] for roughness 0-1 (N.V 0.1-1, albedo 0.18-0.99), i.e.
          * Cycles is up to ~27% brighter at roughness <= 0.5 and up to ~59% at
          * roughness 1; for roughness > 1 (Cycles clamps sigma to 1, MaterialX does
-         * not) it stays below 1.99. That is inside the D2 0.5-2x energy band. The
-         * point-wise lobe shape is NOT inside it at roughness near 1 (0.32-1.70:
+         * not) it stays below 2 (1.96 at roughness 5, asymptote ~1.990). That is
+         * inside the D2 0.5-2x energy band. The point-wise lobe shape is NOT inside it at roughness near 1 (0.32-1.70:
          * Fujii keeps negative t, Cycles adds a retro-reflective multi-scatter
          * term). The envelope is pinned against the actual CPU closure by
          * materialx_oren_nayar_reference.uncompensated_lobe_envelope_vs_materialx_1_39_4.
@@ -25939,7 +25942,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
            * closure. Same gap and same measured energy envelope as
            * ND_oren_nayar_diffuse_bsdf with energy_compensation=false (see the
            * validate() comment there): directional albedo ratio [0.981, 1.595] for
-           * roughness 0-1, below 1.99 beyond. Identical (Lambert) at 0. */
+           * roughness 0-1, below 2 beyond. Identical (Lambert) at 0. */
           principled->set_diffuse_roughness(input->second);
         }
         if (const auto input = node.inputs.find("specular"); input != node.inputs.end()) {

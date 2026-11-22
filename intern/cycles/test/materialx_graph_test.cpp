@@ -21330,7 +21330,8 @@ TEST(materialx_graph, validates_gltf_pbr_admits_active_sheen_with_active_emissio
    * decide"): the batch-50 refusal of active sheen with active emission is
    * removed. Principled still attenuates emission by the sheen layer (the
    * reference does not), but the measured dimming (lane loc-20261122
-   * q6v2-evaluation.json: sheen 0.846-0.981, clearcoat 0.910-0.986 at 0 and
+   * q6v2-evaluation.json: clearcoat 0.910-0.986 on gltf_pbr; sheen 0.846-0.981
+   * on a native Principled diagnostic, not a lowered gltf_pbr graph; at 0 and
    * 60 degrees) is inside the 0.5-2x band, so it is a documented
    * approximation. The former refusal matrix now has to validate AND lower
    * every combination, with sheen and emission both reaching Principled. */
