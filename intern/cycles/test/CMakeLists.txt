@@ -67,6 +67,10 @@ if(WITH_USD AND WITH_MATERIALX)
     materialx_usdshade_reader_test.cpp
   )
   list(APPEND LIB bf::dependencies::optional::usd bf::dependencies::optional::python)
+  # Retained fixtures live next to the test source; locate them without absolute paths.
+  set_source_files_properties(materialx_usdshade_reader_test.cpp PROPERTIES
+    COMPILE_DEFINITIONS "CYCLES_MATERIALX_TEST_SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}\""
+  )
 endif()
 
 # Disable AVX tests on macOS. Rosetta has problems running them, and other

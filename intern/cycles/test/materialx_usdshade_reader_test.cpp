@@ -43954,7 +43954,11 @@ TEST(materialx_usdshade_reader, materialx_multiply_all_carriers_fold_nan_and_mat
  * This does not execute a renderer or assert GPU attribute-buffer contents. */
 TEST(materialx_usdshade_reader, retained_multiply_float_r2_dual_point_links_survive_folding)
 {
-  const char *path = "D:/Projects/BlenderMatX/materialx-finish-20260917/out/continuous-finish/hermes-divide-zero-fix-20261014/multiply-float-operand-probe-windows-gpu-r2-run.cycles-first.tile01.actual-transport.usda";
+  /* Retained copy of hermes-divide-zero-fix-20261014 multiply-float-operand-probe-windows-gpu-r2-run
+   * .cycles-first.tile01.actual-transport.usda; content identical, LF line endings
+   * (CRLF original sha256 9d6c0aee...2a1cefa, LF 92655bfa...ce8686792). */
+  const std::string path = std::string(CYCLES_MATERIALX_TEST_SOURCE_DIR) +
+                           "/materialx_multiply_float_r2_dual_point_links.usda";
   auto stage = pxr::UsdStage::Open(path);
   ASSERT_TRUE(stage);
   materialx::Graph source;
@@ -44100,7 +44104,10 @@ CCL_NAMESPACE_END
 #define svm_math_blackbody_color_rec709 retained_runtime_svm_math_blackbody_color_rec709
 #define svm_math_gamma_color retained_runtime_svm_math_gamma_color
 #define svm_math_wavelength_color_xyz retained_runtime_svm_math_wavelength_color_xyz
-#include "D:/Projects/BlenderMatX/materialx-finish-20260917/scratch/g21-amber-native-parity-build-20260929/5.3/scripts/addons_core/cycles/source/kernel/svm/math_util.h"
+/* Copy of the g21-amber-native-parity-build-20260929 5.3 installed
+ * scripts/addons_core/cycles/source/kernel/svm/math_util.h; content identical, LF line endings
+ * (CRLF original sha256 ed073665...8c3173f0e, LF dd8bd9ac...996cc0721). */
+#include "materialx_retained_g21_amber_math_util.h"
 #undef svm_math
 #undef svm_vector_math
 #undef svm_math_blackbody_color_rec709

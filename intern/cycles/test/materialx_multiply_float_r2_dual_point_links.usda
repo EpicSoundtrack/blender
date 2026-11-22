@@ -1,0 +1,226 @@
+#usda 1.0
+
+def Scope "Looks"
+{
+    def Material "Material"
+    {
+        token outputs:mtlx:surface.connect = </Looks/Material/Root.outputs:surface>
+
+        def NodeGraph "Root"
+        {
+            token outputs:surface (
+                customData = {
+                    string materialXType = "surfaceshader"
+                }
+            )
+            token outputs:surface.connect = </Looks/Material/Root/Nested.outputs:surface>
+
+            def NodeGraph "Nested"
+            {
+                token outputs:NG_NODE_UNDER_TEST__det_material_surfaceshader (
+                    customData = {
+                        string materialXType = "surfaceshader"
+                    }
+                )
+                token outputs:NG_NODE_UNDER_TEST__det_material_surfaceshader.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST___mask_surface.outputs:out>
+                token outputs:surface (
+                    customData = {
+                        string materialXType = "surfaceshader"
+                    }
+                )
+                token outputs:surface.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST___mask_surface.outputs:out>
+
+                def Shader "NG_NODE_UNDER_TEST__under_test" (
+                    customData = {
+                        string materialXNodeDef = "ND_multiply_float"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_multiply_float"
+                    float inputs:in1.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST___varying_in1.outputs:out>
+                    float inputs:in2.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST___varying_in2.outputs:out>
+                    float outputs:out
+                }
+
+                def Shader "NG_NODE_UNDER_TEST__display_value" (
+                    customData = {
+                        string materialXNodeDef = "ND_convert_float_color3"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_convert_float_color3"
+                    float inputs:in.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST__under_test.outputs:out>
+                    color3f outputs:out
+                }
+
+                def Shader "NG_NODE_UNDER_TEST___det_surface" (
+                    customData = {
+                        string materialXNodeDef = "ND_convert_float_surfaceshader"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_convert_float_surfaceshader"
+                    float inputs:in.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST__under_test.outputs:out>
+                    token outputs:out
+                }
+
+                def Shader "NG_NODE_UNDER_TEST___varying_in1" (
+                    customData = {
+                        string materialXNodeDef = "ND_geompropvalue_float"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_geompropvalue_float"
+                    float inputs:default = 0
+                    uniform string inputs:geomprop = "math_varying_in1" (
+                        sdrMetadata = {
+                            string uniform = "true"
+                        }
+                    )
+                    float outputs:out
+                }
+
+                def Shader "NG_NODE_UNDER_TEST___varying_in2" (
+                    customData = {
+                        string materialXNodeDef = "ND_geompropvalue_float"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_geompropvalue_float"
+                    float inputs:default = 0
+                    uniform string inputs:geomprop = "math_varying_in2" (
+                        sdrMetadata = {
+                            string uniform = "true"
+                        }
+                    )
+                    float outputs:out
+                }
+
+                def Shader "NG_NODE_UNDER_TEST___varying_bound_lower" (
+                    customData = {
+                        string materialXNodeDef = "ND_geompropvalue_float"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_geompropvalue_float"
+                    float inputs:default = 0
+                    uniform string inputs:geomprop = "math_varying_bound_lower" (
+                        sdrMetadata = {
+                            string uniform = "true"
+                        }
+                    )
+                    float outputs:out
+                }
+
+                def Shader "NG_NODE_UNDER_TEST___varying_bound_upper" (
+                    customData = {
+                        string materialXNodeDef = "ND_geompropvalue_float"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_geompropvalue_float"
+                    float inputs:default = 0
+                    uniform string inputs:geomprop = "math_varying_bound_upper" (
+                        sdrMetadata = {
+                            string uniform = "true"
+                        }
+                    )
+                    float outputs:out
+                }
+
+                def Shader "NG_NODE_UNDER_TEST___varying_bound_negative" (
+                    customData = {
+                        string materialXNodeDef = "ND_geompropvalue_float"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_geompropvalue_float"
+                    float inputs:default = 0
+                    uniform string inputs:geomprop = "math_varying_bound_negative" (
+                        sdrMetadata = {
+                            string uniform = "true"
+                        }
+                    )
+                    float outputs:out
+                }
+
+                def Shader "NG_NODE_UNDER_TEST___mask_lower" (
+                    customData = {
+                        string materialXNodeDef = "ND_ifgreatereq_float"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_ifgreatereq_float"
+                    float inputs:in1 = 1
+                    float inputs:in2 = 0
+                    float inputs:value1.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST__under_test.outputs:out>
+                    float inputs:value2.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST___varying_bound_lower.outputs:out>
+                    float outputs:out
+                }
+
+                def Shader "NG_NODE_UNDER_TEST___mask_upper" (
+                    customData = {
+                        string materialXNodeDef = "ND_ifgreatereq_float"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_ifgreatereq_float"
+                    float inputs:in1 = 1
+                    float inputs:in2 = 0
+                    float inputs:value1.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST___varying_bound_upper.outputs:out>
+                    float inputs:value2.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST__under_test.outputs:out>
+                    float outputs:out
+                }
+
+                def Shader "NG_NODE_UNDER_TEST___mask_negative" (
+                    customData = {
+                        string materialXNodeDef = "ND_ifgreatereq_float"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_ifgreatereq_float"
+                    float inputs:in1 = 1
+                    float inputs:in2 = 0
+                    float inputs:value1.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST__under_test.outputs:out>
+                    float inputs:value2.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST___varying_bound_negative.outputs:out>
+                    float outputs:out
+                }
+
+                def Shader "NG_NODE_UNDER_TEST___mask_rgb" (
+                    customData = {
+                        string materialXNodeDef = "ND_combine3_color3"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_combine3_color3"
+                    float inputs:in1.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST___mask_lower.outputs:out>
+                    float inputs:in2.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST___mask_upper.outputs:out>
+                    float inputs:in3.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST___mask_negative.outputs:out>
+                    color3f outputs:out
+                }
+
+                def Shader "NG_NODE_UNDER_TEST___mask_surface" (
+                    customData = {
+                        string materialXNodeDef = "ND_convert_color3_surfaceshader"
+                    }
+                )
+                {
+                    uniform token info:id = "ND_convert_color3_surfaceshader"
+                    color3f inputs:in.connect = </Looks/Material/Root/Nested/NG_NODE_UNDER_TEST___mask_rgb.outputs:out>
+                    token outputs:out
+                }
+            }
+        }
+    }
+}
+
+def "World"
+{
+    def Mesh "BindingTarget" (
+        prepend apiSchemas = ["MaterialBindingAPI"]
+    )
+    {
+        rel material:binding = </Looks/Material>
+    }
+}
+
