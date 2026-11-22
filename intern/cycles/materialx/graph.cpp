@@ -1081,7 +1081,7 @@ constexpr const char *surface_unlit_id = "ND_surface_unlit";
  *  see is_supported_usd_preview_surface_input in usdshade_reader.cpp. */
 constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshader";
 /** Real semantic lowerer for glTF's metallic-roughness PBR terminal,
- *  verified against the bundled libraries/bxdf/gltf_pbr.mtlx nodedef (24
+ *  verified against the bundled libraries/bxdf/gltf_pbr.mtlx nodedef (28
  *  real inputs). Same delivery-phase scoping rationale as
  *  usd_preview_surface_id above: base_color, metallic, roughness,
  *  clearcoat, clearcoat_roughness, ior, emissive, emissive_strength map
@@ -1090,8 +1090,8 @@ constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshad
  *  sheen_roughness lower onto Principled sheen as an APPROXIMATION (see
  *  gltf_pbr_sheen_active()): the reference sheen_bsdf is Conty-Kulla,
  *  Cycles' is microfiber, bridged by the energy-matched roughness remap also
- *  used by ND_sheen_bsdf; sheen together with a clearcoat stays fail-closed
- *  because the layer order differs. transmission, specular/specular_color,
+ *  used by ND_sheen_bsdf; sheen together with a clearcoat (layer order) or
+ *  with emission (Principled attenuates it by the sheen) stays fail-closed. transmission, specular/specular_color,
  *  iridescence, anisotropy, alpha MASK/BLEND modes, and connected
  *  normal/tangent/clearcoat_normal have no faithful Cycles equivalent yet
  *  and are admitted only at their inert default value. thickness /
@@ -3252,12 +3252,14 @@ float sheen_microfiber_literal_roughness(const Node &node)
  * not (the approximation ND_sheen_bsdf already uses, see
  * sheen_conty_kulla_microfiber_roughness()). Cycles clamps a negative tint
  * channel to 0 and saturates the layer throughput; the reference does
- * neither. Principled also attenuates its emission by the sheen layer
- * (closure.h "Emission (attenuated by sheen and coat)"), while the
- * reference surface adds the edf beside the BSDF layer stack (believed
- * unattenuated; the same pre-existing gap applies to clearcoat): active
- * sheen with a non-zero emissive emits about (1 - max(sheen_color) * albedo)
- * times the reference. Open for a root ruling; not refused here.
+ * neither.
+ *
+ * Principled also attenuates its emission by the sheen layer (closure.h
+ * "Emission (attenuated by sheen and coat)"), while the reference surface
+ * adds the edf beside the BSDF layer stack (believed unattenuated, not yet
+ * measured). Active sheen with active emission (see
+ * gltf_pbr_emission_active()) is therefore refused (fail-closed) until the
+ * reference behaviour is measured; it is not approximated.
  *
  * Sheen is active when sheen_color is linked or is a literal with a positive
  * channel: genglsl mx_sheen_bsdf returns no sheen for weight < eps, so the
@@ -3283,6 +3285,21 @@ bool gltf_pbr_clearcoat_active(const Node &node)
   }
   const auto clearcoat = node.inputs.find("clearcoat");
   return clearcoat != node.inputs.end() && clearcoat->second != 0.0f;
+}
+
+/* gltf_pbr emission = emissive * emissive_strength (defaults (0,0,0) and 1).
+ * Active when emissive is linked or a literal with a non-zero channel, unless
+ * emissive_strength is a literal 0. */
+bool gltf_pbr_emission_active(const Node &node)
+{
+  const auto emissive = node.color3_inputs.find("emissive");
+  const bool emissive_active =
+      node.links.contains("emissive") ||
+      (emissive != node.color3_inputs.end() &&
+       (emissive->second.x != 0.0f || emissive->second.y != 0.0f || emissive->second.z != 0.0f));
+  const auto strength = node.inputs.find("emissive_strength");
+  return emissive_active && !(strength != node.inputs.end() && strength->second == 0.0f &&
+                              !node.links.contains("emissive_strength"));
 }
 
 bool is_matrix33_conditional(const string &nodedef)
@@ -12682,10 +12699,11 @@ bool validate(const Graph &source,
     /* Real ND_gltf_pbr_surfaceshader validation. Same delivery-phase
      * rationale as ND_UsdPreviewSurface_surfaceshader above:
      * usdshade_reader.cpp only ever stores the ten fields listed here
-     * into a node of this nodedef; every other real input on the 24-input
+     * into a node of this nodedef; every other real input on the 28-input
      * gltf_pbr nodedef is checked at admission time to be absent or inert
-     * and is never stored. Active sheen with an active clearcoat is refused
-     * (layer order; see gltf_pbr_sheen_active()). */
+     * and is never stored. Active sheen with an active clearcoat (layer
+     * order) or active emission (sheen-attenuated emission) is refused; see
+     * gltf_pbr_sheen_active(). */
     if (node.nodedef == gltf_pbr_id) {
       const auto output = node.outputs.find("out");
       if (output == node.outputs.end() || output->second != Type::SurfaceShader ||
@@ -12739,7 +12757,9 @@ bool validate(const Graph &source,
       {
         return false;
       }
-      if (gltf_pbr_sheen_active(node) && gltf_pbr_clearcoat_active(node)) {
+      if (gltf_pbr_sheen_active(node) &&
+          (gltf_pbr_clearcoat_active(node) || gltf_pbr_emission_active(node)))
+      {
         return false;
       }
       continue;

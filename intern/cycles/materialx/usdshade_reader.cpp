@@ -29077,12 +29077,13 @@ bool is_supported_usd_preview_surface_input(const string &name)
 }
 
 /* Real, verified against the bundled MaterialX 1.39
- * libraries/bxdf/gltf_pbr.mtlx ND_gltf_pbr_surfaceshader nodedef: all 24
+ * libraries/bxdf/gltf_pbr.mtlx ND_gltf_pbr_surfaceshader nodedef: all 28
  * real inputs it declares. base_color, metallic, roughness, clearcoat,
  * clearcoat_roughness, ior, emissive, and emissive_strength are lowered to
  * real Cycles Principled BSDF equivalents (connectable); sheen_color and
  * sheen_roughness lower onto Principled sheen as an approximation, refused
- * together with an active clearcoat (layer order); the rest are
+ * together with an active clearcoat (layer order) or active emission
+ * (sheen-attenuated emission); the rest are
  * admitted here as "known" real inputs but are further restricted below --
  * either to their inert default value (normal, tangent, occlusion,
  * transmission, specular, specular_color, alpha, alpha_mode, alpha_cutoff,
@@ -29375,14 +29376,10 @@ bool require_default_vector3(const pxr::UsdShadeShader &surface,
   return true;
 }
 
-/** Like require_default_vector3, but for the real gltf_pbr inputs (normal,
- *  tangent, clearcoat_normal) that declare no literal "value" default at
- *  all -- only a `defaultgeomprop` (the real nodedef falls back to reading
- *  the named geometry primvar, e.g. Nworld/Tworld, when unconnected). An
- *  unconnected input of this kind is exactly Cycles' own default behavior
- *  (no override -- use the true shading normal/tangent), so there is no
- *  literal value to compare against; only a connected source is rejected
- *  as out of scope. */
+/** Like require_default_vector3, but for a color3 input: admits it only
+ *  when absent or an unconnected Color3f literal equal to default_value;
+ *  a connected, mistyped or non-default input is rejected as out of
+ *  scope. */
 bool require_default_color3(const pxr::UsdShadeShader &surface,
                             const char *input_name,
                             const pxr::GfVec3f &default_value,
@@ -29422,6 +29419,14 @@ bool require_default_color3(const pxr::UsdShadeShader &surface,
   return true;
 }
 
+/** Like require_default_vector3, but for the real gltf_pbr inputs (normal,
+ *  tangent, clearcoat_normal) that declare no literal "value" default at
+ *  all -- only a `defaultgeomprop` (the real nodedef falls back to reading
+ *  the named geometry primvar, e.g. Nworld/Tworld, when unconnected). An
+ *  unconnected input of this kind is exactly Cycles' own default behavior
+ *  (no override -- use the true shading normal/tangent), so there is no
+ *  literal value to compare against; only a connected source is rejected
+ *  as out of scope. */
 bool require_unconnected_vector3(const pxr::UsdShadeShader &surface,
                                  const char *input_name,
                                  const char *model_name,
@@ -32714,7 +32719,8 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * sheen_color is connected or has a positive channel. The reference layers
    * clearcoat over sheen over base, Cycles Principled layers sheen above the
    * coat, so active sheen with a non-zero or connected clearcoat is refused
-   * rather than approximated. sheen_roughness is read only for active sheen;
+   * rather than approximated; so is active sheen with active emission (see
+   * below). sheen_roughness is read only for active sheen;
    * otherwise it stays inert and is admitted unchecked, as before. */
   {
     const auto sheen_value = gltf_pbr_node.color3_inputs.find("sheen_color");
@@ -32732,6 +32738,26 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                 "gltf_pbr sheen_color with clearcoat has no faithful Cycles equivalent: the "
                 "reference layers clearcoat over sheen over base, Cycles Principled layers "
                 "sheen above the coat (refused, not approximated)");
+      return false;
+    }
+    /* Emission = emissive * emissive_strength (defaults 0 and 1). Principled
+     * attenuates emission by the sheen layer; the reference adds the edf
+     * beside the BSDF layers. Refused until the reference is measured. */
+    const auto emissive_value = gltf_pbr_node.color3_inputs.find("emissive");
+    const bool emissive_active = gltf_pbr_node.links.contains("emissive") ||
+                                 (emissive_value != gltf_pbr_node.color3_inputs.end() &&
+                                  (emissive_value->second.x != 0.0f ||
+                                   emissive_value->second.y != 0.0f ||
+                                   emissive_value->second.z != 0.0f));
+    const auto strength_value = gltf_pbr_node.inputs.find("emissive_strength");
+    const bool emission_active = emissive_active &&
+                                 !(strength_value != gltf_pbr_node.inputs.end() &&
+                                   strength_value->second == 0.0f);
+    if (sheen_active && emission_active) {
+      set_error(error_message,
+                "gltf_pbr sheen_color with emissive has no faithful Cycles equivalent: Cycles "
+                "Principled attenuates emission by the sheen layer, the reference adds emission "
+                "beside the BSDF layers (refused until measured, not approximated)");
       return false;
     }
     if (sheen_active &&

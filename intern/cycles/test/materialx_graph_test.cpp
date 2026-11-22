@@ -21322,6 +21322,79 @@ TEST(materialx_graph, validates_gltf_pbr_sheen_link_types_and_refuses_sheen_with
   }
 }
 
+TEST(materialx_graph, validates_gltf_pbr_refuses_active_sheen_with_active_emission)
+{
+  /* Batch 50 root decision: Principled attenuates emission by the sheen
+   * layer, the reference adds the edf beside the BSDF layers, so active sheen
+   * with active emission (emissive linked or non-zero, unless
+   * emissive_strength is a literal 0) is refused until measured. Every
+   * admitted combination still lowers. */
+  materialx::Node color;
+  color.name = "C";
+  color.nodedef = "ND_constant_color3";
+  color.color3_inputs["value"] = make_float3(0.5f, 0.4f, 0.3f);
+  color.outputs["out"] = materialx::Type::Color3;
+  materialx::Node scalar;
+  scalar.name = "F";
+  scalar.nodedef = "ND_constant_float";
+  scalar.inputs["value"] = 0.5f;
+  scalar.outputs["out"] = materialx::Type::Float;
+  enum Sheen { SheenUnauthored, SheenZero, SheenLiteral, SheenLinked };
+  enum Emissive { EmissiveUnauthored, EmissiveZero, EmissiveLiteral, EmissiveLinked };
+  enum Strength { StrengthUnauthored, StrengthZero, StrengthLiteral, StrengthLinked };
+  for (const Sheen sheen : {SheenUnauthored, SheenZero, SheenLiteral, SheenLinked}) {
+    for (const Emissive emissive :
+         {EmissiveUnauthored, EmissiveZero, EmissiveLiteral, EmissiveLinked})
+    {
+      for (const Strength strength :
+           {StrengthUnauthored, StrengthZero, StrengthLiteral, StrengthLinked})
+      {
+        SCOPED_TRACE(std::to_string(int(sheen)) + "/" + std::to_string(int(emissive)) + "/" +
+                     std::to_string(int(strength)));
+        materialx::Node surface = gltf_sheen_surface();
+        if (sheen == SheenZero) {
+          surface.color3_inputs["sheen_color"] = make_float3(0.0f, 0.0f, 0.0f);
+        }
+        else if (sheen == SheenLiteral) {
+          surface.color3_inputs["sheen_color"] = make_float3(0.3f, 0.2f, 0.1f);
+        }
+        else if (sheen == SheenLinked) {
+          surface.links["sheen_color"] = {"C", "out", materialx::Type::Color3};
+        }
+        if (emissive == EmissiveZero) {
+          surface.color3_inputs["emissive"] = make_float3(0.0f, 0.0f, 0.0f);
+        }
+        else if (emissive == EmissiveLiteral) {
+          surface.color3_inputs["emissive"] = make_float3(0.0f, 0.0f, 0.2f);
+        }
+        else if (emissive == EmissiveLinked) {
+          surface.links["emissive"] = {"C", "out", materialx::Type::Color3};
+        }
+        if (strength == StrengthZero) {
+          surface.inputs["emissive_strength"] = 0.0f;
+        }
+        else if (strength == StrengthLiteral) {
+          surface.inputs["emissive_strength"] = 2.0f;
+        }
+        else if (strength == StrengthLinked) {
+          surface.links["emissive_strength"] = {"F", "out", materialx::Type::Float};
+        }
+        const bool sheen_active = sheen == SheenLiteral || sheen == SheenLinked;
+        const bool emission_active = (emissive == EmissiveLiteral ||
+                                      emissive == EmissiveLinked) &&
+                                     strength != StrengthZero;
+        const materialx::Graph source{{color, scalar, surface}};
+        const bool refused = sheen_active && emission_active;
+        EXPECT_EQ(materialx::validate(source), !refused);
+        if (!refused) {
+          ShaderGraph graph;
+          EXPECT_TRUE(materialx::lower(source, &graph));
+        }
+      }
+    }
+  }
+}
+
 /* ======================================================================
  * BSDF closure-producer leaves: real Cycles closure nodes for
  * ND_oren_nayar_diffuse_bsdf, ND_translucent_bsdf, ND_sheen_bsdf,

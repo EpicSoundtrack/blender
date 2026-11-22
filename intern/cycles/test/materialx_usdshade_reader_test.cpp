@@ -31717,6 +31717,58 @@ TEST(materialx_usdshade_reader, rejects_gltf_pbr_sheen_with_clearcoat_naming_lay
   }
 }
 
+TEST(materialx_usdshade_reader, rejects_gltf_pbr_active_sheen_with_active_emission)
+{
+  /* Batch 50 root decision: literal or connected emissive x active or
+   * inactive sheen. Active sheen with active emission is refused (Principled
+   * attenuates emission by the sheen layer, the reference does not), with a
+   * message naming it, and the output graph is left untouched; inactive sheen
+   * or a literal-0 emissive_strength admits. */
+  for (const bool connected_emissive : {false, true}) {
+    for (const bool sheen_active : {false, true}) {
+      for (const bool zero_strength : {false, true}) {
+        SCOPED_TRACE(std::to_string(connected_emissive) + "/" + std::to_string(sheen_active) +
+                     "/" + std::to_string(zero_strength));
+        GltfSheenStage s = gltf_sheen_stage(connected_emissive);
+        if (connected_emissive) {
+          /* Literal sheen below, so drop the translated sheen link. */
+          ASSERT_TRUE(s.gltf.GetPrim().RemoveProperty(pxr::TfToken("inputs:sheen_color")));
+          s.translate.CreateInput(pxr::TfToken("emission"), pxr::SdfValueTypeNames->Float)
+              .Set(1.0f);
+          s.translate.CreateOutput(pxr::TfToken("emissive_out"),
+                                   pxr::SdfValueTypeNames->Color3f);
+          ASSERT_TRUE(
+              s.gltf.CreateInput(pxr::TfToken("emissive"), pxr::SdfValueTypeNames->Color3f)
+                  .ConnectToSource(s.translate.ConnectableAPI(), pxr::TfToken("emissive_out")));
+        }
+        else {
+          s.gltf.CreateInput(pxr::TfToken("emissive"), pxr::SdfValueTypeNames->Color3f)
+              .Set(pxr::GfVec3f(0.4f, 0.3f, 0.2f));
+        }
+        s.gltf.CreateInput(pxr::TfToken("sheen_color"), pxr::SdfValueTypeNames->Color3f)
+            .Set(sheen_active ? pxr::GfVec3f(0.3f, 0.2f, 0.1f) : pxr::GfVec3f(0.0f, 0.0f, 0.0f));
+        if (zero_strength) {
+          s.gltf.CreateInput(pxr::TfToken("emissive_strength"), pxr::SdfValueTypeNames->Float)
+              .Set(0.0f);
+        }
+        materialx::Graph graph;
+        string error;
+        const bool refused = sheen_active && !zero_strength;
+        const bool read = materialx::read_usdshade_graph(s.material, &graph, &error);
+        EXPECT_EQ(read, !refused) << error;
+        if (refused) {
+          EXPECT_NE(error.find("gltf_pbr sheen_color with emissive"), string::npos) << error;
+          EXPECT_NE(error.find("attenuates emission by the sheen layer"), string::npos) << error;
+          EXPECT_TRUE(graph.nodes.empty());
+        }
+        else {
+          EXPECT_TRUE(materialx::validate(graph));
+        }
+      }
+    }
+  }
+}
+
 TEST(materialx_usdshade_reader, batch50_standard_surface_to_gltf_pbr_sheen_color_feeds_gltf_sheen)
 {
   /* b80x W0/W01/W5 shape: gltf_pbr sheen_color <- standard_surface_to_gltf_pbr
