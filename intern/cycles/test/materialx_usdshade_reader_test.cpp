@@ -31767,6 +31767,49 @@ TEST(materialx_usdshade_reader, rejects_gltf_pbr_active_sheen_with_active_emissi
       }
     }
   }
+  /* With active literal sheen: a zero emissive admits; a negative emissive
+   * channel and a connected emissive_strength (even if it evaluates to 0)
+   * are refused, matching validate(). */
+  struct Case {
+    const char *name;
+    pxr::GfVec3f emissive;
+    bool linked_strength;
+    bool refused;
+  };
+  for (const Case &c : {Case{"zero emissive", pxr::GfVec3f(0.0f, 0.0f, 0.0f), false, false},
+                        Case{"negative emissive", pxr::GfVec3f(-0.1f, 0.0f, 0.0f), false, true},
+                        Case{"linked strength", pxr::GfVec3f(0.4f, 0.3f, 0.2f), true, true},
+                        Case{"zero emissive, linked strength",
+                             pxr::GfVec3f(0.0f, 0.0f, 0.0f),
+                             true,
+                             false}})
+  {
+    SCOPED_TRACE(c.name);
+    GltfSheenStage s = gltf_sheen_stage(c.linked_strength);
+    if (c.linked_strength) {
+      ASSERT_TRUE(s.gltf.GetPrim().RemoveProperty(pxr::TfToken("inputs:sheen_color")));
+      s.translate.CreateInput(pxr::TfToken("emission"), pxr::SdfValueTypeNames->Float)
+          .Set(0.0f);
+      ASSERT_TRUE(
+          s.gltf.CreateInput(pxr::TfToken("emissive_strength"), pxr::SdfValueTypeNames->Float)
+              .ConnectToSource(s.translate.ConnectableAPI(), pxr::TfToken("metallic_out")));
+    }
+    s.gltf.CreateInput(pxr::TfToken("sheen_color"), pxr::SdfValueTypeNames->Color3f)
+        .Set(pxr::GfVec3f(0.3f, 0.2f, 0.1f));
+    s.gltf.CreateInput(pxr::TfToken("emissive"), pxr::SdfValueTypeNames->Color3f)
+        .Set(c.emissive);
+    materialx::Graph graph;
+    string error;
+    const bool read = materialx::read_usdshade_graph(s.material, &graph, &error);
+    EXPECT_EQ(read, !c.refused) << error;
+    if (c.refused) {
+      EXPECT_NE(error.find("gltf_pbr sheen_color with emissive"), string::npos) << error;
+      EXPECT_TRUE(graph.nodes.empty());
+    }
+    else {
+      EXPECT_TRUE(materialx::validate(graph));
+    }
+  }
 }
 
 TEST(materialx_usdshade_reader, batch50_standard_surface_to_gltf_pbr_sheen_color_feeds_gltf_sheen)

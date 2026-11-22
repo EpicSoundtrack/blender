@@ -1091,8 +1091,8 @@ constexpr const char *usd_preview_surface_id = "ND_UsdPreviewSurface_surfaceshad
  *  gltf_pbr_sheen_active()): the reference sheen_bsdf is Conty-Kulla,
  *  Cycles' is microfiber, bridged by the energy-matched roughness remap also
  *  used by ND_sheen_bsdf; sheen together with a clearcoat (layer order) or
- *  with emission (Principled attenuates it by the sheen) stays fail-closed. transmission, specular/specular_color,
- *  iridescence, anisotropy, alpha MASK/BLEND modes, and connected
+ *  with emission (Principled attenuates it by the sheen) stays fail-closed.
+ *  transmission, specular/specular_color, iridescence, anisotropy, alpha MASK/BLEND modes, and connected
  *  normal/tangent/clearcoat_normal have no faithful Cycles equivalent yet
  *  and are admitted only at their inert default value. thickness /
  *  attenuation_distance / attenuation_color feed a volume closure that the
@@ -3259,7 +3259,10 @@ float sheen_microfiber_literal_roughness(const Node &node)
  * adds the edf beside the BSDF layer stack (believed unattenuated, not yet
  * measured). Active sheen with active emission (see
  * gltf_pbr_emission_active()) is therefore refused (fail-closed) until the
- * reference behaviour is measured; it is not approximated.
+ * reference behaviour is measured; it is not approximated. Principled
+ * attenuates emission by the coat too: active clearcoat with emission is a
+ * pre-existing admitted approximation (findings.json
+ * approximated_in_current_lowering), not changed here; root ruling open.
  *
  * Sheen is active when sheen_color is linked or is a literal with a positive
  * channel: genglsl mx_sheen_bsdf returns no sheen for weight < eps, so the

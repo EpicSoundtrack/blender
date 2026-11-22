@@ -29090,8 +29090,8 @@ bool is_supported_usd_preview_surface_input(const string &name)
  * iridescence, clearcoat_normal, anisotropy_strength), or
  * accepted unconditionally because the real reference nodegraph never
  * wires them to the nodedef's "out" surfaceshader output at all
- * (iridescence_ior, iridescence_thickness,
- * anisotropy_rotation once their gating inputs are forced to their inert
+ * (iridescence_ior, iridescence_thickness, sheen_roughness while
+ * sheen_color is inactive, anisotropy_rotation once their gating inputs are forced to their inert
  * default; thickness, attenuation_distance, attenuation_color, which only
  * ever feed a volume closure this surfaceshader-only nodedef never
  * outputs). */
