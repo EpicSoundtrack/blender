@@ -4,7 +4,11 @@ Branch: `release/native-materialx-line-20261122` (local, not pushed).
 
 The branch starts at `3be8adbf2c96` (the portability fix). It adds
 documentation-only commits on top: the batch-48 correction
-(`batch48-colorspace-correction.md`) and this inventory.
+(`batch48-colorspace-correction.md`), this inventory, and the
+review-wording fixes to both.
+
+The independent review is `release-line-review-20261122-3f9a`
+(PASS_WITH_NOTES).
 
 The line's base is `1fbe3fbc587b` (`fix/trackb-materialx-only-20261117`,
 the batch-39 lineage tip).
@@ -39,7 +43,7 @@ The summaries come from the commit subjects and the project audit log
 | 53 | `c2cd58ec175d` | fix/trackb-surfacematerial-align-20261122 | `surfacematerial` uses the front surface on both faces (ruling Q9/Q9b). |
 | 54 | `bfeecc84b5db` | fix/trackb-b85x-defects-20261122 | b85x defects: chiang absorption link, gltf literal normals, `lama_diffuse` energyCompensation 0. |
 | 55 | `4abe5a1d3a6f`, `98c6a000f2ec` | fix/trackb-q6-orennayar-20261122 | `gltf_pbr` sheen+emission is admitted (Q6), while sheen+clearcoat is still refused. The uncompensated Oren-Nayar approximation is pinned by a kernel envelope test (Q11). Comment follow-ups. |
-| port | `3be8adbf2c96` | fix/trackb-portable-test-includes-20261122 | The tests use in-repo fixture copies in place of absolute Windows paths. The Linux build was proven on Omnistation. |
+| port | `3be8adbf2c96` | fix/trackb-portable-test-includes-20261122 | The tests use in-repo fixture copies in place of absolute Windows paths. The Linux build of `3be8adbf` compiled on Omnistation (rc 0). No Linux `cycles_test` result is recorded. |
 
 ## Certificates and host lineage
 

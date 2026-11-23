@@ -28,9 +28,11 @@ ImageTextureNode::ImageTextureNode() : ImageSlotTextureNode(get_node_type())
   colorspace = u_colorspace_scene_linear;
 ```
 
-Only the colour lowerings (`image_color3_colorspace()` and similar) map
-an empty colorspace to `u_colorspace_auto`. The float branches did not
-call them.
+Only `ND_image_color3` and the `hextiledimage` colour lowerings pass an
+empty colorspace through `image_color3_colorspace()`, which maps it to
+`u_colorspace_auto`. The float branches did not call it. Neither did the
+`tiledimage` and `triplanarprojection` colour branches, which also kept
+`scene_linear`.
 
 So, before batch 48, 8-bit files read through these two float nodes were
 **not** decoded as sRGB. After batch 48 they lower to Cycles `data`
@@ -52,6 +54,14 @@ any other authored colorspace is refused.
   repeats the "auto" wording in its "before" fields and its
   mutation-check text. It is retained evidence and is not edited. Read it
   with this correction.
+- The batch-48 test comment in
+  `intern/cycles/test/materialx_usdshade_reader_test.cpp` (line 52380 at
+  `3be8adbf`) repeats the "auto" wording. Read it with this correction.
+  It is left unchanged here so that this correction stays
+  documentation-only.
+- The value difference left between `scene_linear` and `data` is alpha
+  handling. `scene_linear` is not data, so unassociated alpha in RGBA
+  files may be treated differently.
 
 Sources: the `shader_nodes.cpp` constructor at `4a667c0d` and the
 release-line tip; `intern/cycles/materialx/graph.cpp` at `ce44a5558b31`
