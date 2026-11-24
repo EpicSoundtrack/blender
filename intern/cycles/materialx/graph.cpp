@@ -1358,10 +1358,12 @@ struct OpenPbrCoatBase {
  *                base_color * specular_weight, base_metalness) = base_color, because
  *    subsurface_weight and specular_weight are admitted only at their declared defaults (0, 1),
  *    and coat_darkening is admitted only at its declared default 1. The factor is applied to
- *    Principled Base Color, which scales the diffuse lobe and the metal F0 (base_weight *
- *    base_color) exactly. Approximation: the metal F82 edge tint is not darkened, and the
- *    dielectric base specular lobe is not darkened (after step 2 its F0 under a full coat is
- *    ~0.001 for the default IORs).
+ *    Principled Base Color, which scales the Lambertian diffuse lobe exactly and the metal F0
+ *    (base_weight * base_color). Approximations: the metal lobe is darkened at normal
+ *    incidence only (its generalized-Schlick curve still rises to unit reflectance at grazing
+ *    angles); with base_diffuse_roughness > 0 the Oren-Nayar energy compensation is computed
+ *    from the darkened rather than the undarkened albedo; the dielectric base specular lobe is
+ *    not darkened (after step 2 its F0 under a full coat is ~0.001 for the default IORs).
  * 2. Base specular IOR under the coat (spec "Coat TIR"): the base dielectric interface is
  *    coat-to-base, eta_s = mix(specular_ior, max(specular_ior / coat_ior,
  *    coat_ior / specular_ior), coat_weight) (the graph's ifgreater ratio > 1 inversion), applied
@@ -27445,8 +27447,11 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         principled->set_coat_roughness(input->second);
       }
       /* OpenPBR's coat_ior default is 1.6, not Principled's 1.5; the coat-on-base terms in
-       * the connect phase (lower_open_pbr_coat_base) use the same value. */
-      principled->set_coat_ior(open_pbr_default_coat_ior);
+       * the connect phase (lower_open_pbr_coat_base) use the same value. Only set when the
+       * coat can be active, so coat-less surfaces lower exactly as before. */
+      if (open_pbr_coat_may_be_active(node)) {
+        principled->set_coat_ior(open_pbr_default_coat_ior);
+      }
       if (const auto input = node.inputs.find("coat_ior"); input != node.inputs.end()) {
         principled->set_coat_ior(input->second);
       }
@@ -34309,7 +34314,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
                  lowered_output(link->second, nodes_by_name, lowered_nodes);
     };
     PrincipledBsdfNode *open_pbr_principled = dynamic_cast<PrincipledBsdfNode *>(surface_node);
-    if (open_pbr_principled != nullptr && open_pbr_coat_may_be_active(node)) {
+    const bool open_pbr_coat_base = open_pbr_principled != nullptr &&
+                                    open_pbr_coat_may_be_active(node);
+    if (open_pbr_coat_base) {
       /* Coat darkening and the coat-relative base IOR (see lower_open_pbr_coat_base). The
        * Principled Base Color / IOR literals set at creation are the OpenPBR values or
        * defaults; replace them (or the links) with the coated-base terms. */
@@ -34347,9 +34354,6 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       if (ShaderOutput *base_color = open_pbr_link("base_color")) {
         graph->connect(base_color, surface_node->input("Base Color"));
       }
-      if (ShaderOutput *ior = open_pbr_link("specular_ior")) {
-        graph->connect(ior, surface_node->input("IOR"));
-      }
     }
     if (const auto base_weight = node.links.find("base_weight"); base_weight != node.links.end()) {
       graph->connect(lowered_output(base_weight->second, nodes_by_name, lowered_nodes),
@@ -34370,6 +34374,12 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     {
       graph->connect(lowered_output(roughness->second, nodes_by_name, lowered_nodes),
                      surface_node->input("Roughness"));
+    }
+    if (const auto ior = node.links.find("specular_ior");
+        ior != node.links.end() && !open_pbr_coat_base)
+    {
+      graph->connect(lowered_output(ior->second, nodes_by_name, lowered_nodes),
+                     surface_node->input("IOR"));
     }
     if (const auto opacity = node.links.find("geometry_opacity"); opacity != node.links.end()) {
       graph->connect(lowered_output(opacity->second, nodes_by_name, lowered_nodes),

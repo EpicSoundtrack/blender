@@ -2852,15 +2852,18 @@ TEST_F(materialx_principled_kernel, open_pbr_coat_darkening_matches_spec_formula
   };
   struct Variant {
     float coat_weight;
-    bool link_base, link_weight;
+    bool link_base, link_weight, link_iors;
   };
-  for (const Variant v : {Variant{1.0f, false, false},
-                          Variant{0.5f, false, false},
-                          Variant{1.0f, true, true},
-                          Variant{0.5f, false, true}})
+  for (const Variant v : {Variant{1.0f, false, false, false},
+                          Variant{0.5f, false, false, false},
+                          Variant{1.0f, true, true, false},
+                          Variant{0.5f, false, true, false},
+                          Variant{1.0f, false, false, true},
+                          Variant{0.5f, true, true, true}})
   {
     SCOPED_TRACE(testing::Message() << "w=" << v.coat_weight << " link_base=" << v.link_base
-                                    << " link_weight=" << v.link_weight);
+                                    << " link_weight=" << v.link_weight
+                                    << " link_iors=" << v.link_iors);
     materialx::Graph source;
     materialx::Node surface;
     surface.name = "OpenPBR";
@@ -2890,6 +2893,21 @@ TEST_F(materialx_principled_kernel, open_pbr_coat_darkening_matches_spec_formula
     else {
       surface.inputs["coat_weight"] = v.coat_weight;
     }
+    if (v.link_iors) {
+      /* Explicit specular_ior / coat_ior links build the ratio, max, Kcoat and clamp chains. */
+      for (const auto &[input, value] :
+           {std::pair<const char *, float>{"specular_ior", float(specular_ior)},
+            std::pair<const char *, float>{"coat_ior", float(coat_ior)}})
+      {
+        materialx::Node ior;
+        ior.name = string(input) + "_source";
+        ior.nodedef = "ND_constant_float";
+        ior.inputs["value"] = value;
+        ior.outputs["out"] = materialx::Type::Float;
+        source.nodes.push_back(ior);
+        surface.links[input] = {ior.name, "out", materialx::Type::Float};
+      }
+    }
     surface.outputs["out"] = materialx::Type::SurfaceShader;
     source.nodes.push_back(surface);
 
@@ -2900,7 +2918,7 @@ TEST_F(materialx_principled_kernel, open_pbr_coat_darkening_matches_spec_formula
       principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
     }
     ASSERT_NE(principled, nullptr);
-    if (v.link_base || v.link_weight) {
+    if (v.link_base || v.link_weight || v.link_iors) {
       EXPECT_NE(principled->input("Base Color")->link, nullptr);
       EXPECT_NE(principled->input("IOR")->link, nullptr);
       graph.finalize(scene.get());
@@ -2908,7 +2926,9 @@ TEST_F(materialx_principled_kernel, open_pbr_coat_darkening_matches_spec_formula
       ASSERT_EQ(principled->input("Base Color")->link, nullptr);
       ASSERT_EQ(principled->input("IOR")->link, nullptr);
       ASSERT_EQ(principled->input("Coat Weight")->link, nullptr);
+      ASSERT_EQ(principled->input("Coat IOR")->link, nullptr);
     }
+    EXPECT_NEAR(principled->get_coat_ior(), coat_ior, 1e-6);
     EXPECT_NEAR(principled->get_ior(), spec_eta_s(v.coat_weight), 1e-6);
 
     const ClosureObservation lowered = evaluate(graph, principled);

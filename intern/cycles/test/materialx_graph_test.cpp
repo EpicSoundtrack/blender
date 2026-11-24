@@ -12788,7 +12788,7 @@ TEST(materialx_graph, open_pbr_literal_coat_darkens_base_and_sets_coat_relative_
 
 TEST(materialx_graph, open_pbr_without_active_coat_keeps_base_color_and_ior)
 {
-  for (const int mode : {0, 1}) {
+  for (const int mode : {0, 1, 2}) {
     SCOPED_TRACE(mode);
     materialx::Node surface;
     surface.name = "OpenPBR";
@@ -12798,6 +12798,11 @@ TEST(materialx_graph, open_pbr_without_active_coat_keeps_base_color_and_ior)
     surface.inputs["coat_ior"] = 2.0f;
     if (mode == 1) {
       surface.inputs["coat_weight"] = 0.0f;
+    }
+    if (mode == 2) {
+      /* coat_ior unauthored and no coat: Principled keeps its own Coat IOR default, so a
+       * coat-less surface lowers exactly as before. */
+      surface.inputs.erase("coat_ior");
     }
     surface.outputs["out"] = materialx::Type::SurfaceShader;
     ShaderGraph graph;
@@ -12813,6 +12818,7 @@ TEST(materialx_graph, open_pbr_without_active_coat_keeps_base_color_and_ior)
     EXPECT_EQ(math_nodes, 0u);
     EXPECT_EQ(principled->get_base_color(), make_float3(0.05f, 0.15f, 0.6f));
     EXPECT_FLOAT_EQ(principled->get_ior(), 1.7f);
+    EXPECT_FLOAT_EQ(principled->get_coat_ior(), mode == 2 ? 1.5f : 2.0f);
   }
 }
 
