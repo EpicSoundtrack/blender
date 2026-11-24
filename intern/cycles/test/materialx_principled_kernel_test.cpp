@@ -2816,4 +2816,112 @@ TEST_F(materialx_principled_kernel, standard_surface_coat_is_energy_conserving_o
   }
 }
 
+/* fix-opbr-coat-darkening-20261124 (vlm-review-20261124: OpenPBR coat=1 base rendered ~1.9x
+ * brighter than OVRTX). NG_open_pbr_surface_surfaceshader multiplies the base substrate under a
+ * coat by mix(1, (1 - Kcoat) / (1 - base_color * Kcoat), coat_weight), Kcoat =
+ * 1 - (1 - F0(coat_ior)) / coat_ior^2, and gives the base specular the coat-relative IOR
+ * eta_s = mix(specular_ior, max(specular_ior / coat_ior, coat_ior / specular_ior), coat_weight).
+ * Judged on the ACTUAL lowered Principled compiled to SVM and evaluated by the CPU kernel,
+ * against a stock Principled with the undarkened base color, the spec eta_s and the same coat:
+ * the diffuse closure weight ratio must be the spec darkening factor, per channel, for literal
+ * and linked (constant-folded) inputs. Expected values are computed here in double. */
+TEST_F(materialx_principled_kernel, open_pbr_coat_darkening_matches_spec_formula_on_actual_svm)
+{
+  const float3 base = make_float3(0.05f, 0.15f, 0.6f);
+  const double coat_ior = 1.6, specular_ior = 1.5;
+  const double f0_coat = std::pow((coat_ior - 1.0) / (coat_ior + 1.0), 2.0);
+  const double kcoat = 1.0 - (1.0 - f0_coat) / (coat_ior * coat_ior);
+  auto spec_factor = [&](const double b, const double w) {
+    return (1.0 - w) + (1.0 - kcoat) / (1.0 - b * kcoat) * w;
+  };
+  auto spec_eta_s = [&](const double w) {
+    const double ratio = specular_ior / coat_ior;
+    return specular_ior * (1.0 - w) + (ratio > 1.0 ? ratio : coat_ior / specular_ior) * w;
+  };
+  auto reference = [&](const float w) {
+    ShaderGraph graph;
+    PrincipledBsdfNode *ref = graph.create_node<PrincipledBsdfNode>();
+    ref->set_base_color(base);
+    ref->set_roughness(0.5f);
+    ref->set_ior(float(spec_eta_s(w)));
+    ref->set_coat_weight(w);
+    ref->set_coat_roughness(0.05f);
+    ref->set_coat_ior(float(coat_ior));
+    graph.connect(ref->output("BSDF"), graph.output()->input("Surface"));
+    return evaluate(graph, ref);
+  };
+  struct Variant {
+    float coat_weight;
+    bool link_base, link_weight;
+  };
+  for (const Variant v : {Variant{1.0f, false, false},
+                          Variant{0.5f, false, false},
+                          Variant{1.0f, true, true},
+                          Variant{0.5f, false, true}})
+  {
+    SCOPED_TRACE(testing::Message() << "w=" << v.coat_weight << " link_base=" << v.link_base
+                                    << " link_weight=" << v.link_weight);
+    materialx::Graph source;
+    materialx::Node surface;
+    surface.name = "OpenPBR";
+    surface.nodedef = "ND_open_pbr_surface_surfaceshader";
+    surface.inputs = {{"specular_roughness", 0.5f}, {"coat_roughness", 0.05f}};
+    if (v.link_base) {
+      materialx::Node color;
+      color.name = "BaseColor";
+      color.nodedef = "ND_constant_color3";
+      color.color3_inputs["value"] = base;
+      color.outputs["out"] = materialx::Type::Color3;
+      source.nodes.push_back(color);
+      surface.links["base_color"] = {"BaseColor", "out", materialx::Type::Color3};
+    }
+    else {
+      surface.color3_inputs["base_color"] = base;
+    }
+    if (v.link_weight) {
+      materialx::Node weight;
+      weight.name = "CoatWeight";
+      weight.nodedef = "ND_constant_float";
+      weight.inputs["value"] = v.coat_weight;
+      weight.outputs["out"] = materialx::Type::Float;
+      source.nodes.push_back(weight);
+      surface.links["coat_weight"] = {"CoatWeight", "out", materialx::Type::Float};
+    }
+    else {
+      surface.inputs["coat_weight"] = v.coat_weight;
+    }
+    surface.outputs["out"] = materialx::Type::SurfaceShader;
+    source.nodes.push_back(surface);
+
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower(source, &graph));
+    PrincipledBsdfNode *principled = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+    }
+    ASSERT_NE(principled, nullptr);
+    if (v.link_base || v.link_weight) {
+      EXPECT_NE(principled->input("Base Color")->link, nullptr);
+      EXPECT_NE(principled->input("IOR")->link, nullptr);
+      graph.finalize(scene.get());
+      /* The coat terms are stock Math/VectorMath nodes: constant inputs fold to literals. */
+      ASSERT_EQ(principled->input("Base Color")->link, nullptr);
+      ASSERT_EQ(principled->input("IOR")->link, nullptr);
+      ASSERT_EQ(principled->input("Coat Weight")->link, nullptr);
+    }
+    EXPECT_NEAR(principled->get_ior(), spec_eta_s(v.coat_weight), 1e-6);
+
+    const ClosureObservation lowered = evaluate(graph, principled);
+    const ClosureObservation ref = reference(v.coat_weight);
+    ASSERT_GT(ref.diffuse.x, 0.0f);
+    EXPECT_NEAR(lowered.diffuse.x / ref.diffuse.x, spec_factor(base.x, v.coat_weight), 1e-5);
+    EXPECT_NEAR(lowered.diffuse.y / ref.diffuse.y, spec_factor(base.y, v.coat_weight), 1e-5);
+    EXPECT_NEAR(lowered.diffuse.z / ref.diffuse.z, spec_factor(base.z, v.coat_weight), 1e-5);
+    /* Base specular F0 from eta_s (~0.001 under a full coat), not from specular_ior (0.04). */
+    ASSERT_TRUE(lowered.has_dielectric);
+    const double eta = spec_eta_s(v.coat_weight);
+    EXPECT_NEAR(average(lowered.dielectric_f0), std::pow((eta - 1.0) / (eta + 1.0), 2.0), 1e-6);
+  }
+}
+
 CCL_NAMESPACE_END

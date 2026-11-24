@@ -1209,6 +1209,226 @@ bool has_standard_surface_coat(const Node &node)
          has_standard_surface_parameter(node, "coat_normal");
 }
 
+/* OpenPBR nodedef defaults (libraries/bxdf/open_pbr_surface.mtlx) that differ from, or
+ * must not be taken implicitly from, Cycles Principled socket defaults. */
+constexpr float open_pbr_default_base_color = 0.8f;
+constexpr float open_pbr_default_specular_ior = 1.5f;
+constexpr float open_pbr_default_coat_ior = 1.6f;
+
+/* True when an OpenPBR node's coat can be present: coat_weight linked, or a literal > 0
+ * (the Cycles kernel ignores coat_weight <= 0, see svm/closure.h). */
+bool open_pbr_coat_may_be_active(const Node &node)
+{
+  if (node.links.contains("coat_weight")) {
+    return true;
+  }
+  const auto weight = node.inputs.find("coat_weight");
+  return weight != node.inputs.end() && weight->second > 0.0f;
+}
+
+/* A float or color operand of the OpenPBR coat-on-base lowering: a literal value, or the
+ * lowered Cycles output that computes it. */
+struct OpenPbrCoatScalar {
+  float value = 0.0f;
+  ShaderOutput *link = nullptr;
+};
+struct OpenPbrCoatColor {
+  float3 value = zero_float3();
+  ShaderOutput *link = nullptr;
+};
+
+/* Builds the OpenPBR coat-on-base terms from stock Math/VectorMath nodes. An operation on
+ * literals only is evaluated here with the same arithmetic as the SVM node (svm/math_util.h:
+ * safe division returns 0), so an all-literal surface adds no nodes and sets Principled
+ * socket values directly; any linked operand yields a node named <surface><name>. */
+class OpenPbrCoatBaseBuilder {
+ public:
+  OpenPbrCoatBaseBuilder(ShaderGraph *graph, const string &prefix) : graph_(graph), prefix_(prefix)
+  {
+  }
+
+  OpenPbrCoatScalar math(const NodeMathType type,
+                         const OpenPbrCoatScalar a,
+                         const OpenPbrCoatScalar b,
+                         const char *name)
+  {
+    if (a.link == nullptr && b.link == nullptr) {
+      switch (type) {
+        case NODE_MATH_ADD:
+          return {a.value + b.value, nullptr};
+        case NODE_MATH_SUBTRACT:
+          return {a.value - b.value, nullptr};
+        case NODE_MATH_MULTIPLY:
+          return {a.value * b.value, nullptr};
+        case NODE_MATH_DIVIDE:
+          return {b.value != 0.0f ? a.value / b.value : 0.0f, nullptr};
+        case NODE_MATH_MAXIMUM:
+          return {fmaxf(a.value, b.value), nullptr};
+        default:
+          break;
+      }
+    }
+    MathNode *created = graph_->create_node<MathNode>();
+    created->name = prefix_ + name;
+    created->set_math_type(type);
+    created->set_value1(a.value);
+    created->set_value2(b.value);
+    if (a.link != nullptr) {
+      graph_->connect(a.link, created->input("Value1"));
+    }
+    if (b.link != nullptr) {
+      graph_->connect(b.link, created->input("Value2"));
+    }
+    return {0.0f, created->output("Value")};
+  }
+
+  OpenPbrCoatColor vmath(const NodeVectorMathType type,
+                         const OpenPbrCoatColor a,
+                         const OpenPbrCoatColor b,
+                         const char *name)
+  {
+    if (a.link == nullptr && b.link == nullptr) {
+      switch (type) {
+        case NODE_VECTOR_MATH_ADD:
+          return {a.value + b.value, nullptr};
+        case NODE_VECTOR_MATH_SUBTRACT:
+          return {a.value - b.value, nullptr};
+        case NODE_VECTOR_MATH_MULTIPLY:
+          return {a.value * b.value, nullptr};
+        case NODE_VECTOR_MATH_DIVIDE:
+          return {safe_divide(a.value, b.value), nullptr};
+        default:
+          break;
+      }
+    }
+    VectorMathNode *created = graph_->create_node<VectorMathNode>();
+    created->name = prefix_ + name;
+    created->set_math_type(type);
+    created->set_vector1(a.value);
+    created->set_vector2(b.value);
+    if (a.link != nullptr) {
+      graph_->connect(a.link, created->input("Vector1"));
+    }
+    if (b.link != nullptr) {
+      graph_->connect(b.link, created->input("Vector2"));
+    }
+    return {zero_float3(), created->output("Vector")};
+  }
+
+  OpenPbrCoatColor scale(const OpenPbrCoatColor a, const OpenPbrCoatScalar s, const char *name)
+  {
+    if (a.link == nullptr && s.link == nullptr) {
+      return {a.value * s.value, nullptr};
+    }
+    VectorMathNode *created = graph_->create_node<VectorMathNode>();
+    created->name = prefix_ + name;
+    created->set_math_type(NODE_VECTOR_MATH_SCALE);
+    created->set_vector1(a.value);
+    created->set_scale(s.value);
+    if (a.link != nullptr) {
+      graph_->connect(a.link, created->input("Vector1"));
+    }
+    if (s.link != nullptr) {
+      graph_->connect(s.link, created->input("Scale"));
+    }
+    return {zero_float3(), created->output("Vector")};
+  }
+
+ private:
+  ShaderGraph *graph_;
+  string prefix_;
+};
+
+struct OpenPbrCoatBase {
+  OpenPbrCoatColor base_color;
+  OpenPbrCoatScalar ior;
+};
+
+/* The two places where NG_open_pbr_surface_surfaceshader
+ * (libraries/bxdf/open_pbr_surface.mtlx; identical in the OVRTX-bundled library) changes the
+ * base under a coat and Cycles Principled's native coat does not (svm/closure.h attenuates the
+ * base only by the coat albedo and Coat Tint):
+ *
+ * 1. Coat darkening (OpenPBR spec, "Coat darkening"): light reflected by the base is partly
+ *    reflected back down at the coat's inner interface, so the base substrate is multiplied by
+ *      Kcoat = 1 - (1 - F0(coat_ior)) / coat_ior^2,   F0(n) = ((n - 1) / (n + 1))^2
+ *      base_darkening = (1 - Kcoat) / (1 - Ebase * Kcoat)
+ *      modulated_base_darkening = mix(1, base_darkening, coat_weight * coat_darkening).
+ *    Ebase = mix(mix(base_color, subsurface_color, subsurface_weight),
+ *                base_color * specular_weight, base_metalness) = base_color, because
+ *    subsurface_weight and specular_weight are admitted only at their declared defaults (0, 1),
+ *    and coat_darkening is admitted only at its declared default 1. The factor is applied to
+ *    Principled Base Color, which scales the diffuse lobe and the metal F0 (base_weight *
+ *    base_color) exactly. Approximation: the metal F82 edge tint is not darkened, and the
+ *    dielectric base specular lobe is not darkened (after step 2 its F0 under a full coat is
+ *    ~0.001 for the default IORs).
+ * 2. Base specular IOR under the coat (spec "Coat TIR"): the base dielectric interface is
+ *    coat-to-base, eta_s = mix(specular_ior, max(specular_ior / coat_ior,
+ *    coat_ior / specular_ior), coat_weight) (the graph's ifgreater ratio > 1 inversion), applied
+ *    to Principled IOR (modulated_eta_s == eta_s at the only admitted specular_weight, 1).
+ *
+ * coat_ior is clamped to >= 1 as the kernel clamps the Coat IOR it renders, and coat_weight to
+ * >= 0 as the kernel does, so both terms describe the coat Cycles actually draws. The coat
+ * roughening of the base specular roughness is not lowered. */
+OpenPbrCoatBase lower_open_pbr_coat_base(OpenPbrCoatBaseBuilder &b,
+                                         const OpenPbrCoatColor base_color,
+                                         const OpenPbrCoatScalar specular_ior,
+                                         const OpenPbrCoatScalar coat_weight,
+                                         const OpenPbrCoatScalar coat_ior)
+{
+  const OpenPbrCoatScalar zero{0.0f, nullptr}, one{1.0f, nullptr};
+  const OpenPbrCoatColor ones{one_float3(), nullptr};
+  const OpenPbrCoatScalar weight = b.math(
+      NODE_MATH_MAXIMUM, coat_weight, zero, ".coat_weight_nonnegative");
+  const OpenPbrCoatScalar n = b.math(NODE_MATH_MAXIMUM, coat_ior, one, ".coat_ior_clamped");
+
+  /* 1. Coat darkening. */
+  const OpenPbrCoatScalar f0_sqrt = b.math(NODE_MATH_DIVIDE,
+                                           b.math(NODE_MATH_SUBTRACT, n, one, ".coat_ior_minus_one"),
+                                           b.math(NODE_MATH_ADD, n, one, ".coat_ior_plus_one"),
+                                           ".coat_ior_to_F0_sqrt");
+  const OpenPbrCoatScalar f0 = b.math(NODE_MATH_MULTIPLY, f0_sqrt, f0_sqrt, ".coat_ior_to_F0");
+  const OpenPbrCoatScalar one_minus_kcoat = b.math(
+      NODE_MATH_DIVIDE,
+      b.math(NODE_MATH_SUBTRACT, one, f0, ".one_minus_coat_F0"),
+      b.math(NODE_MATH_MULTIPLY, n, n, ".coat_ior_sqr"),
+      ".one_minus_Kcoat");
+  const OpenPbrCoatScalar kcoat = b.math(NODE_MATH_SUBTRACT, one, one_minus_kcoat, ".Kcoat");
+  const OpenPbrCoatColor base_darkening = b.vmath(
+      NODE_VECTOR_MATH_DIVIDE,
+      b.scale(ones, one_minus_kcoat, ".one_minus_Kcoat_color"),
+      b.vmath(NODE_VECTOR_MATH_SUBTRACT,
+              ones,
+              b.scale(base_color, kcoat, ".Ebase_Kcoat"),
+              ".one_minus_Ebase_Kcoat"),
+      ".base_darkening");
+  const OpenPbrCoatColor modulated = b.vmath(
+      NODE_VECTOR_MATH_ADD,
+      b.scale(b.vmath(NODE_VECTOR_MATH_SUBTRACT, base_darkening, ones, ".base_darkening_minus_one"),
+              weight,
+              ".weighted_base_darkening_minus_one"),
+      ones,
+      ".modulated_base_darkening");
+
+  /* 2. Base specular IOR relative to the coat. */
+  const OpenPbrCoatScalar ratio = b.math(
+      NODE_MATH_MAXIMUM,
+      b.math(NODE_MATH_DIVIDE, specular_ior, n, ".specular_to_coat_ior_ratio"),
+      b.math(NODE_MATH_DIVIDE, n, specular_ior, ".coat_to_specular_ior_ratio"),
+      ".specular_to_coat_ior_ratio_tir_fix");
+  const OpenPbrCoatScalar eta_s = b.math(
+      NODE_MATH_ADD,
+      b.math(NODE_MATH_MULTIPLY,
+             b.math(NODE_MATH_SUBTRACT, ratio, specular_ior, ".eta_s_minus_specular_ior"),
+             weight,
+             ".weighted_eta_s_minus_specular_ior"),
+      specular_ior,
+      ".eta_s");
+
+  return {b.vmath(NODE_VECTOR_MATH_MULTIPLY, base_color, modulated, ".coat_darkened_base_color"),
+          eta_s};
+}
+
 /** Real BSDF closure-producer leaves with explicit native model selection. */
 constexpr const char *burley_diffuse_bsdf_id = "ND_burley_diffuse_bsdf";
 constexpr const char *oren_nayar_diffuse_bsdf_id = "ND_oren_nayar_diffuse_bsdf";
@@ -27224,6 +27444,9 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       if (const auto input = node.inputs.find("coat_roughness"); input != node.inputs.end()) {
         principled->set_coat_roughness(input->second);
       }
+      /* OpenPBR's coat_ior default is 1.6, not Principled's 1.5; the coat-on-base terms in
+       * the connect phase (lower_open_pbr_coat_base) use the same value. */
+      principled->set_coat_ior(open_pbr_default_coat_ior);
       if (const auto input = node.inputs.find("coat_ior"); input != node.inputs.end()) {
         principled->set_coat_ior(input->second);
       }
@@ -34079,9 +34302,54 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     }
 
     ShaderNode *surface_node = lowered_nodes.at(node.name);
-    if (const auto base_color = node.links.find("base_color"); base_color != node.links.end()) {
-      graph->connect(lowered_output(base_color->second, nodes_by_name, lowered_nodes),
-                     surface_node->input("Base Color"));
+    const auto open_pbr_link = [&](const char *input) -> ShaderOutput * {
+      const auto link = node.links.find(input);
+      return link == node.links.end() ?
+                 nullptr :
+                 lowered_output(link->second, nodes_by_name, lowered_nodes);
+    };
+    PrincipledBsdfNode *open_pbr_principled = dynamic_cast<PrincipledBsdfNode *>(surface_node);
+    if (open_pbr_principled != nullptr && open_pbr_coat_may_be_active(node)) {
+      /* Coat darkening and the coat-relative base IOR (see lower_open_pbr_coat_base). The
+       * Principled Base Color / IOR literals set at creation are the OpenPBR values or
+       * defaults; replace them (or the links) with the coated-base terms. */
+      const auto literal = [&](const char *input, const float fallback) {
+        const auto value = node.inputs.find(input);
+        return value == node.inputs.end() ? fallback : value->second;
+      };
+      const auto base_color_literal = node.color3_inputs.find("base_color");
+      OpenPbrCoatBaseBuilder builder(graph, node.name);
+      const OpenPbrCoatBase coat_base = lower_open_pbr_coat_base(
+          builder,
+          {base_color_literal == node.color3_inputs.end() ?
+               make_float3(open_pbr_default_base_color,
+                           open_pbr_default_base_color,
+                           open_pbr_default_base_color) :
+               base_color_literal->second,
+           open_pbr_link("base_color")},
+          {literal("specular_ior", open_pbr_default_specular_ior), open_pbr_link("specular_ior")},
+          {literal("coat_weight", 0.0f), open_pbr_link("coat_weight")},
+          {literal("coat_ior", open_pbr_default_coat_ior), open_pbr_link("coat_ior")});
+      if (coat_base.base_color.link != nullptr) {
+        graph->connect(coat_base.base_color.link, open_pbr_principled->input("Base Color"));
+      }
+      else {
+        open_pbr_principled->set_base_color(coat_base.base_color.value);
+      }
+      if (coat_base.ior.link != nullptr) {
+        graph->connect(coat_base.ior.link, open_pbr_principled->input("IOR"));
+      }
+      else {
+        open_pbr_principled->set_ior(coat_base.ior.value);
+      }
+    }
+    else {
+      if (ShaderOutput *base_color = open_pbr_link("base_color")) {
+        graph->connect(base_color, surface_node->input("Base Color"));
+      }
+      if (ShaderOutput *ior = open_pbr_link("specular_ior")) {
+        graph->connect(ior, surface_node->input("IOR"));
+      }
     }
     if (const auto base_weight = node.links.find("base_weight"); base_weight != node.links.end()) {
       graph->connect(lowered_output(base_weight->second, nodes_by_name, lowered_nodes),
@@ -34102,10 +34370,6 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     {
       graph->connect(lowered_output(roughness->second, nodes_by_name, lowered_nodes),
                      surface_node->input("Roughness"));
-    }
-    if (const auto ior = node.links.find("specular_ior"); ior != node.links.end()) {
-      graph->connect(lowered_output(ior->second, nodes_by_name, lowered_nodes),
-                     surface_node->input("IOR"));
     }
     if (const auto opacity = node.links.find("geometry_opacity"); opacity != node.links.end()) {
       graph->connect(lowered_output(opacity->second, nodes_by_name, lowered_nodes),
