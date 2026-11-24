@@ -26261,15 +26261,23 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         if (has_standard_surface_sheen(node)) {
           SheenBsdfNode *sheen = graph->create_node<SheenBsdfNode>();
           sheen->name = node.name + ".standard_surface_sheen";
+          /* standard_surface.mtlx's sheen_bsdf leaf sets no mode, i.e. MaterialX's default
+           * "conty_kulla": lower it as ND_sheen_bsdf does, to Cycles microfiber with the
+           * energy-matched roughness of sheen_conty_kulla_microfiber_roughness() (linked
+           * roughness: connect_sheen_conty_kulla_roughness in the connect phase). Passing
+           * sheen_roughness through unchanged reflected far less energy than the reference
+           * (microfiber at r = 0.3 vs Conty-Kulla at r = 0.3). Same APPROXIMATION as
+           * ND_sheen_bsdf: energy, not lobe shape. */
+          sheen->set_distribution(CLOSURE_BSDF_SHEEN_ID);
           sheen->set_color(one_float3());
-          sheen->set_roughness(0.3f);
+          sheen->set_roughness(sheen_conty_kulla_microfiber_roughness(0.3f));
           if (const auto input = node.color3_inputs.find("sheen_color");
               input != node.color3_inputs.end())
           {
             sheen->set_color(input->second);
           }
           if (const auto input = node.inputs.find("sheen_roughness"); input != node.inputs.end()) {
-            sheen->set_roughness(input->second);
+            sheen->set_roughness(sheen_conty_kulla_microfiber_roughness(input->second));
           }
           if (const auto input = node.vector3_inputs.find("normal");
               input != node.vector3_inputs.end())
@@ -33285,8 +33293,10 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         ShaderNode *sum = lowered_nodes.at(node.name + ".standard_surface_sheen_sum");
         connect_weighted_lobe_color(static_cast<BsdfNode *>(sheen), "sheen", "sheen_color");
         if (const auto link = node.links.find("sheen_roughness"); link != node.links.end()) {
-          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                         sheen->input("Roughness"));
+          connect_sheen_conty_kulla_roughness(graph,
+                                              node.name + ".standard_surface_sheen",
+                                              lowered_output(link->second, nodes_by_name, lowered_nodes),
+                                              sheen->input("Roughness"));
         }
         if (const auto link = node.links.find("normal"); link != node.links.end()) {
           graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),

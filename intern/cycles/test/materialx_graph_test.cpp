@@ -20862,7 +20862,9 @@ TEST(materialx_graph, lowers_standard_surface_to_native_closure_composition)
   EXPECT_TRUE(principled->get_thin_wall());
   EXPECT_EQ(sheen->get_color(), make_float3(0.5f, 0.6f, 0.7f) * 0.3f);
   EXPECT_FLOAT_EQ(sheen->get_surface_mix_weight(), 0.0f);
-  EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.45f);
+  /* Conty-Kulla -> microfiber energy remap of sheen_roughness 0.45 (graph.cpp
+   * sheen_conty_kulla_microfiber_roughness). */
+  EXPECT_FLOAT_EQ(sheen->get_roughness(), std::clamp(0.7019f + 0.0859f * std::log(0.45f), 0.0f, 1.0f));
   EXPECT_EQ(transmission->get_color(), make_float3(0.8f, 0.7f, 0.6f));
   EXPECT_FLOAT_EQ(transmission->get_roughness(), 0.35f);
   EXPECT_FLOAT_EQ(transmission->get_IOR(), 1.45f);
@@ -24354,7 +24356,8 @@ TEST(materialx_graph, standard_surface_optional_lobes_use_mapped_sdk_defaults)
     if (auto *sheen = dynamic_cast<SheenBsdfNode *>(node)) {
       ++seen;
       ss_audit_expect_color(ss_audit_color_input(sheen->input("Color")), make_float3(0.25f));
-      EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.3f);
+      /* SDK default sheen_roughness 0.3 through the Conty-Kulla -> microfiber remap. */
+      EXPECT_FLOAT_EQ(sheen->get_roughness(), std::clamp(0.7019f + 0.0859f * std::log(0.3f), 0.0f, 1.0f));
     }
     EXPECT_EQ(dynamic_cast<GlossyBsdfNode *>(node), nullptr);
     if (auto *principled = dynamic_cast<PrincipledBsdfNode *>(node)) {

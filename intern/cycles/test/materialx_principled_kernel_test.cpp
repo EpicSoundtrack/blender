@@ -2944,4 +2944,105 @@ TEST_F(materialx_principled_kernel, open_pbr_coat_darkening_matches_spec_formula
   }
 }
 
+/* fix-ss-sheen-contykulla-20261124: standard_surface.mtlx's sheen_bsdf leaf sets no mode, i.e.
+ * MaterialX's default Conty-Kulla sheen. The lowering passed sheen_roughness straight to Cycles
+ * microfiber, whose albedo at the same roughness is far lower. It now uses the ND_sheen_bsdf
+ * energy remap. Judged as sheen_conty_kulla_lowering_matches_materialx_energy_on_actual_lut:
+ * cosine-weighted albedo of the ACTUAL Cycles microfiber setup on the production LUT at the
+ * roughness the real lowering wrote, against the MaterialX genglsl Conty-Kulla albedo
+ * integrated here, for literal, default and linked (constant-folded) sheen_roughness. */
+TEST_F(materialx_principled_kernel, standard_surface_sheen_conty_kulla_energy_on_actual_lut)
+{
+  ThreadKernelGlobalsCPU kg(globals, nullptr, profiler, 0);
+  auto microfiber_eavg = [&](const float roughness) {
+    constexpr int n_mu = 32;
+    double sum = 0.0;
+    for (int k = 0; k < n_mu; ++k) {
+      const float mu = (k + 0.5f) / n_mu;
+      ShaderData sd{};
+      sd.N = sd.Ng = make_float3(0.0f, 0.0f, 1.0f);
+      sd.wi = make_float3(sqrtf(1.0f - mu * mu), 0.0f, mu);
+      SheenBsdf bsdf{};
+      bsdf.N = sd.N;
+      bsdf.roughness = roughness;
+      bsdf.weight = one_spectrum();
+      bsdf.sample_weight = 1.0f;
+      bsdf_sheen_setup(&kg, &sd, &bsdf);
+      sum += (bsdf.type == CLOSURE_BSDF_SHEEN_ID ? double(bsdf.weight.x) : 0.0) * mu;
+    }
+    return 2.0 * sum / n_mu;
+  };
+  auto conty_kulla_eavg = [](const double roughness) {
+    constexpr int n_mu = 32;
+    double sum = 0.0;
+    for (int k = 0; k < n_mu; ++k) {
+      const double mu = (k + 0.5) / n_mu;
+      sum += conty_kulla_directional_albedo(mu, roughness) * mu;
+    }
+    return 2.0 * sum / n_mu;
+  };
+  /* mode: 0 literal sheen_roughness, 1 unauthored (NodeDef default 0.3), 2 linked. */
+  auto lowered_roughness = [&](const int mode, const float r) {
+    materialx::Graph source;
+    materialx::Node surface;
+    surface.name = "SS";
+    surface.nodedef = "ND_standard_surface_surfaceshader";
+    surface.inputs["sheen"] = 1.0f;
+    if (mode == 0) {
+      surface.inputs["sheen_roughness"] = r;
+    }
+    else if (mode == 2) {
+      materialx::Node rough;
+      rough.name = "SheenRoughness";
+      rough.nodedef = "ND_constant_float";
+      rough.inputs["value"] = r;
+      rough.outputs["out"] = materialx::Type::Float;
+      source.nodes.push_back(rough);
+      surface.links["sheen_roughness"] = {"SheenRoughness", "out", materialx::Type::Float};
+    }
+    surface.outputs["out"] = materialx::Type::SurfaceShader;
+    source.nodes.push_back(surface);
+    ShaderGraph graph;
+    EXPECT_TRUE(materialx::lower(source, &graph));
+    SheenBsdfNode *sheen = nullptr;
+    for (ShaderNode *n : graph.nodes) {
+      if (n->name == "SS.standard_surface_sheen") {
+        sheen = dynamic_cast<SheenBsdfNode *>(n);
+      }
+    }
+    if (sheen == nullptr) {
+      ADD_FAILURE() << "no SS.standard_surface_sheen SheenBsdfNode";
+      return -1.0f;
+    }
+    EXPECT_EQ(sheen->get_distribution(), CLOSURE_BSDF_SHEEN_ID);
+    if (mode == 2) {
+      ShaderInput *in = sheen->input("Roughness");
+      EXPECT_NE(in->link, nullptr);
+      if (in->link != nullptr) {
+        EXPECT_EQ(in->link->parent->name, "SS.standard_surface_sheen.conty_kulla_microfiber_roughness");
+      }
+      graph.finalize(scene.get());
+      EXPECT_EQ(in->link, nullptr);
+    }
+    return sheen->get_roughness();
+  };
+  for (const float r : {0.0361f, 0.1369f, 0.3f, 0.6f, 1.0f}) {
+    SCOPED_TRACE(r);
+    for (const int mode : {0, 2}) {
+      SCOPED_TRACE(mode);
+      const float lowered = lowered_roughness(mode, r);
+      const double ratio = microfiber_eavg(lowered) / conty_kulla_eavg(r);
+      EXPECT_GT(ratio, 0.75);
+      EXPECT_LT(ratio, 1.15);
+    }
+  }
+  {
+    const double ratio = microfiber_eavg(lowered_roughness(1, 0.0f)) / conty_kulla_eavg(0.3);
+    EXPECT_GT(ratio, 0.75);
+    EXPECT_LT(ratio, 1.15);
+  }
+  /* The defect: r = 0.3 passed through to microfiber is far outside the 0.5-2x band. */
+  EXPECT_LT(microfiber_eavg(0.3f) / conty_kulla_eavg(0.3), 0.5);
+}
+
 CCL_NAMESPACE_END
