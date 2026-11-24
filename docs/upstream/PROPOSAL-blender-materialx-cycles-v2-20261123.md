@@ -35,7 +35,8 @@ They were **not** re-opened for v2:
 Re-checked for v2:
 - Upstream `main` is **5.4 alpha**: `BLENDER_VERSION 504`, `BLENDER_VERSION_CYCLE alpha`
   at `de111f7f13ef` (committed 2026-11-24T02:18Z) [M18]. New features therefore
-  target 5.4 (main), not 5.3 as the draft said.
+  target 5.4 (main). The draft said only "main for the next non-LTS release"; the
+  5.3 framing came from the series plan's fork base.
 - Upstream pins MaterialX **1.39.4** and USD **26.08** in
   `build_files/build_environment/cmake/versions.cmake` at the same commit [M19].
 
@@ -213,15 +214,20 @@ This cannot be reviewed as it is. Before any code PR:
   `use_materialx_exact`; `MathNode` `use_materialx_derivatives` [M10]. The
   11-17 ruling that Track B "moves into MaterialX-only code" is therefore only partly
   done. Progress since the 11-16 plan: 18 new MaterialX-named kernel/OSL files
-  (+1,960) now hold code that used to sit in stock files [M7], and the changes to
+  (+1,960) exist [M7] (that they hold code which used to sit in stock files is
+  inferred from the series plan's B9/B10 file lists, not measured), and the changes to
   `kernel/device/cuda/compat.h` (B1), `util/math_base.h` (B2),
   `kernel/geom/triangle.h` (B4), `svm/noisetex.h`, `svm/voronoi.h`,
   `svm/white_noise.h` (B9) and `util/sha256.*` (B11) are no longer in the diff [M9].
   Still present: B3 (anisotropic glass in `bsdf_microfacet.h`), B5 (`graph/node.cpp`
   NaN compare, +15), B6/B7 (Burley/Principled/SVM closure changes), B8 (attribute
   fallback; upstream `3ff1f508e64f` landed a similar feature on main and is not in
-  our line [M17]). Each needs a stock justification, a move into MaterialX-only code,
-  or a drop.
+  our line [M17]). Also still present and not covered by any single B item: MaterialX
+  semantics added to stock SVM/OSL files, the remainder of B9/B10 — `svm/math_util.h`
+  +136, `svm/node_types.h` +122, `svm/svm.h` +54, `osl/closures_setup.h` +53/−3,
+  `osl/closures_template.h` +28, `osl/shaders/node_vector_math.osl` +26,
+  `osl/shaders/node_math.osl` +23 [M7]. Each needs a stock justification, a move into
+  MaterialX-only code, or a drop.
 - **Project apparatus in production code** (red-team Cz gate): a
   `fprintf(stderr, "MATERIALX_LOWER_NULL_SOCKET …")` at `graph.cpp:28580`, and the
   reader authors `/MaterialXManifestProbe` prims into the user stage
@@ -341,7 +347,7 @@ the series plan had one.
 | M8 | `G21_DIAG` hits on the native line | `session.cpp` 4, `engine.cc` 4, `vk_context.cc` 1 | same (POST-PARITY-PLAN §0) | `git grep -c G21_DIAG ee5b2931` |
 | M9 | Track B items no longer in the diff | 0 diff lines each for `kernel/device/cuda/compat.h`, `util/math_base.h`, `kernel/geom/triangle.h`, `kernel/svm/noisetex.h`, `kernel/svm/voronoi.h`, `kernel/svm/white_noise.h`, `util/sha256.h`, `test/kernel_camera_projection_test.cpp` | series plan B1, B2, B4, B9, B11 listed them | `for f in intern/cycles/kernel/device/cuda/compat.h intern/cycles/util/math_base.h intern/cycles/kernel/geom/triangle.h intern/cycles/kernel/svm/noisetex.h intern/cycles/kernel/svm/voronoi.h intern/cycles/kernel/svm/white_noise.h intern/cycles/util/sha256.h intern/cycles/test/kernel_camera_projection_test.cpp; do git diff --numstat 96294be75080 ee5b2931 -- $f \| wc -l; done` |
 | M10 | MaterialX nodes in stock files; hidden sockets on stock nodes | 11 `class MaterialX*Node` in `shader_nodes.h`; 11 `NODE_DEFINE(MaterialX…)` in one 663-line added hunk at `shader_nodes.cpp:7891`; ~71 added lines elsewhere in stock nodes. Hidden sockets as listed in §6 | — | `git show ee5b2931:intern/cycles/scene/shader_nodes.h \| grep -oE 'class MaterialX[A-Za-z0-9]+Node' \| sort -u`; `git diff -U0 96294be75080 ee5b2931 -- intern/cycles/scene/shader_nodes.cpp \| grep '^@@'` (hunk `+7891,663`); `git show ee5b2931:intern/cycles/scene/shader_nodes.cpp \| sed -n '7891,8553p' \| grep -c '^NODE_DEFINE(MaterialX'`; `git show ee5b2931:intern/cycles/scene/shader_nodes.h \| awk '/^class /{c=$2} /use_materialx\|use_fallback\|base_weight\|subsurface_color\|use_independent/{print c": "$0}'`; `git show ee5b2931:intern/cycles/materialx/graph.cpp \| grep -oE 'create_node<MaterialX[A-Za-z0-9]+Node>' \| sort \| uniq -c` |
-| M11 | Prep commits vs the native line | `4c58443386e1` and `40d7522f0266`: only on local `fix/upstream-prep-20261116`, not ancestors of `ee5b2931`. Simulated pick of `4c584433` onto `ee5b2931`: clean, 0 `G21_DIAG` left. `40d7522f` on top of that: **CONFLICT** in `intern/cycles/blender/shader.cpp` (touched since by `aa69ee67bdf6`) | series plan §3 (built objects only; runtime unverified) | `git branch -a --contains 4c58443386e1; git merge-base --is-ancestor 4c58443386e1 ee5b2931; echo $?`; `T=$(git merge-tree --write-tree --merge-base 4c58443386e1^ ee5b2931 4c58443386e1); git grep -c G21_DIAG $T` (no output = 0); `C=$(git commit-tree $T -p ee5b2931 -m sim); git merge-tree --write-tree --merge-base 40d7522f0266^ $C 40d7522f0266`; `git log --oneline 6c7388bb9d19..ee5b2931 -- intern/cycles/blender/shader.cpp` |
+| M11 | Prep commits vs the native line | `4c58443386e1` and `40d7522f0266`: only on local `fix/upstream-prep-20261116`, not ancestors of `ee5b2931`. Simulated pick of `4c584433` onto `ee5b2931`: clean, 0 `G21_DIAG` left. `40d7522f` on top of that: **CONFLICT** in `intern/cycles/blender/shader.cpp` (touched since by `aa69ee67bdf6`) | series plan §3 (built objects only; runtime unverified) | `git branch -a --contains 4c58443386e1; git merge-base --is-ancestor 4c58443386e1 ee5b2931; echo $?`; `T=$(git merge-tree --write-tree --merge-base 4c58443386e1^ ee5b2931 4c58443386e1); git grep -c G21_DIAG $T` (no output = 0); `C=$(git commit-tree $T -p ee5b2931 -m sim); git merge-tree --write-tree --merge-base 40d7522f0266^ $C 40d7522f0266`; `git log --oneline 6c7388bb9d19..ee5b2931 -- intern/cycles/blender/shader.cpp`. Not read-only: `merge-tree --write-tree` and `commit-tree` write unreferenced git objects (harmless; removed by `git gc`). |
 | M12 | Tests; split plan | 22 new files under `intern/cycles/test`, +104,525; 5 new headers `+11,585`; `054413b1c90` not a valid object locally | fixture headers "~11k" (series plan C3) | `git diff --numstat --diff-filter=A 96294be75080 ee5b2931 -- intern/cycles/test \| sort -rn`; `git diff --numstat --diff-filter=A 96294be75080 ee5b2931 -- 'intern/cycles/test/*fixture*' 'intern/cycles/test/*.h' \| awk '{a+=$1;n++} END{print n, a}'`; `git cat-file -t 054413b1c90` |
 | M13 | Silent failure path; Cz items | `blender/shader.cpp:111` logs and the function returns `true`; `graph.cpp:28580` `MATERIALX_LOWER_NULL_SOCKET`; `usdshade_reader.cpp:33637` `/MaterialXManifestProbe` | — | `git show ee5b2931:intern/cycles/blender/shader.cpp \| sed -n 96,114p`; `git grep -n 'could not be lowered\|MATERIALX_LOWER_NULL_SOCKET\|MaterialXManifestProbe' ee5b2931 -- intern/cycles` |
 | M14 | Stock-expressibility table | 239 rows, 238 unique ids (`ND_switch_float` twice); STOCK 132, STOCK_EXPANDED 94, NEEDS_UPSTREAM 10, RUNTIME_ONLY 3; CSV parity column true by class 129 / 55 / 3 / 0; `measured` 97, `inferred` 133, 9 unusable (7 malformed rows at CSV lines 29, 172, 181, 185, 197, 198, 199, plus 2 rows with `RUNTIME_ONLY` in that field); matrix group 24/24 STOCK_EXPANDED; colour group 22 STOCK_EXPANDED + 18 STOCK. Joined to the current ledger: 17 ids absent from the ledger; parity true for NEEDS_UPSTREAM 10/10, RUNTIME_ONLY 3/3, STOCK 122/132, STOCK_EXPANDED 87/94 | `stock-expressibility.md` prose says "~145 / ~60 / ~12 / ~5, ~222 handled" and lists `ND_generalized_schlick_edf` and `ND_lama_iridescence` as RUNTIME_ONLY; the CSV (authoritative per the md) says NEEDS_UPSTREAM | `python -I -c "import csv,collections,sys; r=list(csv.reader(open(sys.argv[1],encoding='utf-8')))[1:]; print(len(r), len({x[0] for x in r}), collections.Counter(x[3] for x in r), collections.Counter(x[3] for x in r if x[2].strip().lower()=='true'), collections.Counter(x[7] for x in r if len(x)==8), sum(len(x)!=8 for x in r))" docs/upstream/stock-expressibility.csv`; join (from the add-on root, with this branch's CSV path): `python -I -c "import csv,json,sys,collections; r=list(csv.reader(open(sys.argv[1],encoding='utf-8')))[1:]; L={n['node_id']:n for n in json.load(open(sys.argv[2],encoding='utf-8'))['nodes']}; print(sorted(collections.Counter((x[3], bool((L.get(x[0],{}).get('paired_input_contract_evidence') or {}).get('full_node_parity'))) for x in r).items()), [x[0] for x in r if x[0] not in L])" <csv> configs/materialx-full-catalog-node-ledger-v1.json` |
@@ -366,6 +372,16 @@ the series plan had one.
 
 ## Appendix C. Internal notes (not for posting)
 
+- **Independent review:** `pp-upstream-v2-review-20261123-e53c`, verdict
+  PASS_WITH_NOTES, on commit `3e07fe01b019`. The reviewer re-ran 18 Appendix A rows
+  (M1-M8, M10-M18, M20-M22) and all matched; no blocking findings. Its notes were
+  applied in the next commit: M11 is marked as writing git objects; the Track B
+  paragraph lists the stock SVM/OSL remainder of B9/B10; the "moved out of stock
+  files" claim is marked inferred; the §1 wording on 5.3 is corrected. Two notes
+  stay open: U1's "first subset is chosen" is only proposed here (a user decision),
+  and parity is cited by ledger path, commit and sha256 rather than a web link.
+- The M7 Track B list is a fact list, not the U3 disposition table. U3 still has to
+  give each of the 22 files a keep/move/drop decision.
 - Two records said the native line was not pushed. `docs/materialx-release-notes/native-line-20261122.md`:3
   is corrected in the same branch as this file. Add-on `docs/REDTEAM-AUDIT-2026-11-10.md`:1010
   (push denied) is in the other repository and is not edited here.
