@@ -41015,13 +41015,13 @@ void ss_scalar_exact_fixture(const size_t index)
     if (auto *principled = dynamic_cast<PrincipledBsdfNode *>(node)) {
       ++principled_count;
       EXPECT_FLOAT_EQ(principled->get_roughness(), 0.2f);
+      /* The standard_surface coat is Principled's native coat layer. */
+      EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.0f);
     }
     if (auto *sheen = dynamic_cast<SheenBsdfNode *>(node)) {
       EXPECT_EQ(sheen->get_color(), zero_float3());
     }
-    if (auto *coat = dynamic_cast<GlossyBsdfNode *>(node)) {
-      EXPECT_EQ(coat->get_color(), zero_float3());
-    }
+    EXPECT_EQ(dynamic_cast<GlossyBsdfNode *>(node), nullptr);
     if (auto *mix = dynamic_cast<MixClosureNode *>(node)) {
       EXPECT_FLOAT_EQ(mix->get_fac(), 0.0f);
     }

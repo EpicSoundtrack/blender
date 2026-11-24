@@ -1688,8 +1688,9 @@ bool generalized_schlick_edf_is_scalar(const Node &node)
 const char *generic_surface_closure_output_name(const Node &source)
 {
   if (source.nodedef == standard_surface_id) {
-    return has_standard_surface_sheen(source) || has_standard_surface_transmission(source) ||
-                   has_standard_surface_coat(source) ?
+    /* The coat is Principled's native coat layer (no extra closure node); only the
+     * separate sheen and transmission lobes wrap the base in a closure combinator. */
+    return has_standard_surface_sheen(source) || has_standard_surface_transmission(source) ?
                "Closure" :
                "BSDF";
   }
@@ -26106,33 +26107,49 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         }
 
         if (has_standard_surface_coat(node)) {
-          GlossyBsdfNode *coat = graph->create_node<GlossyBsdfNode>();
-          coat->name = node.name + ".standard_surface_coat";
-          coat->set_color(one_float3());
-          coat->set_roughness(0.1f);
+          /* Reference (libraries/bxdf/standard_surface.mtlx): coat_layer =
+           * layer(top = dielectric_bsdf(weight = coat, tint = 1, ior = coat_IOR,
+           * roughness = coat_roughness, normal = coat_normal, scatter_mode R),
+           * base = everything below * mix(1, coat_color, coat)). The coat is an
+           * untinted, Fresnel-weighted dielectric that attenuates the layers under it.
+           *
+           * Principled's native coat is that same structure (kernel/svm/closure.h:
+           * GGX dielectric coat with Coat IOR Fresnel; lower layers attenuated by
+           * the coat albedo via closure_layering_weight(); Coat Tint absorbs the
+           * lower layers and the emission). The previous lowering added a
+           * Fresnel-free GlossyBsdf (albedo ~1, wrongly tinted by coat_color) on
+           * top of the unattenuated base with an AddClosure and ignored coat_IOR,
+           * which created energy (white-furnace violation, vlm-review-20261124).
+           *
+           * Documented APPROXIMATIONS:
+           * - Coat Tint is Beer-Lambert normalized to normal incidence
+           *   (tint^(1/cos_t), mixed by Coat Weight) rather than the reference's
+           *   view-independent mix(1, coat_color, coat); equal at normal incidence.
+           * - The separate sheen lobe (AddClosure) and transmission lobe
+           *   (MixClosure) below are composed outside Principled, so they are not
+           *   under the coat layer: the coat covers the Principled base only. */
+          principled->set_coat_roughness(0.1f);
+          if (const auto input = node.inputs.find("coat"); input != node.inputs.end()) {
+            principled->set_coat_weight(input->second);
+          }
           if (const auto input = node.color3_inputs.find("coat_color");
               input != node.color3_inputs.end())
           {
-            coat->set_color(input->second);
+            principled->set_coat_tint(input->second);
           }
           if (const auto input = node.inputs.find("coat_roughness"); input != node.inputs.end()) {
-            coat->set_roughness(input->second);
+            principled->set_coat_roughness(input->second);
           }
+          if (const auto input = node.inputs.find("coat_IOR"); input != node.inputs.end()) {
+            principled->set_coat_ior(input->second);
+          }
+          /* An unlinked Coat Normal follows Principled's own Normal in the kernel,
+           * which keeps the previous coat_normal -> normal fallback. */
           if (const auto input = node.vector3_inputs.find("coat_normal");
               input != node.vector3_inputs.end())
           {
-            coat->set_normal(input->second);
+            principled->set_coat_normal(input->second);
           }
-          else if (const auto input = node.vector3_inputs.find("normal");
-                   input != node.vector3_inputs.end())
-          {
-            coat->set_normal(input->second);
-          }
-          AddClosureNode *sum = graph->create_node<AddClosureNode>();
-          sum->name = node.name + ".standard_surface_coat_sum";
-          lowered_nodes.emplace(coat->name, coat);
-          lowered_nodes.emplace(sum->name, sum);
-          closure = sum->output("Closure");
         }
 
         if (closure == principled->output("BSDF")) {
@@ -33116,24 +33133,12 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       }
 
       if (has_standard_surface_coat(node)) {
-        ShaderNode *coat = lowered_nodes.at(node.name + ".standard_surface_coat");
-        ShaderNode *sum = lowered_nodes.at(node.name);
-        connect_weighted_lobe_color(static_cast<BsdfNode *>(coat), "coat", "coat_color");
-        if (const auto link = node.links.find("coat_roughness"); link != node.links.end()) {
-          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                         coat->input("Roughness"));
-        }
-        if (const auto link = node.links.find("coat_normal"); link != node.links.end()) {
-          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                         coat->input("Normal"));
-        }
-        else if (const auto link = node.links.find("normal"); link != node.links.end()) {
-          graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
-                         coat->input("Normal"));
-        }
-        graph->connect(closure, sum->input("Closure1"));
-        graph->connect(coat->output("BSDF"), sum->input("Closure2"));
-        closure = sum->output("Closure");
+        /* Principled native coat; see the node-creation block. */
+        connect_if_linked("coat", "Coat Weight");
+        connect_if_linked("coat_color", "Coat Tint");
+        connect_if_linked("coat_roughness", "Coat Roughness");
+        connect_if_linked("coat_IOR", "Coat IOR");
+        connect_if_linked("coat_normal", "Coat Normal");
       }
       if (!surface_shader_node_has_surface_shader_consumer(source, node.name)) {
         graph->connect(closure, graph->output()->input("Surface"));

@@ -2716,4 +2716,104 @@ TEST(materialx_oren_nayar_reference, uncompensated_lobe_envelope_vs_materialx_1_
   EXPECT_LT(max_ratio, 1.59458 + margin);
 }
 
+/* fix-ss-coat-20261124 (vlm-review-20261124: on a uniform-dome material ball the
+ * standard_surface coat case reflected more than it received, sphere p99.5 1.18).
+ * The coat used to be a Fresnel-free GlossyBsdf added on top of the unattenuated base.
+ * libraries/bxdf/standard_surface.mtlx layers an untinted dielectric coat over the
+ * base, so a white-base coat=1 surface must stay at or below unit albedo at every
+ * view angle, keep a real coat lobe, and attenuate the base under it. Judged on the
+ * ACTUAL lowered Principled node compiled to SVM and evaluated by the CPU kernel. */
+TEST_F(materialx_principled_kernel, standard_surface_coat_is_energy_conserving_on_actual_svm)
+{
+  struct Albedo {
+    float total = 0.0f, diffuse = 0.0f, coat = 0.0f;
+  };
+  auto measure = [&](const float coat, const float mu) {
+    materialx::Node node;
+    node.name = "SS";
+    node.nodedef = "ND_standard_surface_surfaceshader";
+    node.color3_inputs["base_color"] = one_float3();
+    node.inputs["specular_roughness"] = 0.5f;
+    node.inputs["coat"] = coat;
+    node.inputs["coat_roughness"] = 0.05f;
+    node.outputs["out"] = materialx::Type::SurfaceShader;
+    ShaderGraph graph;
+    EXPECT_TRUE(materialx::lower({{node}}, &graph));
+    PrincipledBsdfNode *principled = nullptr;
+    size_t additive_lobes = 0;
+    for (ShaderNode *n : graph.nodes) {
+      principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(n);
+      additive_lobes += dynamic_cast<GlossyBsdfNode *>(n) != nullptr ||
+                        dynamic_cast<AddClosureNode *>(n) != nullptr;
+    }
+    EXPECT_EQ(additive_lobes, 0u);
+    Albedo a;
+    if (principled == nullptr) {
+      ADD_FAILURE() << "no PrincipledBsdfNode";
+      return a;
+    }
+    EXPECT_EQ(graph.output()->input("Surface")->link, principled->output("BSDF"));
+    EXPECT_FLOAT_EQ(principled->get_coat_weight(), coat);
+    EXPECT_FLOAT_EQ(principled->get_coat_roughness(), 0.05f);
+    EXPECT_FLOAT_EQ(principled->get_coat_ior(), 1.5f);
+    EXPECT_EQ(principled->get_coat_tint(), one_float3());
+
+    CapturePrincipledSVM compiler(scene.get(), progress, &graph);
+    std::array<float, SVM_STACK_SIZE> stack{};
+    const std::vector<uint> words = compiler.capture(principled);
+    const size_t header_words = 1 + sizeof(SVMNodeClosureBsdf) / sizeof(uint);
+    if (words.size() != header_words + sizeof(SVMNodePrincipledBsdfData) / sizeof(uint)) {
+      ADD_FAILURE() << "Actual compiled Principled bytecode size does not match its wire struct";
+      return a;
+    }
+    SVMNodeClosureBsdf header;
+    memcpy(&header, words.data() + 1, sizeof(header));
+    globals.svm_nodes.data = words.data();
+    globals.svm_nodes.width = int(words.size());
+    ThreadKernelGlobalsCPU kg(globals, nullptr, profiler, 0);
+    ShaderData sd{};
+    sd.N = sd.Ng = make_float3(0.0f, 0.0f, 1.0f);
+    sd.wi = make_float3(sqrtf(1.0f - mu * mu), 0.0f, mu);
+    sd.num_closure_left = MAX_CLOSURE;
+    svm_node_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
+        &kg,
+        &sd,
+        stack.data(),
+        one_spectrum(),
+        header,
+        PATH_RAY_VISIBILITY_CAMERA,
+        0,
+        int(header_words));
+    for (int i = 0; i < sd.num_closure; ++i) {
+      const ShaderClosure *sc = &sd.closure[i];
+      if (!CLOSURE_IS_BSDF(sc->type)) {
+        continue;
+      }
+      const float e = average(bsdf_albedo(&kg, &sd, sc, true, true));
+      a.total += e;
+      if (CLOSURE_IS_BSDF_DIFFUSE(sc->type)) {
+        a.diffuse += e;
+      }
+      if (CLOSURE_IS_BSDF_MICROFACET(sc->type) &&
+          reinterpret_cast<const MicrofacetBsdf *>(sc)->fresnel_type ==
+              MicrofacetFresnel::DIELECTRIC)
+      {
+        a.coat += e;
+      }
+    }
+    return a;
+  };
+  for (const float mu : {1.0f, 0.7f, 0.4f, 0.15f}) {
+    SCOPED_TRACE(mu);
+    const Albedo bare = measure(0.0f, mu);
+    const Albedo coated = measure(1.0f, mu);
+    EXPECT_LE(bare.total, 1.0f + 1e-3f);
+    EXPECT_FLOAT_EQ(bare.coat, 0.0f);
+    /* The defect: base albedo plus a ~unit-albedo additive coat lobe exceeded 1. */
+    EXPECT_LE(coated.total, 1.0f + 1e-3f);
+    EXPECT_GT(coated.coat, 0.03f);
+    EXPECT_LT(coated.diffuse, bare.diffuse);
+  }
+}
+
 CCL_NAMESPACE_END

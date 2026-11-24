@@ -13058,7 +13058,8 @@ TEST(materialx_graph, mixes_bare_and_composed_unit_opacity_standard_surfaces)
   materialx::Node coated;
   coated.name = "CoatedStandard";
   coated.nodedef = "ND_standard_surface_surfaceshader";
-  coated.inputs["coat"] = 0.4f;
+  /* A coat is Principled-native; the separate sheen lobe still composes. */
+  coated.inputs["sheen"] = 0.4f;
   coated.outputs["out"] = materialx::Type::SurfaceShader;
 
   materialx::Node mix;
@@ -13103,7 +13104,8 @@ TEST(materialx_graph, standard_surface_mix_helpers_do_not_capture_authored_names
   materialx::Node coated;
   coated.name = "Coated";
   coated.nodedef = "ND_standard_surface_surfaceshader";
-  coated.inputs["coat"] = 0.4f;
+  /* A coat is Principled-native; the separate sheen lobe still composes. */
+  coated.inputs["sheen"] = 0.4f;
   coated.links["base_color"] = {"Color", "out", materialx::Type::Color3};
   coated.outputs["out"] = materialx::Type::SurfaceShader;
   materialx::Node mix;
@@ -20658,32 +20660,30 @@ TEST(materialx_graph, lowers_standard_surface_to_native_closure_composition)
   PrincipledBsdfNode *principled = nullptr;
   SheenBsdfNode *sheen = nullptr;
   MaterialXGlassBsdfNode *transmission = nullptr;
-  GlossyBsdfNode *coat = nullptr;
   MixClosureNode *transmission_mix = nullptr;
   AddClosureNode *sheen_sum = nullptr;
-  AddClosureNode *coat_sum = nullptr;
+  size_t glossy_count = 0;
   for (ShaderNode *node : graph.nodes) {
     principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
     sheen = sheen ? sheen : dynamic_cast<SheenBsdfNode *>(node);
     transmission = transmission ? transmission : dynamic_cast<MaterialXGlassBsdfNode *>(node);
-    coat = coat ? coat : dynamic_cast<GlossyBsdfNode *>(node);
-    if (node->name == "StandardSurface.standard_surface_transmission_mix") {
+    glossy_count += dynamic_cast<GlossyBsdfNode *>(node) != nullptr;
+    /* The outermost closure (here the transmission mix) carries the surface name. */
+    if (node->name == "StandardSurface") {
       transmission_mix = dynamic_cast<MixClosureNode *>(node);
     }
     if (node->name == "StandardSurface.standard_surface_sheen_sum") {
       sheen_sum = dynamic_cast<AddClosureNode *>(node);
     }
-    if (node->name == "StandardSurface") {
-      coat_sum = dynamic_cast<AddClosureNode *>(node);
-    }
   }
   ASSERT_NE(principled, nullptr);
   ASSERT_NE(sheen, nullptr);
   ASSERT_NE(transmission, nullptr);
-  ASSERT_NE(coat, nullptr);
   ASSERT_NE(transmission_mix, nullptr);
   ASSERT_NE(sheen_sum, nullptr);
-  ASSERT_NE(coat_sum, nullptr);
+  /* The coat is Principled's native, energy-conserving coat layer: no separate
+   * additive glossy lobe (that created energy; vlm-review-20261124). */
+  EXPECT_EQ(glossy_count, 0u);
   EXPECT_EQ(principled->get_base_color(), make_float3(0.2f, 0.4f, 0.6f));
   EXPECT_FLOAT_EQ(principled->get_surface_mix_weight(), 0.0f);
   EXPECT_FLOAT_EQ(principled->get_base_weight(), 0.25f);
@@ -20711,16 +20711,91 @@ TEST(materialx_graph, lowers_standard_surface_to_native_closure_composition)
   EXPECT_FLOAT_EQ(transmission->get_roughness(), 0.35f);
   EXPECT_FLOAT_EQ(transmission->get_IOR(), 1.45f);
   EXPECT_FLOAT_EQ(transmission_mix->get_fac(), 0.6f);
-  EXPECT_EQ(coat->get_color(), make_float3(0.7f, 0.8f, 0.9f) * 0.2f);
-  EXPECT_FLOAT_EQ(coat->get_surface_mix_weight(), 0.0f);
-  EXPECT_FLOAT_EQ(coat->get_roughness(), 0.12f);
+  EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.2f);
+  EXPECT_EQ(principled->get_coat_tint(), make_float3(0.7f, 0.8f, 0.9f));
+  EXPECT_FLOAT_EQ(principled->get_coat_roughness(), 0.12f);
+  EXPECT_FLOAT_EQ(principled->get_coat_ior(), 1.6f);
   EXPECT_EQ(sheen_sum->input("Closure1")->link, principled->output("BSDF"));
   EXPECT_EQ(sheen_sum->input("Closure2")->link, sheen->output("BSDF"));
   EXPECT_EQ(transmission_mix->input("Closure1")->link, sheen_sum->output("Closure"));
   EXPECT_EQ(transmission_mix->input("Closure2")->link, transmission->output("BSDF"));
-  EXPECT_EQ(coat_sum->input("Closure1")->link, transmission_mix->output("Closure"));
-  EXPECT_EQ(coat_sum->input("Closure2")->link, coat->output("BSDF"));
-  EXPECT_EQ(graph.output()->input("Surface")->link, coat_sum->output("Closure"));
+  EXPECT_EQ(graph.output()->input("Surface")->link, transmission_mix->output("Closure"));
+}
+
+/* fix-ss-coat-20261124: the standard_surface coat is Principled's native, layered coat
+ * (energy-conserving; the former additive GlossyBsdf created energy). Literal and linked
+ * coat, coat_color, coat_roughness, coat_IOR and coat_normal reach the Coat sockets, and
+ * a coat-only surface is a single Principled BSDF with no closure combinator. */
+TEST(materialx_graph, lowers_standard_surface_coat_to_native_principled_coat)
+{
+  {
+    materialx::Node surface;
+    surface.name = "Coated";
+    surface.nodedef = "ND_standard_surface_surfaceshader";
+    surface.color3_inputs["base_color"] = make_float3(0.05f, 0.15f, 0.6f);
+    surface.inputs["coat"] = 1.0f;
+    surface.color3_inputs["coat_color"] = make_float3(0.9f, 0.8f, 0.7f);
+    surface.inputs["coat_IOR"] = 1.4f;
+    surface.outputs["out"] = materialx::Type::SurfaceShader;
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{surface}}, &graph, &error)) << error;
+    PrincipledBsdfNode *principled = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      EXPECT_EQ(dynamic_cast<GlossyBsdfNode *>(node), nullptr);
+      EXPECT_EQ(dynamic_cast<AddClosureNode *>(node), nullptr);
+      principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+    }
+    ASSERT_NE(principled, nullptr);
+    EXPECT_EQ(principled->name, "Coated");
+    EXPECT_FLOAT_EQ(principled->get_coat_weight(), 1.0f);
+    EXPECT_EQ(principled->get_coat_tint(), make_float3(0.9f, 0.8f, 0.7f));
+    /* Unauthored coat_roughness takes the standard_surface default, not Principled's. */
+    EXPECT_FLOAT_EQ(principled->get_coat_roughness(), 0.1f);
+    EXPECT_FLOAT_EQ(principled->get_coat_ior(), 1.4f);
+    EXPECT_EQ(graph.output()->input("Surface")->link, principled->output("BSDF"));
+  }
+  {
+    materialx::Node weight;
+    weight.name = "Weight";
+    weight.nodedef = "ND_constant_float";
+    weight.inputs["value"] = 0.6f;
+    weight.outputs["out"] = materialx::Type::Float;
+    materialx::Node tint;
+    tint.name = "Tint";
+    tint.nodedef = "ND_constant_color3";
+    tint.color3_inputs["value"] = make_float3(0.2f, 0.4f, 0.6f);
+    tint.outputs["out"] = materialx::Type::Color3;
+    materialx::Node normal;
+    normal.name = "CoatNormal";
+    normal.nodedef = "ND_normal_vector3";
+    normal.string_inputs["space"] = "world";
+    normal.outputs["out"] = materialx::Type::Vector3;
+    materialx::Node surface;
+    surface.name = "Linked";
+    surface.nodedef = "ND_standard_surface_surfaceshader";
+    surface.links["coat"] = {"Weight", "out", materialx::Type::Float};
+    surface.links["coat_color"] = {"Tint", "out", materialx::Type::Color3};
+    surface.links["coat_roughness"] = {"Weight", "out", materialx::Type::Float};
+    surface.links["coat_IOR"] = {"Weight", "out", materialx::Type::Float};
+    surface.links["coat_normal"] = {"CoatNormal", "out", materialx::Type::Vector3};
+    surface.outputs["out"] = materialx::Type::SurfaceShader;
+    ShaderGraph graph;
+    string error;
+    ASSERT_TRUE(materialx::lower({{weight, tint, normal, surface}}, &graph, &error)) << error;
+    PrincipledBsdfNode *principled = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      EXPECT_EQ(dynamic_cast<GlossyBsdfNode *>(node), nullptr);
+      principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+    }
+    ASSERT_NE(principled, nullptr);
+    for (const char *socket :
+         {"Coat Weight", "Coat Tint", "Coat Roughness", "Coat IOR", "Coat Normal"})
+    {
+      EXPECT_NE(principled->input(socket)->link, nullptr) << socket;
+    }
+    EXPECT_EQ(graph.output()->input("Surface")->link, principled->output("BSDF"));
+  }
 }
 
 TEST(materialx_graph, rejects_unrepresentable_standard_surface_inputs_atomically)
