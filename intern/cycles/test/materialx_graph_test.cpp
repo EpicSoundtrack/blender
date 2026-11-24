@@ -20757,9 +20757,19 @@ TEST(materialx_graph, lowers_standard_surface_coat_to_native_principled_coat)
     /* An unlinked LINK_NORMAL socket becomes the shading normal; a literal coat_normal
      * must reach Coat Normal through a constant node. */
     ASSERT_NE(principled->input("Coat Normal")->link, nullptr);
-    auto *coat_normal = dynamic_cast<VectorMathNode *>(
-        principled->input("Coat Normal")->link->parent);
+    VectorMathNode *coat_normal = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      coat_normal = node->name == "Coated.coat_normal" ? dynamic_cast<VectorMathNode *>(node) :
+                                                         coat_normal;
+    }
     ASSERT_NE(coat_normal, nullptr);
+    /* connect() may insert a vector -> normal convert node in between. */
+    ShaderNode *upstream = principled->input("Coat Normal")->link->parent;
+    if (upstream != coat_normal) {
+      ASSERT_FALSE(upstream->inputs.empty());
+      ASSERT_NE(upstream->inputs[0]->link, nullptr);
+      EXPECT_EQ(upstream->inputs[0]->link->parent, coat_normal);
+    }
     EXPECT_EQ(coat_normal->get_math_type(), NODE_VECTOR_MATH_ADD);
     EXPECT_EQ(coat_normal->get_vector1(), make_float3(0.0f, 0.6f, 0.8f));
     EXPECT_EQ(coat_normal->get_vector2(), zero_float3());
