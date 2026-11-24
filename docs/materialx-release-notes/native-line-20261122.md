@@ -1,6 +1,6 @@
 # Native MaterialX release line, 2026-11-22
 
-Branch: `release/native-materialx-line-20261122` (local, not pushed).
+Branch: `release/native-materialx-line-20261122`. Pushed on 2026-11-23 19:43 -0600 to our own fork `origin` (`git@github.com:EpicSoundtrack/blender.git`) at `ee5b29316847`, per the remote-tracking reflog (`git reflog show --date=iso refs/remotes/origin/release/native-materialx-line-20261122`: "update by push"). This line said "local, not pushed" until then. Nothing was sent to Blender upstream.
 
 The branch starts at `3be8adbf2c96` (the portability fix). It adds
 documentation-only commits on top: the batch-48 correction
