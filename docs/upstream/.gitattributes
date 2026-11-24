@@ -1,0 +1,3 @@
+# Keep this review table as a plain git blob (not an LFS pointer) so it is
+# readable with git show and travels with the branch.
+stock-expressibility.csv -filter -diff -merge text eol=lf

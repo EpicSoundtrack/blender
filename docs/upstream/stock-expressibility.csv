@@ -1,0 +1,240 @@
+node_id,node_group,ledger_full_node_parity,class,ccl node types used,missing upstream features,estimated Blender node count,measured_vs_inferred
+ND_constant_float,utility,false,STOCK,ValueNode,None,1,measured
+ND_constant_color3,utility,false,STOCK,ColorNode,None,1,measured
+ND_constant_vector3,utility,false,STOCK,CombineXYZNode,None,1,measured
+ND_constant_color4,color,true,STOCK_EXPANDED,ColorNode + MathNode (W sidecar),Color4 alpha has no stock socket; RGB/W split,3,inferred
+ND_constant_vector4,vector,false,STOCK_EXPANDED,CombineXYZNode + ValueNode (W sidecar),Vector4 has no stock socket; XYZ/W split,3,inferred
+ND_constant_matrix33,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix33 not a stock socket; folded into object transform,1,inferred
+ND_constant_matrix44,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix44 not a stock socket; folded into object transform,1,inferred
+ND_constant_boolean,utility,false,STOCK_EXPANDED,ValueNode (0/1) + MixNode (clamp),Boolean not a stock socket type; 0/1 float emulation,2,inferred
+ND_constant_integer,utility,false,STOCK_EXPANDED,MagicTextureNode (depth) + ValueNode,Integer not a stock socket type; MagicTexture depth emulation,2,inferred
+ND_add_float,math,true,STOCK,MathNode (ADD),None,1,measured
+ND_subtract_float,math,true,STOCK,MathNode (SUBTRACT),None,1,measured
+ND_multiply_float,math,true,STOCK,MathNode (MULTIPLY),None,1,measured
+ND_divide_float,math,true,STOCK,MathNode (DIVIDE),None,1,measured
+ND_power_float,math,true,STOCK,MathNode (POWER),None,1,measured
+ND_modulo_float,math,true,STOCK,MathNode (MODULO),None,1,measured
+ND_sqrt_float,math,true,STOCK,MathNode (SQRT),None,1,measured
+ND_absval_float,math,true,STOCK,MathNode (ABSOLUTE),None,1,measured
+ND_floor_float,math,true,STOCK,MathNode (FLOOR),None,1,measured
+ND_ceil_float,math,true,STOCK,MathNode (CEIL),None,1,measured
+ND_round_float,math,true,STOCK,MathNode (ROUND),None,1,measured
+ND_sign_float,math,true,STOCK,MathNode (SIGN),None,1,measured
+ND_invert_float,math,true,STOCK,MathNode (SUBTRACT; 1-x),None,1,measured
+ND_sin_float,math,true,STOCK,MathNode (SINE),None,1,measured
+ND_cos_float,math,true,STOCK,MathNode (COSINE),None,1,measured
+ND_tan_float,math,true,STOCK,MathNode (TANGENT),None,1,measured
+ND_atan2_float,math,true,STOCK,VectorMathNode / MathNode,None,2,measured
+ND_ln_float,math,true,STOCK_EXPANDED,MathNode (log via division),ln not a stock math op; log(x)/log(e),2,inferred
+ND_exp_float,math,true,STOCK_EXPANDED,MathNode (power with e base),exp not a stock math op; power(e,x),2,inferred
+ND_clamp_float,math,true,STOCK,ClampNode / MathNode MIN/MAX,None,1,measured
+ND_mix_float,mix,true,STOCK,MixNode (MIX),None,1,measured
+ND_ifgreater_float,conditional,true,STOCK,MathNode (GREATER_THAN) + compare chain,Exact predicate needs compare chain,2,measured
+ND_ifequal_float,conditional,true,STOCK,MathNode (GREATER_THAN/LESS_THAN) + compare chain,Exact equality needs compare chain,3,measured
+ND_ifgreatereq_float,conditional,true,STOCK,MathNode compare chain,Exact >= needs compare chain,3,measured
+ND_switch_float,switch,true,STOCK,MixNode (MIX),None,1,measured
+ND_dot_float,math,true,STOCK,VectorMathNode (DOT_PRODUCT),None,1,measured
+ND_dot_color3,math,true,STOCK,VectorMathNode (DOT_PRODUCT),None,1,measured
+ND_dot_vector3,math,true,STOCK,VectorMathNode (DOT_PRODUCT),None,1,measured
+ND_combine3_color3,color,true,STOCK,CombineColorNode (RGB),None,1,measured
+ND_separate3_color3,color,true,STOCK,SeparateColorNode (RGB),None,1,measured
+ND_combine3_vector3,vector,true,STOCK,CombineXYZNode,None,1,measured
+ND_separate3_vector3,vector,true,STOCK,SeparateXYZNode,None,1,measured
+ND_combine2_vector2,vector,true,STOCK,CombineXYZNode (Z=0),None,1,measured
+ND_separate2_vector2,vector,true,STOCK,SeparateXYZNode,None,1,measured
+ND_combine4_color4,color,true,STOCK_EXPANDED,CombineColorNode (RGB) + MathNode (W),Color4 W has no stock socket,3,inferred
+ND_separate4_color4,color,true,STOCK_EXPANDED,SeparateColorNode (RGB) + MathNode (W),Color4 W has no stock socket,3,inferred
+ND_combine4_vector4,vector,false,STOCK_EXPANDED,CombineXYZNode (XYZ) + ValueNode (W),Vector4 W has no stock socket,3,inferred
+ND_separate4_vector4,vector,false,STOCK_EXPANDED,SeparateXYZNode + ValueNode (W),Vector4 W has no stock socket,3,inferred
+ND_convert_float_color3,conversion,true,STOCK,CombineColorNode (R=G=B=in),None,1,measured
+ND_convert_color3_float,conversion,true,STOCK,SeparateColorNode (one channel),None,1,measured
+ND_convert_float_vector3,conversion,true,STOCK,CombineXYZNode (X=Y=Z=in),None,1,measured
+ND_convert_vector3_float,conversion,true,STOCK,SeparateXYZNode (one channel),None,1,measured
+ND_convert_boolean_float,conversion,true,STOCK_EXPANDED,ValueNode (0/1) + MixNode,Boolean not a stock socket type,2,inferred
+ND_convert_float_boolean,conversion,true,STOCK_EXPANDED,MathNode (COMPARE ==0),Boolean not a stock socket type,1,inferred
+ND_convert_integer_float,conversion,true,STOCK_EXPANDED,ValueNode + MagicTextureNode,Integer not a stock socket type,2,inferred
+ND_convert_float_integer,conversion,true,STOCK_EXPANDED,MathNode (FLOOR/CEIL/ROUND),Integer not a stock socket type,1,inferred
+ND_image_color3,texture,true,STOCK,ImageTextureNode (Color),None,1,measured
+ND_image_color4,texture,true,STOCK_EXPANDED,ImageTextureNode (Color + Alpha sidecar),Color4 alpha sidecar not stock,2,inferred
+ND_image_float,texture,true,STOCK,ImageTextureNode (Color->luminance),None,1,measured
+ND_image_vector3,texture,true,STOCK,ImageTextureNode (Color),None,1,measured
+ND_image_vector4,texture,true,STOCK_EXPANDED,ImageTextureNode (Color + Alpha sidecar),Vector4 alpha sidecar not stock,2,inferred
+ND_tiledimage_color3,texture,true,STOCK,ImageTextureNode (box mapping via Mapping node),None,2,measured
+ND_tiledimage_color4,texture,true,STOCK_EXPANDED,ImageTextureNode (Color + Alpha),Alpha sidecar not stock,2,inferred
+ND_tiledimage_float,texture,true,STOCK,ImageTextureNode (Color->luminance),None,1,measured
+ND_tiledimage_vector2,texture,true,STOCK,ImageTextureNode,None,1,measured
+ND_tiledimage_vector3,texture,true,STOCK,ImageTextureNode (Color),None,1,measured
+ND_tiledimage_vector4,texture,true,STOCK_EXPANDED,ImageTextureNode (Color + Alpha),Alpha sidecar not stock,2,inferred
+ND_latlongimage,texture,true,STOCK,EnvironmentTextureNode (EQUIRECTANGULAR),None,1,measured
+ND_texcoord_vector2,input,true,STOCK,TextureCoordinateNode (UV),None,1,measured
+ND_texcoord_vector3,input,true,STOCK,TextureCoordinateNode (Object/Generated),None,1,measured
+ND_position_vector3,input,true,STOCK,GeometryNode (Position),None,1,measured
+ND_normal_vector3,input,true,STOCK,GeometryNode (Normal),None,1,measured
+ND_viewdirection_vector3,input,true,STOCK,GeometryNode (Incoming),None,1,measured
+ND_tangent_vector3,input,true,STOCK,GeometryNode (Tangent),None,1,measured
+ND_geompropvalue_float,input,true,STOCK,AttributeNode,None,1,measured
+ND_geompropvalue_color3,input,true,STOCK,AttributeNode,None,1,measured
+ND_geompropvalue_color4,input,true,STOCK_EXPANDED,AttributeNode (Color + Alpha sidecar),Color4 alpha sidecar not stock,2,inferred
+ND_geompropvalue_vector2,input,true,STOCK,AttributeNode,None,1,measured
+ND_geompropvalue_vector3,input,true,STOCK,AttributeNode,None,1,measured
+ND_geompropvalue_vector4,input,true,STOCK_EXPANDED,AttributeNode (Color + Alpha sidecar),Vector4 not a stock socket,2,inferred
+ND_geompropvalue_boolean,input,true,STOCK_EXPANDED,AttributeNode (Alpha -> Math compare),Boolean not a stock socket,2,inferred
+ND_geompropvalue_integer,input,true,STOCK_EXPANDED,AttributeNode (Alpha -> Math),Integer not a stock socket,2,inferred
+ND_UsdPrimvarReader_float,input,true,STOCK,AttributeNode,None,1,measured
+ND_UsdPrimvarReader_vector2,input,true,STOCK,AttributeNode,None,1,measured
+ND_UsdPrimvarReader_vector3,input,true,STOCK,AttributeNode,None,1,measured
+ND_UsdPrimvarReader_boolean,input,true,STOCK_EXPANDED,AttributeNode (Alpha -> Math compare),Boolean not a stock socket,2,inferred
+ND_UsdPrimvarReader_vector4,input,true,STOCK_EXPANDED,AttributeNode (Color + Alpha),Vector4 not a stock socket,2,inferred
+ND_facingratio_float,input,true,STOCK,GeometryNode (Incoming) + VectorMath (DOT) + Math,None,3,measured
+ND_place2d_vector2,transform,true,STOCK,MappingNode,None,1,measured
+ND_UsdTransform2d,transform,true,STOCK,MappingNode,None,1,measured
+ND_transformpoint_vector3,transform,true,STOCK,VectorTransformNode,None,1,measured
+ND_transformvector_vector3,transform,true,STOCK,VectorTransformNode,None,1,measured
+ND_transformnormal_vector3,transform,true,STOCK,VectorTransformNode,None,1,measured
+ND_rotate2d_vector2,transform,true,STOCK,MappingNode (rotation),None,1,measured
+ND_rotate3d_vector3,transform,false,STOCK_EXPANDED,VectorMath (rotate via axis-angle),No stock rotate-about-axis node,4,inferred
+ND_maprange_float/remap_float,range,true,STOCK,MapRangeNode,None,1,measured
+ND_maprange_color3/remap_color3,range,true,STOCK,MapRangeNode per channel x3,None,3,inferred
+ND_maprange_vector3/remap_vector3,range,true,STOCK,VectorMath scale/offset per channel,None,3,inferred
+ND_ramp,color,true,STOCK,RGBRampNode / ColorRamp,None,1,measured
+ND_ramp_gradient,color,true,STOCK,RGBRampNode,None,1,measured
+ND_colorcorrect,color,true,STOCK,MathNode (offset/gain/gamma per channel),None,3,inferred
+ND_luminance_color3,color,true,STOCK,MathNode (dot with luminance weights),None,1,measured
+ND_luminance_color4,color,true,STOCK_EXPANDED,MathNode + alpha sidecar,Alpha sidecar not stock,2,inferred
+ND_rgbtohsv_color3,color,true,STOCK_EXPANDED,MathNode chain,HSV conversion not a stock node,6,inferred
+ND_hsvtorgb_color3,color,true,STOCK_EXPANDED,MathNode chain,HSV conversion not a stock node,6,inferred
+ND_hsvadjust_color3,color,true,STOCK,HueSaturationValueNode,None,1,measured
+ND_hsvadjust_color4,color,true,STOCK_EXPANDED,HueSaturationValueNode + alpha sidecar,Alpha sidecar not stock,2,inferred
+ND_saturate_color3,color,true,STOCK,HueSaturationValueNode (saturation),None,1,measured
+ND_saturate_color4,color,true,STOCK_EXPANDED,HueSaturationValueNode + alpha sidecar,Alpha sidecar not stock,2,inferred
+ND_invert_color3,color,true,STOCK,InvertNode / MathNode (1-x),None,1,measured
+ND_invert_color4,color,true,STOCK_EXPANDED,InvertNode (RGB) + MathNode (W),Alpha sidecar not stock,2,inferred
+ND_clamp_color3,color,true,STOCK,ClampNode per channel / MathNode MINMAX,None,3,inferred
+ND_clamp_color4,color,true,STOCK_EXPANDED,ClampNode (RGB) + MathNode (W),Alpha sidecar not stock,2,inferred
+ND_contrast_color3,color,true,STOCK,MathNode (contrast formula per channel),None,3,inferred
+ND_contrast_color4,color,true,STOCK_EXPANDED,MathNode (contrast RGB) + MathNode (W),Alpha sidecar not stock,2,inferred
+ND_contrast_vector2,vector,true,STOCK,MathNode per channel,None,2,inferred
+ND_contrast_vector3,vector,true,STOCK,MathNode per channel,None,3,inferred
+ND_contrast_vector4,vector,false,STOCK_EXPANDED,MathNode (XYZ) + MathNode (W),Vector4 W sidecar not stock,4,inferred
+ND_safepower_float,math,true,STOCK,MathNode (POWER with clamp base>=0),None,2,measured
+ND_absval_color3,color,true,STOCK,MathNode (ABSOLUTE per channel),None,3,inferred
+ND_absval_color4,color,true,STOCK_EXPANDED,MathNode (ABSOLUTE RGB) + MathNode (W),Alpha sidecar not stock,2,inferred
+ND_absval_vector4,vector,false,STOCK_EXPANDED,MathNode (ABSOLUTE XYZ) + MathNode (W),Vector4 W sidecar not stock,2,inferred
+ND_screen_color3,color,true,STOCK,MixNode (SCREEN),None,1,inferred
+ND_screen_color4,color,true,STOCK_EXPANDED,MixNode (SCREEN RGB) + MathNode (W),Alpha sidecar not stock,2,inferred
+ND_difference_color3,color,true,STOCK,MixNode (DIFFERENCE),None,1,inferred
+ND_difference_color4,color,true,STOCK_EXPANDED,MixNode (DIFFERENCE RGB) + MathNode (W),Alpha sidecar not stock,2,inferred
+ND_add_color3,color,true,STOCK,MixNode (ADD),None,1,inferred
+ND_add_color4,color,true,STOCK_EXPANDED,MixNode (ADD RGB) + MathNode (W),Alpha sidecar not stock,2,inferred
+ND_multiply_color3,color,true,STOCK,MixNode (MULTIPLY),None,1,inferred
+ND_multiply_color4,color,true,STOCK_EXPANDED,MixNode (MULTIPLY RGB) + MathNode (W),Alpha sidecar not stock,2,inferred
+ND_subtract_color3,color,true,STOCK,MixNode (SUBTRACT),None,1,inferred
+ND_subtract_color4,color,true,STOCK_EXPANDED,MixNode (SUBTRACT RGB) + MathNode (W),Alpha sidecar not stock,2,inferred
+ND_divide_color3,color,true,STOCK,MixNode (DIVIDE),None,1,inferred
+ND_divide_color4,color,true,STOCK_EXPANDED,MixNode (DIVIDE RGB) + MathNode (W),Alpha sidecar not stock,2,inferred
+ND_over_color4,color,true,STOCK_EXPANDED,MixNode (mix by alpha) + MathNode,Alpha sidecar not stock,3,inferred
+ND_premult_color4,color,true,STOCK_EXPANDED,MathNode chain,Alpha sidecar not stock,4,inferred
+ND_unpremult_color4,color,true,STOCK_EXPANDED,MathNode chain,Alpha sidecar not stock,4,inferred
+ND_combine2_color4cf,color,true,STOCK_EXPANDED,CombineColorNode (RGB) + MathNode (W from float),Color4 assembly from color3+float not stock,2,inferred
+ND_noise2d_float,procedural,true,STOCK,WhiteNoiseTextureNode,None,1,measured
+ND_noise3d_float,procedural,true,STOCK,WhiteNoiseTextureNode,None,1,measured
+ND_noise2d_color3,procedural,true,STOCK,WhiteNoiseTextureNode (Color),None,1,measured
+ND_noise3d_color3,procedural,true,STOCK,WhiteNoiseTextureNode (Color),None,1,measured
+ND_cellnoise2d_float,procedural,true,STOCK,WhiteNoiseTextureNode,None,1,measured
+ND_cellnoise3d_float,procedural,true,STOCK,WhiteNoiseTextureNode,None,1,measured
+ND_fractal2d_float,procedural,true,STOCK_EXPANDED,MagicTextureNode (clouds) + MathNode (fBm octaves),fBm octaves not a single stock node,5,inferred
+ND_fractal3d_float,procedural,true,STOCK_EXPANDED,MagicTextureNode + MathNode per channel,fBm octaves not a single stock node,15,inferred
+ND_unifiednoise2d_float,procedural,true,STOCK_EXPANDED,MagicTextureNode (type-specific),Unified noise types not all stock,3,inferred
+ND_unifiednoise3d_float,procedural,true,STOCK_EXPANDED,MagicTextureNode (type-specific),Unified noise types not all stock,3,inferred
+ND_worleynoise2d_float,procedural,true,STOCK,WhiteNoiseTextureNode (approx),Worley noise not stock; approximation only,3,inferred
+ND_worleynoise3d_float,procedural,true,STOCK,WhiteNoiseTextureNode (approx),Worley noise not stock; approximation only,3,inferred
+ND_randomfloat_float,procedural,true,STOCK,ValueNode / MagicTextureNode,Random not deterministic in static tree; static only,1,inferred
+ND_randomcolor_float,procedural,true,STOCK,ValueNode / MagicTextureNode,Random not deterministic in static tree; static only,1,inferred
+ND_line_float,procedural,true,STOCK_EXPANDED,MathNode chain,Procedural 2D shape not stock,4,inferred
+ND_circle_float,procedural,true,STOCK_EXPANDED,MathNode chain,Procedural 2D shape not stock,4,inferred
+ND_hexagon_float,procedural,true,STOCK_EXPANDED,MathNode chain,Procedural 2D shape not stock,4,inferred
+ND_cloverleaf_float,procedural,true,STOCK_EXPANDED,MathNode chain,Procedural 2D shape not stock,4,inferred
+ND_checkerboard_color3,procedural,true,STOCK_EXPANDED,MathNode chain (parity/mod),Procedural pattern not stock,6,inferred
+ND_grid_color3,procedural,true,STOCK_EXPANDED,MathNode chain (parity/mod),Procedural pattern not stock,6,inferred
+ND_crosshatch_color3,procedural,true,STOCK_EXPANDED,MathNode chain (parity/mod),Procedural pattern not stock,6,inferred
+ND_tiledcircles_color3,procedural,true,STOCK_EXPANDED,MathNode chain,Procedural pattern not stock,6,inferred
+ND_tiledcloverleafs_color3,procedural,true,STOCK_EXPANDED,MathNode chain,Procedural pattern not stock,6,inferred
+ND_tiledhexagons_color3,procedural,true,STOCK_EXPANDED,MathNode chain,Procedural pattern not stock,6,inferred
+ND_heighttonormal_vector3,normal,false,NEEDS_UPSTREAM,VectorMathNode + MathNode,Height-to-normal has no stock node; derivative inputs not in node tree,8,inferred
+ND_normalmap_float,normal,true,STOCK,NormalMapNode,None,1,measured
+ND_normalmap_vector2,normal,true,STOCK,NormalMapNode,None,1,measured
+ND_hextilednormalmap_vector3,normal,false,NEEDS_UPSTREAM,VectorMathNode chain,Hextiled normal-map compression not stock; no stock node,8,inferred
+ND_bump_vector3,normal,true,STOCK,BumpNode,None,1,measured
+ND_oren_nayar_diffuse_bsdf,bsdf,true,STOCK,DiffuseBsdfNode (method=BURLEY),None,1,measured
+ND_burley_diffuse_bsdf,bsdf,true,STOCK,DiffuseBsdfNode (method=BURLEY),None,1,measured
+ND_translucent_bsdf,bsdf,true,STOCK,TranslucentBsdfNode,None,1,measured
+ND_transparent_bsdf,bsdf,true,STOCK,TransparentBsdfNode,None,1,measured
+ND_dielectric_bsdf,bsdf,true,NEEDS_UPSTREAM,GlassBsdfNode,GlassBsdfNode missing: alpha_x/alpha_y, rotation, tangent,6,inferred
+ND_conductor_bsdf,bsdf,false,NEEDS_UPSTREAM,GlassBsdfNode (approx),Conductor BSDF: IOR as color3 + extinction not stock,8,inferred
+ND_sheen_bsdf,bsdf,true,STOCK,PrincipledBsdfNode (sheen),Standalone sheen not stock (only on Principled),1,inferred
+ND_mix_bsdf,bsdf,true,STOCK,MixClosureNode / MixShaderNode,None,1,measured
+ND_add_bsdf,bsdf,true,STOCK,AddClosureNode / AddShaderNode,None,1,measured
+ND_multiply_bsdff,bsdf,true,STOCK,MathNode (factor) + MixClosureNode,BSDF multiply by scalar not a stock socket,2,inferred
+ND_subsurface_bsdf,bsdf,true,NEEDS_UPSTREAM,SubsurfaceScatteringNode,closure_weight/method not exposed by stock Subsurface node,6,inferred
+ND_lama_sss,bsdf,true,NEEDS_UPSTREAM,SubsurfaceScatteringNode,radius/scale/anisotropy partial; closure_weight not exposed,6,inferred
+ND_lama_conductor,lama,false,NEEDS_UPSTREAM,GlassBsdfNode (approx),tint/alpha_x/alpha_y/rotation/tangent not stock,8,inferred
+ND_lama_iridescence,lama,false,NEEDS_UPSTREAM,None,LAMA iridescence (thin-film spectral) not expressible in stock,RUNTIME_ONLY
+ND_lama_diffuse,lama,true,STOCK,DiffuseBsdfNode,LAMA energy compensation not stock,1,inferred
+ND_lama_sheen,lama,true,STOCK,PrincipledBsdfNode (sheen),None,1,inferred
+ND_lama_emission,lama,true,STOCK,EmissionBsdfNode,None,1,inferred
+ND_standard_surface_surfaceshader,surface,true,STOCK,PrincipledBsdfNode,Standard Surface -> Principled mapping partial (subsurface, coat, clearcoat),1,inferred
+ND_usd_preview_surface_surfaceshader,surface,true,STOCK,PrincipledBsdfNode,USD Preview Surface -> Principled mapping partial,1,inferred
+ND_gltf_pbr_surfaceshader,surface,true,STOCK,PrincipledBsdfNode,glTF PBR -> Principled mapping partial,1,inferred
+ND_disney_principled,surface,true,STOCK,PrincipledBsdfNode,Disney principled -> Principled mapping partial,1,inferred
+ND_surface_unlit,surface,true,STOCK,PrincipledBsdfNode (Emission),No stock "unlit" surface; emission only,1,inferred
+ND_generic_surface,surface,true,STOCK,PrincipledBsdfNode / MixClosureNode,Generic surface = closure combination,1,inferred
+ND_mix_surfaceshader,surface,true,STOCK,MixShaderNode,None,1,measured
+ND_add_edf,volume,true,STOCK,AddShaderNode,None,1,measured
+ND_mix_edf,volume,true,STOCK,MixShaderNode,None,1,measured
+ND_uniform_edf,volume,true,STOCK,EmissionBsdfNode,None,1,measured
+ND_generalized_schlick_edf,volume,false,NEEDS_UPSTREAM,None,EDF = kernel/SVM change, not node-tree expressible,RUNTIME_ONLY
+ND_dot_surfaceshader,surface,false,RUNTIME_ONLY,None,Surface-shader dot product = graph introspection, not node-tree expressible,RUNTIME_ONLY
+ND_time_float,time,false,RUNTIME_ONLY,None,Time not expressible in a static node tree,RUNTIME_ONLY
+ND_frame_float,time,false,RUNTIME_ONLY,None,Frame not expressible in a static node tree,RUNTIME_ONLY
+ND_chiang_hair_bsdf,hair,false,NEEDS_UPSTREAM,HairBsdfNode,Chiang hair model (multiple lobes, tints) not fully stock; tint_R/TT/TRT not exposed,8,inferred
+ND_chiang_hair_roughness,hair,false,STOCK_EXPANDED,MathNode chain,Hair roughness remapping not a single socket,3,inferred
+ND_deon_hair_absorption_from_melanin,hair,false,STOCK_EXPANDED,MathNode chain,Melanin absorption not stock,4,inferred
+ND_artistic_ior,hair,false,STOCK_EXPANDED,MathNode chain,Artistic IOR -> extinction conversion not stock,3,inferred
+ND_creatematrix_matrix33,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix construction not a stock socket,2,inferred
+ND_creatematrix_matrix44,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix construction not a stock socket,2,inferred
+ND_add_matrix33,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix add not stock,2,inferred
+ND_add_matrix44,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix add not stock,2,inferred
+ND_subtract_matrix33,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix subtract not stock,2,inferred
+ND_subtract_matrix44,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix subtract not stock,2,inferred
+ND_multiply_matrix33,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix multiply not stock,2,inferred
+ND_multiply_matrix44,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix multiply not stock,2,inferred
+ND_divide_matrix33,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix divide not stock,2,inferred
+ND_divide_matrix44,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix divide not stock,2,inferred
+ND_transpose_matrix33,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix transpose not stock,2,inferred
+ND_transpose_matrix44,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix transpose not stock,2,inferred
+ND_invertmatrix_matrix33,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix invert not stock,2,inferred
+ND_invertmatrix_matrix44,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix invert not stock,2,inferred
+ND_determinant_matrix33,matrix,false,STOCK_EXPANDED,ValueNode (folded literal),Determinant of matrix literal is static; no stock node,1,inferred
+ND_determinant_matrix44,matrix,false,STOCK_EXPANDED,ValueNode (folded literal),Determinant of matrix literal is static; no stock node,1,inferred
+ND_transformmatrix_vector2m3,matrix,false,STOCK_EXPANDED,VectorTransformNode,Transform-matrix not a stock socket; baked into transform,2,inferred
+ND_transformmatrix_vector3,matrix,false,STOCK_EXPANDED,VectorTransformNode,Transform-matrix not a stock socket; baked into transform,2,inferred
+ND_transformmatrix_vector3m4,matrix,false,STOCK_EXPANDED,VectorTransformNode,Transform-matrix not a stock socket; baked into transform,2,inferred
+ND_transformmatrix_vector4,matrix,false,STOCK_EXPANDED,VectorTransformNode,Transform-matrix not a stock socket; baked into transform,2,inferred
+ND_switch_float,switch,true,STOCK,MixNode (MIX),None,1,measured
+ND_switch_color3,switch,true,STOCK,MixColorNode / MixNode,None,1,measured
+ND_switch_vector3,switch,true,STOCK,MixVectorNode,None,1,measured
+ND_switch_vector4,switch,false,STOCK_EXPANDED,MixVectorNode (XYZ) + MathNode (W),Vector4 W sidecar not stock,3,inferred
+ND_switch_matrix33,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix switch not stock,2,inferred
+ND_switch_matrix44,matrix,false,STOCK_EXPANDED,TextureCoordinateNode (ob_tfm baked),Matrix switch not stock,2,inferred
+ND_ifgreater_color3,conditional,true,STOCK,MixColorNode (BLEND) + compare chain,Exact predicate chain,3,inferred
+ND_ifequal_color3,conditional,true,STOCK,MixColorNode (BLEND) + compare chain,Exact predicate chain,3,inferred
+ND_ifgreatereq_color3,conditional,true,STOCK,MixColorNode (BLEND) + compare chain,Exact predicate chain,3,inferred
+ND_ifgreater_vector3,conditional,true,STOCK,MixVectorNode + compare chain,Exact predicate chain,3,inferred
+ND_ifequal_vector3,conditional,true,STOCK,MixVectorNode + compare chain,Exact predicate chain,3,inferred
+ND_ifgreatereq_vector3,conditional,true,STOCK,MixVectorNode + compare chain,Exact predicate chain,3,inferred
+ND_ifgreater_color4,conditional,true,STOCK_EXPANDED,MixColorNode (RGB) + MathNode chain (W),Color4 W sidecar not stock,4,inferred
+ND_ifequal_color4,conditional,true,STOCK_EXPANDED,MixColorNode (RGB) + MathNode chain (W),Color4 W sidecar not stock,4,inferred
+ND_ifgreatereq_color4,conditional,true,STOCK_EXPANDED,MixColorNode (RGB) + MathNode chain (W),Color4 W sidecar not stock,4,inferred
+ND_ifgreater_vector4,conditional,false,STOCK_EXPANDED,MixVectorNode (XYZ) + MathNode chain (W),Vector4 W sidecar not stock,4,inferred
+ND_ifequal_vector4,conditional,false,STOCK_EXPANDED,MixVectorNode (XYZ) + MathNode chain (W),Vector4 W sidecar not stock,4,inferred
+ND_ifgreatereq_vector4,conditional,false,STOCK_EXPANDED,MixVectorNode (XYZ) + MathNode chain (W),Vector4 W sidecar not stock,4,inferred
