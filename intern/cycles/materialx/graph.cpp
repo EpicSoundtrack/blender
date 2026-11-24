@@ -26127,7 +26127,11 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
            *   view-independent mix(1, coat_color, coat); equal at normal incidence.
            * - The separate sheen lobe (AddClosure) and transmission lobe
            *   (MixClosure) below are composed outside Principled, so they are not
-           *   under the coat layer: the coat covers the Principled base only. */
+           *   under the coat layer: the coat covers the Principled base only. The
+           *   sheen lobe also still adds to an unattenuated base (separate issue).
+           * - Emission is attenuated by the coat albedo and Coat Tint, not by the
+           *   reference's coat_color * (1 - F0) generalized-Schlick EDF blend.
+           * - The kernel clamps Coat IOR to >= 1. */
           principled->set_coat_roughness(0.1f);
           if (const auto input = node.inputs.find("coat"); input != node.inputs.end()) {
             principled->set_coat_weight(input->second);
@@ -26143,13 +26147,10 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           if (const auto input = node.inputs.find("coat_IOR"); input != node.inputs.end()) {
             principled->set_coat_ior(input->second);
           }
-          /* An unlinked Coat Normal follows Principled's own Normal in the kernel,
-           * which keeps the previous coat_normal -> normal fallback. */
-          if (const auto input = node.vector3_inputs.find("coat_normal");
-              input != node.vector3_inputs.end())
-          {
-            principled->set_coat_normal(input->second);
-          }
+          /* coat_normal: an unauthored or unlinked Coat Normal is the shading
+           * normal (ShaderGraph::default_inputs), matching the reference default
+           * (Nworld) -- the coat no longer follows a linked base `normal`. A literal
+           * is seeded through a constant node in the connect phase. */
         }
 
         if (closure == principled->output("BSDF")) {
@@ -33139,6 +33140,18 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         connect_if_linked("coat_roughness", "Coat Roughness");
         connect_if_linked("coat_IOR", "Coat IOR");
         connect_if_linked("coat_normal", "Coat Normal");
+        if (const auto literal = node.vector3_inputs.find("coat_normal");
+            literal != node.vector3_inputs.end() && !node.links.contains("coat_normal"))
+        {
+          /* An unlinked LINK_NORMAL socket is replaced by the shading normal, so seed
+           * the literal through a constant vector node, as gltf_pbr clearcoat_normal. */
+          VectorMathNode *constant = graph->create_node<VectorMathNode>();
+          constant->name = node.name + ".coat_normal";
+          constant->set_math_type(NODE_VECTOR_MATH_ADD);
+          constant->set_vector1(literal->second);
+          constant->set_vector2(zero_float3());
+          graph->connect(constant->output("Vector"), surface_node->input("Coat Normal"));
+        }
       }
       if (!surface_shader_node_has_surface_shader_consumer(source, node.name)) {
         graph->connect(closure, graph->output()->input("Surface"));

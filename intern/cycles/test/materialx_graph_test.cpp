@@ -20736,6 +20736,7 @@ TEST(materialx_graph, lowers_standard_surface_coat_to_native_principled_coat)
     surface.inputs["coat"] = 1.0f;
     surface.color3_inputs["coat_color"] = make_float3(0.9f, 0.8f, 0.7f);
     surface.inputs["coat_IOR"] = 1.4f;
+    surface.vector3_inputs["coat_normal"] = make_float3(0.0f, 0.6f, 0.8f);
     surface.outputs["out"] = materialx::Type::SurfaceShader;
     ShaderGraph graph;
     string error;
@@ -20753,6 +20754,15 @@ TEST(materialx_graph, lowers_standard_surface_coat_to_native_principled_coat)
     /* Unauthored coat_roughness takes the standard_surface default, not Principled's. */
     EXPECT_FLOAT_EQ(principled->get_coat_roughness(), 0.1f);
     EXPECT_FLOAT_EQ(principled->get_coat_ior(), 1.4f);
+    /* An unlinked LINK_NORMAL socket becomes the shading normal; a literal coat_normal
+     * must reach Coat Normal through a constant node. */
+    ASSERT_NE(principled->input("Coat Normal")->link, nullptr);
+    auto *coat_normal = dynamic_cast<VectorMathNode *>(
+        principled->input("Coat Normal")->link->parent);
+    ASSERT_NE(coat_normal, nullptr);
+    EXPECT_EQ(coat_normal->get_math_type(), NODE_VECTOR_MATH_ADD);
+    EXPECT_EQ(coat_normal->get_vector1(), make_float3(0.0f, 0.6f, 0.8f));
+    EXPECT_EQ(coat_normal->get_vector2(), zero_float3());
     EXPECT_EQ(graph.output()->input("Surface")->link, principled->output("BSDF"));
   }
   {
@@ -24131,14 +24141,34 @@ TEST(materialx_graph, standard_surface_sheen_coat_weights_preserve_hdr_and_neste
           }
           graph.expand_weights();
           int leaves = 0;
+          int principled_count = 0;
           for (ShaderNode *node : graph.nodes) {
-            if (dynamic_cast<SheenBsdfNode *>(node) || dynamic_cast<GlossyBsdfNode *>(node)) {
+            EXPECT_EQ(dynamic_cast<GlossyBsdfNode *>(node), nullptr);
+            if (dynamic_cast<SheenBsdfNode *>(node)) {
               ++leaves;
               ss_audit_expect_color(ss_audit_effective_color(node),
                                     color * weight * (nested ? 0.4f : 1.0f));
             }
+            /* fix-ss-coat-20261124: the coat is Principled's native layered coat; its
+             * weight and (unscaled) tint reach the Coat sockets, literal or linked. */
+            if (auto *principled = dynamic_cast<PrincipledBsdfNode *>(node)) {
+              ++principled_count;
+              if (linked_weight) {
+                EXPECT_NE(principled->input("Coat Weight")->link, nullptr);
+              }
+              else {
+                EXPECT_FLOAT_EQ(principled->get_coat_weight(), weight);
+              }
+              if (linked_color) {
+                EXPECT_NE(principled->input("Coat Tint")->link, nullptr);
+              }
+              else {
+                EXPECT_EQ(principled->get_coat_tint(), color);
+              }
+            }
           }
-          EXPECT_EQ(leaves, 2);
+          EXPECT_EQ(leaves, 1);
+          EXPECT_EQ(principled_count, 1);
         }
       }
     }
@@ -24160,10 +24190,14 @@ TEST(materialx_graph, standard_surface_optional_lobes_use_mapped_sdk_defaults)
       ss_audit_expect_color(ss_audit_color_input(sheen->input("Color")), make_float3(0.25f));
       EXPECT_FLOAT_EQ(sheen->get_roughness(), 0.3f);
     }
-    if (auto *coat = dynamic_cast<GlossyBsdfNode *>(node)) {
+    EXPECT_EQ(dynamic_cast<GlossyBsdfNode *>(node), nullptr);
+    if (auto *principled = dynamic_cast<PrincipledBsdfNode *>(node)) {
+      /* fix-ss-coat-20261124: Principled native coat with the SDK defaults. */
       ++seen;
-      ss_audit_expect_color(ss_audit_color_input(coat->input("Color")), make_float3(0.25f));
-      EXPECT_FLOAT_EQ(coat->get_roughness(), 0.1f);
+      EXPECT_FLOAT_EQ(principled->get_coat_weight(), 0.25f);
+      EXPECT_EQ(principled->get_coat_tint(), one_float3());
+      EXPECT_FLOAT_EQ(principled->get_coat_roughness(), 0.1f);
+      EXPECT_FLOAT_EQ(principled->get_coat_ior(), 1.5f);
     }
     if (auto *glass = dynamic_cast<MaterialXGlassBsdfNode *>(node)) {
       ++seen;
