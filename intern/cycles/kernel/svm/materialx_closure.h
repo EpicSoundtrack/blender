@@ -72,8 +72,8 @@ ccl_device_noinline int svm_node_materialx_closure_bsdf(
   switch (type) {
     case CLOSURE_BSDF_PHYSICAL_CONDUCTOR:
     case CLOSURE_BSDF_F82_CONDUCTOR: {
-      const ccl_global SVMNodeMaterialXMetallicBsdfData &cdata = svm_node_get<SVMNodeMaterialXMetallicBsdfData>(
-          kg, &offset);
+      const ccl_global SVMNodeMaterialXMetallicBsdfData &cdata =
+          svm_node_get<SVMNodeMaterialXMetallicBsdfData>(kg, &offset);
 
 #ifdef __CAUSTICS_TRICKS__
       if (!kernel_data.integrator.caustics_reflective &&
@@ -82,9 +82,9 @@ ccl_device_noinline int svm_node_materialx_closure_bsdf(
         break;
       }
 #endif
-      const Spectrum metallic_weight =
-          (type == CLOSURE_BSDF_PHYSICAL_CONDUCTOR) ? closure_weight * mix_weight :
-                                                    rgb_to_spectrum(make_float3(mix_weight));
+      const Spectrum metallic_weight = (type == CLOSURE_BSDF_PHYSICAL_CONDUCTOR) ?
+                                           closure_weight * mix_weight :
+                                           rgb_to_spectrum(make_float3(mix_weight));
       ccl_private MicrofacetBsdf *bsdf = (ccl_private MicrofacetBsdf *)bsdf_alloc(
           sd, sizeof(MicrofacetBsdf), metallic_weight);
 
@@ -124,7 +124,6 @@ ccl_device_noinline int svm_node_materialx_closure_bsdf(
           else {
             bsdf->T = zero_float3();
           }
-
         }
 
         bsdf->N = valid_reflection_N;
@@ -186,8 +185,8 @@ ccl_device_noinline int svm_node_materialx_closure_bsdf(
     case CLOSURE_BSDF_MICROFACET_GGX_GLASS_ID:
     case CLOSURE_BSDF_MICROFACET_BECKMANN_GLASS_ID:
     case CLOSURE_BSDF_MICROFACET_MULTI_GGX_GLASS_ID: {
-      const ccl_global SVMNodeMaterialXGlassBsdfData &bsdf_data = svm_node_get<SVMNodeMaterialXGlassBsdfData>(
-          kg, &offset);
+      const ccl_global SVMNodeMaterialXGlassBsdfData &bsdf_data =
+          svm_node_get<SVMNodeMaterialXGlassBsdfData>(kg, &offset);
 
 #ifdef __CAUSTICS_TRICKS__
       const bool reflective_caustics = (kernel_data.integrator.caustics_reflective ||
@@ -266,7 +265,8 @@ ccl_device_noinline int svm_node_materialx_closure_bsdf(
     case CLOSURE_BSSRDF_RANDOM_WALK_ID:
     case CLOSURE_BSSRDF_RANDOM_WALK_LEGACY_ID:
     case CLOSURE_BSSRDF_RANDOM_WALK_SKIN_ID: {
-      const ccl_global SVMNodeMaterialXBssrdfData &bsdf_data = svm_node_get<SVMNodeMaterialXBssrdfData>(kg, &offset);
+      const ccl_global SVMNodeMaterialXBssrdfData &bsdf_data =
+          svm_node_get<SVMNodeMaterialXBssrdfData>(kg, &offset);
       float3 N = stack_load_float3_default(stack, bsdf_data.normal_offset, sd->N);
       N = safe_normalize_fallback(N, sd->N);
 

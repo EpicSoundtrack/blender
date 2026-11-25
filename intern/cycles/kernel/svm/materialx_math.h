@@ -50,7 +50,8 @@ ccl_device_noinline void svm_node_materialx_map_range_derivative(
   const dual1 to_max = stack_load<dual1>(stack, node.to_max);
 
   const dual1 result = (from_max.val != from_min.val) ?
-                           to_min + (value - from_min) / (from_max - from_min) * (to_max - to_min) :
+                           to_min +
+                               (value - from_min) / (from_max - from_min) * (to_max - to_min) :
                            dual1(0.0f);
   stack_store(stack, node.result_offset, result);
 }

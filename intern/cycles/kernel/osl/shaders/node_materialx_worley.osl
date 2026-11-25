@@ -8,7 +8,8 @@
 
 /* MaterialX mx_worley_noise (mx_noise.glsl, which ports MaterialX genosl's
  * cellnoise-based Worley): returns F1..F3, or the solid cell value. */
-color mtlx_worley_noise(vector3 p, int dims, float jitter, int style, int metric, int vector_output)
+color mtlx_worley_noise(
+    vector3 p, int dims, float jitter, int style, int metric, int vector_output)
 {
   vector3 cell = floor(p);
   vector3 localpos = p - cell;

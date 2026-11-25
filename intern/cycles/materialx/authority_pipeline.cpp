@@ -10,9 +10,9 @@
 #include <pxr/usd/usdShade/material.h>
 
 #include "materialx/graph.h"
+#include "materialx/sha256.h"
 #include "materialx/usdshade_reader.h"
 #include "util/path.h"
-#include "materialx/sha256.h"
 
 CCL_NAMESPACE_BEGIN
 
@@ -153,7 +153,7 @@ bool authenticate_resolved_fixture_bytes(const Graph &graph,
     const auto digest = fixture_digests.find(file->second);
     if (digest == fixture_digests.end()) {
       set_error(error_message,
-               "No manifest-authenticated fixture digest for asset path: " + file->second);
+                "No manifest-authenticated fixture digest for asset path: " + file->second);
       return false;
     }
     vector<uint8_t> bytes;
@@ -161,13 +161,13 @@ bool authenticate_resolved_fixture_bytes(const Graph &graph,
       set_error(error_message, "Fixture asset could not be read: " + file->second);
       return false;
     }
-    const string actual_digest =
-        "sha256:" +
-        materialx_sha256_string(string(reinterpret_cast<const char *>(bytes.data()), bytes.size()));
+    const string actual_digest = "sha256:" +
+                                 materialx_sha256_string(string(
+                                     reinterpret_cast<const char *>(bytes.data()), bytes.size()));
     if (actual_digest != digest->second) {
       set_error(error_message,
-               "Fixture digest mismatch for asset path: " + file->second + " (expected " +
-                   digest->second + ", got " + actual_digest + ")");
+                "Fixture digest mismatch for asset path: " + file->second + " (expected " +
+                    digest->second + ", got " + actual_digest + ")");
       return false;
     }
   }

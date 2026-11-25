@@ -26,7 +26,8 @@ ccl_device_inline FloatType materialx_surface_attribute_float(KernelGlobals kg,
                                                               const AttributeDescriptor desc)
 {
   FloatType f = primitive_surface_attribute<FloatType>(kg, sd, desc);
-  if (!(sd->type & PRIMITIVE_TRIANGLE) || (desc.element & (ATTR_ELEMENT_OBJECT | ATTR_ELEMENT_MESH)) ||
+  if (!(sd->type & PRIMITIVE_TRIANGLE) ||
+      (desc.element & (ATTR_ELEMENT_OBJECT | ATTR_ELEMENT_MESH)) ||
       !(desc.element & (ATTR_ELEMENT_VERTEX | ATTR_ELEMENT_CORNER)))
   {
     return f;

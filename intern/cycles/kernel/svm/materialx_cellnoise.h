@@ -117,8 +117,11 @@ ccl_device_inline bool mtlx_worley_insert(const float dist, ccl_private float3 *
 /* mx_worley_noise_{float,vec2,vec3}(vec2 p, jitter, style, metric). Returns
  * (F1, F2, F3) for style 0; for style 1 (solid) mx_cell_noise_vec3 of the
  * nearest feature point when vector_output, else (mx_cell_noise_float, 0, 0). */
-ccl_device float3 mtlx_worley_noise(
-    const float2 p, const float jitter, const int style, const int metric, const bool vector_output)
+ccl_device float3 mtlx_worley_noise(const float2 p,
+                                    const float jitter,
+                                    const int style,
+                                    const int metric,
+                                    const bool vector_output)
 {
   int X, Y;
   const float2 localpos = make_float2(floorfrac(p.x, &X), floorfrac(p.y, &Y));
@@ -149,8 +152,11 @@ ccl_device float3 mtlx_worley_noise(
   return sqdist;
 }
 
-ccl_device float3 mtlx_worley_noise(
-    const float3 p, const float jitter, const int style, const int metric, const bool vector_output)
+ccl_device float3 mtlx_worley_noise(const float3 p,
+                                    const float jitter,
+                                    const int style,
+                                    const int metric,
+                                    const bool vector_output)
 {
   int X, Y, Z;
   const float3 localpos = make_float3(floorfrac(p.x, &X), floorfrac(p.y, &Y), floorfrac(p.z, &Z));
@@ -224,13 +230,10 @@ ccl_device_noinline void svm_node_materialx_worley(
   const int style = (node.mode & 2u) ? 1 : 0;
   const bool vector_output = (node.mode & 4u) != 0;
   const int metric = int((node.mode >> 3) & 3u);
-  const float3 result = node.dimensions == 2 ?
-                            mtlx_worley_noise(make_float2(coord.x, coord.y),
-                                              jitter,
-                                              style,
-                                              metric,
-                                              vector_output) :
-                            mtlx_worley_noise(coord, jitter, style, metric, vector_output);
+  const float3 result =
+      node.dimensions == 2 ?
+          mtlx_worley_noise(make_float2(coord.x, coord.y), jitter, style, metric, vector_output) :
+          mtlx_worley_noise(coord, jitter, style, metric, vector_output);
   if (stack_valid(node.distance_offset)) {
     stack_store_float(stack,
                       node.distance_offset,

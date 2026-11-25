@@ -4,18 +4,18 @@
 
 #pragma once
 
-#include "util/math.h"
 #include "kernel/svm/node_types.h"
 #include "kernel/svm/util.h"
+#include "util/math.h"
 
 CCL_NAMESPACE_BEGIN
 
 /* MaterialX genosl/mx_heighttonormal_vector3.osl. Derivatives are per screen
  * pixel, and the cross product is formed in texture/height coordinates. */
 ccl_device_inline float3 materialx_heighttonormal(const float2 height_derivative,
-                                                   const float2 uv_dx,
-                                                   const float2 uv_dy,
-                                                   const float scale)
+                                                  const float2 uv_dx,
+                                                  const float2 uv_dy,
+                                                  const float scale)
 {
   const float2 dH = height_derivative * (scale * (1.0f / 16.0f));
   const float3 tangent = make_float3(uv_dx.x, uv_dx.y, dH.x);

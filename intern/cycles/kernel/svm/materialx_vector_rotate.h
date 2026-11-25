@@ -68,11 +68,10 @@ ccl_device_noinline void svm_node_materialx_vector_rotate(
   }
   float angle = stack_load(stack, node.angle);
   angle = node.invert ? -angle : angle;
-  const float3 result = (axis_length != 0.0f) ?
-                            materialx_rotate_around_axis(
-                                vector - center, axis / axis_length, angle) +
-                                center :
-                            vector;
+  const float3 result = (axis_length != 0.0f) ? materialx_rotate_around_axis(
+                                                    vector - center, axis / axis_length, angle) +
+                                                    center :
+                                                vector;
   stack_store_float3(stack, node.result_offset, result);
 }
 
