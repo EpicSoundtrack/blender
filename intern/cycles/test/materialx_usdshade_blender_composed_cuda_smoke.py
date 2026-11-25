@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Composed MaterialX authority smoke for Cycles CPU/CUDA parity."""
 
 import bpy

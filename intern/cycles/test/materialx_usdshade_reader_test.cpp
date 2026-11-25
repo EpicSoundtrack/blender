@@ -43950,7 +43950,7 @@ TEST(materialx_usdshade_reader, materialx_multiply_all_carriers_fold_nan_and_mat
 TEST(materialx_usdshade_reader, retained_multiply_float_r2_dual_point_links_survive_folding)
 {
   /* Retained copy of a USDA document captured from an actual import that
-   * reproduced the dual-point-link shape; content identical, LF line endings. */
+   * reproduced the dual-point-link shape (LF line endings, SPDX header added). */
   const std::string path = std::string(CYCLES_MATERIALX_TEST_SOURCE_DIR) +
                            "/materialx_multiply_float_r2_dual_point_links.usda";
   auto stage = pxr::UsdStage::Open(path);

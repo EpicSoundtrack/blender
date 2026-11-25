@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Non-render contract test for _cycles.materialx_validate_authority."""
 
 import hashlib

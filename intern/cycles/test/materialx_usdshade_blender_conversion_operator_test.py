@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Headless authority-contract test for the minimal Cycles MaterialX conversion operator."""
 
 import bpy

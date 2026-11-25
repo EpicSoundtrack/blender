@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Headless Blender smoke for canonical USDShade MaterialX authority in Cycles.
 
 The Blender node tree is deliberately red. The canonical hidden-Text authority

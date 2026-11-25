@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Headless end-to-end texture smoke for canonical USDShade MaterialX authority.
 
 This deliberately uses a red Blender node graph as a decoy.  The render must

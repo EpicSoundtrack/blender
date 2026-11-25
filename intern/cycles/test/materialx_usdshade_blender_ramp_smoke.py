@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Blender Authors
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Headless authority smoke for the exact MaterialX top-to-bottom color ramp."""
 
 import bpy
