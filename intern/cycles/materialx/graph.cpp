@@ -3504,6 +3504,310 @@ float sheen_microfiber_literal_roughness(const Node &node)
                                         roughness;
 }
 
+/* MaterialX-reference sheen LAYERING for the standard_surface sheen lobe
+ * (fix-sheen-layering-20261125, ruling Q26).
+ *
+ * libraries/bxdf/standard_surface.mtlx composes sheen as
+ *   sheen_layer = <layer top: sheen_bsdf(weight sheen, color sheen_color,
+ *                  roughness sheen_roughness), base: the lobes below>
+ * and a sheen_bsdf top layer ATTENUATES its base. The genglsl reference
+ * (libraries/pbrlib/genglsl/mx_sheen_bsdf.glsl) multiplies the base by
+ *   throughput = 1 - weight * dirAlbedo(NdotV, roughness)
+ * with dirAlbedo = clamp(mx_imageworks_sheen_dir_albedo_analytic(NdotV, roughness), 0, 1),
+ * the Conty-Kulla directional-albedo rational fit of
+ * libraries/pbrlib/genglsl/lib/mx_microfacet_sheen.glsl:
+ *   dirAlbedo = rx / ry,
+ *   (rx, ry) = (13.67300, 1.0) + (-68.78018, 61.57746) x + (799.08825, 442.78211) r
+ *            + (-905.00061, 2597.49308) x r + (60.28956, 121.81241) x^2
+ *            + (1086.96473, 3045.55075) r^2,  x = NdotV.
+ * genmdl (libraries/mdl/materialx/pbrlib_1_10.mdl mx_sheen_bsdf) layers the same way
+ * through df::weighted_layer over the base. The previous lowering ADDED the lobe beside
+ * the unattenuated base, which created energy (white-furnace violation at sheen 1).
+ *
+ * This builds fac = weight * dirAlbedo from stock nodes into `fac_target`, the Fac of a
+ * MixClosure whose second closure is unconnected: the kernel then weights the base by
+ * 1 - saturate(fac) (svm/closure.h svm_node_mix_closure), the reference throughput.
+ *  - x = clamp(|dot(N, Incoming)|, 0, 1). GeometryNode "Incoming" is sd->wi, the genglsl
+ *    V; |.| is the reference's forward-facing normal, and the clamp matches the
+ *    reference's clamp(NdotV, eps, 1) except for the negligible eps floor (the fit is
+ *    finite and smooth at x = 0). N is the lobe's normal source: the linked or literal
+ *    standard_surface `normal`, else the shading normal.
+ *  - The RAW sheen_roughness feeds the fit (the reference evaluates its own roughness);
+ *    the Conty-Kulla -> microfiber energy remap applies to the Cycles lobe only.
+ *  - A literal roughness folds the r terms into the two quadratics' coefficients here; a
+ *    linked one builds them from MULTIPLY_ADD nodes (constant sources constant-fold).
+ *  - dirAlbedo is clamped to [0, 1] (DIVIDE, use_clamp) as the reference clamps it, and
+ *    fac to [0, 1] (MULTIPLY, use_clamp), matching the kernel's saturate.
+ * The lobe Cycles actually adds is NOT the Conty-Kulla lobe: it is Cycles microfiber
+ * (the Zeltner model) at the energy-matched roughness r' of
+ * sheen_conty_kulla_microfiber_roughness(). The remap equates cosine-weighted AVERAGE
+ * albedo only, so at mid angles the microfiber lobe reflects more than the Conty-Kulla
+ * albedo the reference subtracts, and the pure reference throughput would create energy
+ * again (measured up to +0.063 at sheen 1, NdotV 0.4, r 0.6 on the production LUT).
+ * dirAlbedo is therefore guarded with the SAME reference file's directional albedo of
+ * the lobe model actually added: mx_zeltner_sheen_dir_albedo(x, r'), the Gaussian fit
+ * ("Practical Multiple-Scattering Sheen Using Linearly Transformed Cosines", Zeltner et
+ * al.; libraries/pbrlib/genglsl/lib/mx_microfacet_sheen.glsl):
+ *   E_Z = exp(-0.5 ((x - m)/s)^2) / (s sqrt(2 pi)) + o,  with s(y), m(y), o(y) the
+ *   fitted rationals in y = r'. (No 0.01 roughness clamp is needed: r' >= 0.247, the
+ *   remap of the 0.005 Conty-Kulla roughness floor.)
+ *   fac = weight * max(dirAlbedo_conty_kulla(x, r), E_Z(x, r')).
+ * Where the Conty-Kulla term dominates (notably grazing angles) the base attenuation is
+ * EXACTLY the reference term; where the remapped lobe carries more energy, the base is
+ * attenuated by that lobe's own reference albedo instead, which keeps the white-furnace
+ * bound to within the zeltner-fit-vs-LTC-table residual (measured <= +0.0023).
+ *
+ * Documented APPROXIMATIONS: the max() energy guard above (a deviation from the pure
+ * reference throughput only where the pre-existing lobe approximation would otherwise
+ * create energy); the scalar throughput attenuates the whole Principled base INCLUDING
+ * its emission (the reference layers BSDFs only; Cycles' own native Principled sheen
+ * attenuates emission the same way, svm/closure.h principled_bsdf_emission); and the
+ * sheen layer stays composed outside Principled, so it is not under the coat (the
+ * reference nests sheen under the coat; same pre-existing composition-order
+ * approximation documented at the coat lowering). */
+constexpr float sheen_dir_albedo_c0[2] = {13.67300f, 1.0f};
+constexpr float sheen_dir_albedo_cx[2] = {-68.78018f, 61.57746f};
+constexpr float sheen_dir_albedo_cx2[2] = {60.28956f, 121.81241f};
+constexpr float sheen_dir_albedo_cr[2] = {799.08825f, 442.78211f};
+constexpr float sheen_dir_albedo_cxr[2] = {-905.00061f, 2597.49308f};
+constexpr float sheen_dir_albedo_cr2[2] = {1086.96473f, 3045.55075f};
+
+void connect_standard_surface_sheen_layer_attenuation(ShaderGraph *graph,
+                                                      const string &name,
+                                                      ShaderOutput *normal,
+                                                      const float3 *literal_normal,
+                                                      ShaderOutput *roughness,
+                                                      const float literal_roughness,
+                                                      ShaderOutput *lobe_roughness,
+                                                      const float literal_lobe_roughness,
+                                                      ShaderOutput *weight,
+                                                      const float literal_weight,
+                                                      ShaderInput *fac_target)
+{
+  GeometryNode *geometry = graph->create_node<GeometryNode>();
+  geometry->name = name + ".geometry";
+  VectorMathNode *ndotv = graph->create_node<VectorMathNode>();
+  ndotv->name = name + ".ndotv";
+  ndotv->set_math_type(NODE_VECTOR_MATH_DOT_PRODUCT);
+  if (normal != nullptr) {
+    graph->connect(normal, ndotv->input("Vector1"));
+  }
+  else if (literal_normal != nullptr) {
+    ndotv->set_vector1(*literal_normal);
+  }
+  else {
+    graph->connect(geometry->output("Normal"), ndotv->input("Vector1"));
+  }
+  graph->connect(geometry->output("Incoming"), ndotv->input("Vector2"));
+  MathNode *x = graph->create_node<MathNode>();
+  x->name = name + ".ndotv_clamp";
+  x->set_math_type(NODE_MATH_ABSOLUTE);
+  x->set_use_clamp(true);
+  graph->connect(ndotv->output("Value"), x->input("Value1"));
+
+  /* One half of the rational fit, as Horner MULTIPLY_ADDs in x: (cx2 x + a1) x + a0,
+   * a1 = cx + cxr r and a0 = c0 + (cr + cr2 r) r. */
+  const auto quadratic = [&](const int half, const string &suffix) {
+    ShaderOutput *linear_coefficient = nullptr;
+    ShaderOutput *constant_coefficient = nullptr;
+    float linear_value = sheen_dir_albedo_cx[half];
+    float constant_value = sheen_dir_albedo_c0[half];
+    if (roughness != nullptr) {
+      MathNode *linear = graph->create_node<MathNode>();
+      linear->name = name + suffix + "_r1";
+      linear->set_math_type(NODE_MATH_MULTIPLY_ADD);
+      linear->set_value2(sheen_dir_albedo_cxr[half]);
+      linear->set_value3(sheen_dir_albedo_cx[half]);
+      graph->connect(roughness, linear->input("Value1"));
+      linear_coefficient = linear->output("Value");
+      MathNode *constant_r = graph->create_node<MathNode>();
+      constant_r->name = name + suffix + "_r2";
+      constant_r->set_math_type(NODE_MATH_MULTIPLY_ADD);
+      constant_r->set_value2(sheen_dir_albedo_cr2[half]);
+      constant_r->set_value3(sheen_dir_albedo_cr[half]);
+      graph->connect(roughness, constant_r->input("Value1"));
+      MathNode *constant = graph->create_node<MathNode>();
+      constant->name = name + suffix + "_r0";
+      constant->set_math_type(NODE_MATH_MULTIPLY_ADD);
+      constant->set_value3(sheen_dir_albedo_c0[half]);
+      graph->connect(constant_r->output("Value"), constant->input("Value1"));
+      graph->connect(roughness, constant->input("Value2"));
+      constant_coefficient = constant->output("Value");
+    }
+    else {
+      linear_value = sheen_dir_albedo_cx[half] + sheen_dir_albedo_cxr[half] * literal_roughness;
+      constant_value = sheen_dir_albedo_c0[half] +
+                       (sheen_dir_albedo_cr[half] +
+                        sheen_dir_albedo_cr2[half] * literal_roughness) *
+                           literal_roughness;
+    }
+    MathNode *inner = graph->create_node<MathNode>();
+    inner->name = name + suffix + "_x1";
+    inner->set_math_type(NODE_MATH_MULTIPLY_ADD);
+    inner->set_value2(sheen_dir_albedo_cx2[half]);
+    graph->connect(x->output("Value"), inner->input("Value1"));
+    if (linear_coefficient != nullptr) {
+      graph->connect(linear_coefficient, inner->input("Value3"));
+    }
+    else {
+      inner->set_value3(linear_value);
+    }
+    MathNode *outer = graph->create_node<MathNode>();
+    outer->name = name + suffix;
+    outer->set_math_type(NODE_MATH_MULTIPLY_ADD);
+    graph->connect(inner->output("Value"), outer->input("Value1"));
+    graph->connect(x->output("Value"), outer->input("Value2"));
+    if (constant_coefficient != nullptr) {
+      graph->connect(constant_coefficient, outer->input("Value3"));
+    }
+    else {
+      outer->set_value3(constant_value);
+    }
+    return outer->output("Value");
+  };
+
+  MathNode *albedo = graph->create_node<MathNode>();
+  albedo->name = name + ".albedo";
+  albedo->set_math_type(NODE_MATH_DIVIDE);
+  albedo->set_use_clamp(true);
+  graph->connect(quadratic(0, ".albedo_num"), albedo->input("Value1"));
+  graph->connect(quadratic(1, ".albedo_den"), albedo->input("Value2"));
+
+  /* The energy guard: E_Z = mx_zeltner_sheen_dir_albedo(x, y), y the microfiber lobe
+   * roughness r'. Gaussian in x with the fitted rationals s(y), m(y), o(y); a literal
+   * roughness folds them here, a linked one builds them from Math nodes. */
+  ShaderOutput *zeltner = nullptr;
+  constexpr float inv_sqrt_two_pi = 0.398942280f;
+  if (lobe_roughness == nullptr) {
+    const float y = literal_lobe_roughness;
+    const float s = y * (0.0206607f + 1.58491f * y) / (0.0379424f + y * (1.32227f + y));
+    const float m = y * (-0.193854f + y * (-1.14885f + y * (1.7932f - 0.95943f * y * y))) /
+                    (0.046391f + y);
+    const float o = y * (0.000654023f + (-0.0207818f + 0.119681f * y) * y) /
+                    (1.26264f + y * (-1.92021f + y));
+    MathNode *t = graph->create_node<MathNode>();
+    t->name = name + ".zeltner_t";
+    t->set_math_type(NODE_MATH_MULTIPLY_ADD);
+    t->set_value2(1.0f / s);
+    t->set_value3(-m / s);
+    graph->connect(x->output("Value"), t->input("Value1"));
+    MathNode *t2 = graph->create_node<MathNode>();
+    t2->name = name + ".zeltner_t2";
+    t2->set_math_type(NODE_MATH_MULTIPLY);
+    graph->connect(t->output("Value"), t2->input("Value1"));
+    graph->connect(t->output("Value"), t2->input("Value2"));
+    MathNode *e = graph->create_node<MathNode>();
+    e->name = name + ".zeltner_e";
+    e->set_math_type(NODE_MATH_MULTIPLY);
+    e->set_value2(-0.5f);
+    graph->connect(t2->output("Value"), e->input("Value1"));
+    MathNode *g = graph->create_node<MathNode>();
+    g->name = name + ".zeltner_g";
+    g->set_math_type(NODE_MATH_EXPONENT);
+    graph->connect(e->output("Value"), g->input("Value1"));
+    MathNode *ez = graph->create_node<MathNode>();
+    ez->name = name + ".zeltner";
+    ez->set_math_type(NODE_MATH_MULTIPLY_ADD);
+    ez->set_value2(inv_sqrt_two_pi / s);
+    ez->set_value3(o);
+    graph->connect(g->output("Value"), ez->input("Value1"));
+    zeltner = ez->output("Value");
+  }
+  else {
+    const auto scalar = [&](const char *suffix,
+                            const NodeMathType type,
+                            ShaderOutput *value1,
+                            ShaderOutput *value2_link,
+                            const float value2,
+                            ShaderOutput *value3_link,
+                            const float value3) {
+      MathNode *node = graph->create_node<MathNode>();
+      node->name = name + suffix;
+      node->set_math_type(type);
+      graph->connect(value1, node->input("Value1"));
+      if (value2_link != nullptr) {
+        graph->connect(value2_link, node->input("Value2"));
+      }
+      else {
+        node->set_value2(value2);
+      }
+      if (value3_link != nullptr) {
+        graph->connect(value3_link, node->input("Value3"));
+      }
+      else {
+        node->set_value3(value3);
+      }
+      return node->output("Value");
+    };
+    ShaderOutput *y = lobe_roughness;
+    ShaderOutput *y2 = scalar(".zeltner_y2", NODE_MATH_MULTIPLY, y, y, 0.0f, nullptr, 0.0f);
+    /* s(y) = y (0.0206607 + 1.58491 y) / (0.0379424 + y (1.32227 + y)) */
+    ShaderOutput *s_n1 = scalar(
+        ".zeltner_s_n1", NODE_MATH_MULTIPLY_ADD, y, nullptr, 1.58491f, nullptr, 0.0206607f);
+    ShaderOutput *s_n = scalar(".zeltner_s_n", NODE_MATH_MULTIPLY, s_n1, y, 0.0f, nullptr, 0.0f);
+    ShaderOutput *s_d1 = scalar(
+        ".zeltner_s_d1", NODE_MATH_ADD, y, nullptr, 1.32227f, nullptr, 0.0f);
+    ShaderOutput *s_d = scalar(
+        ".zeltner_s_d", NODE_MATH_MULTIPLY_ADD, s_d1, y, 0.0f, nullptr, 0.0379424f);
+    ShaderOutput *s = scalar(".zeltner_s", NODE_MATH_DIVIDE, s_n, s_d, 0.0f, nullptr, 0.0f);
+    /* m(y) = y (-0.193854 + y (-1.14885 + y (1.7932 - 0.95943 y^2))) / (0.046391 + y) */
+    ShaderOutput *m_n1 = scalar(
+        ".zeltner_m_n1", NODE_MATH_MULTIPLY_ADD, y2, nullptr, -0.95943f, nullptr, 1.7932f);
+    ShaderOutput *m_n2 = scalar(
+        ".zeltner_m_n2", NODE_MATH_MULTIPLY_ADD, m_n1, y, 0.0f, nullptr, -1.14885f);
+    ShaderOutput *m_n3 = scalar(
+        ".zeltner_m_n3", NODE_MATH_MULTIPLY_ADD, m_n2, y, 0.0f, nullptr, -0.193854f);
+    ShaderOutput *m_n = scalar(".zeltner_m_n", NODE_MATH_MULTIPLY, m_n3, y, 0.0f, nullptr, 0.0f);
+    ShaderOutput *m_d = scalar(
+        ".zeltner_m_d", NODE_MATH_ADD, y, nullptr, 0.046391f, nullptr, 0.0f);
+    ShaderOutput *m = scalar(".zeltner_m", NODE_MATH_DIVIDE, m_n, m_d, 0.0f, nullptr, 0.0f);
+    /* o(y) = y (0.000654023 + (-0.0207818 + 0.119681 y) y) / (1.26264 + y (-1.92021 + y)) */
+    ShaderOutput *o_n1 = scalar(
+        ".zeltner_o_n1", NODE_MATH_MULTIPLY_ADD, y, nullptr, 0.119681f, nullptr, -0.0207818f);
+    ShaderOutput *o_n2 = scalar(
+        ".zeltner_o_n2", NODE_MATH_MULTIPLY_ADD, o_n1, y, 0.0f, nullptr, 0.000654023f);
+    ShaderOutput *o_n = scalar(".zeltner_o_n", NODE_MATH_MULTIPLY, o_n2, y, 0.0f, nullptr, 0.0f);
+    ShaderOutput *o_d1 = scalar(
+        ".zeltner_o_d1", NODE_MATH_ADD, y, nullptr, -1.92021f, nullptr, 0.0f);
+    ShaderOutput *o_d = scalar(
+        ".zeltner_o_d", NODE_MATH_MULTIPLY_ADD, o_d1, y, 0.0f, nullptr, 1.26264f);
+    ShaderOutput *o = scalar(".zeltner_o", NODE_MATH_DIVIDE, o_n, o_d, 0.0f, nullptr, 0.0f);
+    /* E_Z = exp(-0.5 ((x - m)/s)^2) / (s sqrt(2 pi)) + o */
+    ShaderOutput *xm = scalar(
+        ".zeltner_xm", NODE_MATH_SUBTRACT, x->output("Value"), m, 0.0f, nullptr, 0.0f);
+    ShaderOutput *t = scalar(".zeltner_t", NODE_MATH_DIVIDE, xm, s, 0.0f, nullptr, 0.0f);
+    ShaderOutput *t2 = scalar(".zeltner_t2", NODE_MATH_MULTIPLY, t, t, 0.0f, nullptr, 0.0f);
+    ShaderOutput *e = scalar(".zeltner_e", NODE_MATH_MULTIPLY, t2, nullptr, -0.5f, nullptr, 0.0f);
+    MathNode *g_node = graph->create_node<MathNode>();
+    g_node->name = name + ".zeltner_g";
+    g_node->set_math_type(NODE_MATH_EXPONENT);
+    graph->connect(e, g_node->input("Value1"));
+    ShaderOutput *gs = scalar(
+        ".zeltner_gs", NODE_MATH_DIVIDE, g_node->output("Value"), s, 0.0f, nullptr, 0.0f);
+    zeltner = scalar(".zeltner", NODE_MATH_MULTIPLY_ADD, gs, nullptr, inv_sqrt_two_pi, o, 0.0f);
+  }
+
+  MathNode *albedo_max = graph->create_node<MathNode>();
+  albedo_max->name = name + ".albedo_max";
+  albedo_max->set_math_type(NODE_MATH_MAXIMUM);
+  albedo_max->set_use_clamp(true);
+  graph->connect(albedo->output("Value"), albedo_max->input("Value1"));
+  graph->connect(zeltner, albedo_max->input("Value2"));
+
+  MathNode *fac = graph->create_node<MathNode>();
+  fac->name = name + ".fac";
+  fac->set_math_type(NODE_MATH_MULTIPLY);
+  fac->set_use_clamp(true);
+  graph->connect(albedo_max->output("Value"), fac->input("Value1"));
+  if (weight != nullptr) {
+    graph->connect(weight, fac->input("Value2"));
+  }
+  else {
+    fac->set_value2(literal_weight);
+  }
+  graph->connect(fac->output("Value"), fac_target);
+}
+
 /* ND_gltf_pbr_surfaceshader sheen (gltf_pbr.mtlx, MaterialX 1.39.4): a
  * Conty-Kulla sheen_bsdf with weight = max(sheen_color), color =
  * sheen_color / max(sheen_color) and roughness = sheen_roughness^2, layered
@@ -33301,6 +33605,48 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
         if (const auto link = node.links.find("normal"); link != node.links.end()) {
           graph->connect(lowered_output(link->second, nodes_by_name, lowered_nodes),
                          sheen->input("Normal"));
+        }
+        /* MaterialX-reference LAYERING (fix-sheen-layering-20261125, ruling Q26): the base
+         * is attenuated by 1 - sheen * dirAlbedo(NdotV, sheen_roughness) before the lobe
+         * is added; see connect_standard_surface_sheen_layer_attenuation(). Inactive at a
+         * literal sheen weight <= 0 (the NodeDef default is 0), where the lobe color is
+         * black too and the lowering stays exactly as before. */
+        const auto weight_link = node.links.find("sheen");
+        const float literal_weight = node.inputs.contains("sheen") ? node.inputs.at("sheen") :
+                                                                     0.0f;
+        if (weight_link != node.links.end() || literal_weight > 0.0f) {
+          MixClosureNode *layer = graph->create_node<MixClosureNode>();
+          layer->name = node.name + ".standard_surface_sheen_layer";
+          const auto normal_link = node.links.find("normal");
+          const auto literal_normal = node.vector3_inputs.find("normal");
+          const auto roughness_link = node.links.find("sheen_roughness");
+          const float literal_roughness = node.inputs.contains("sheen_roughness") ?
+                                              node.inputs.at("sheen_roughness") :
+                                              0.3f;
+          /* The energy guard evaluates the lobe's own albedo at the roughness the lobe
+           * actually renders with: the remap chain's output when linked (wired onto the
+           * lobe's Roughness input by connect_sheen_conty_kulla_roughness above), else
+           * the same literal remap the create phase folded. */
+          connect_standard_surface_sheen_layer_attenuation(
+              graph,
+              node.name + ".standard_surface_sheen_layer",
+              normal_link != node.links.end() ?
+                  lowered_output(normal_link->second, nodes_by_name, lowered_nodes) :
+                  nullptr,
+              literal_normal != node.vector3_inputs.end() ? &literal_normal->second : nullptr,
+              roughness_link != node.links.end() ?
+                  lowered_output(roughness_link->second, nodes_by_name, lowered_nodes) :
+                  nullptr,
+              literal_roughness,
+              roughness_link != node.links.end() ? sheen->input("Roughness")->link : nullptr,
+              sheen_conty_kulla_microfiber_roughness(literal_roughness),
+              weight_link != node.links.end() ?
+                  lowered_output(weight_link->second, nodes_by_name, lowered_nodes) :
+                  nullptr,
+              literal_weight,
+              layer->input("Fac"));
+          graph->connect(closure, layer->input("Closure1"));
+          closure = layer->output("Closure");
         }
         graph->connect(closure, sum->input("Closure1"));
         graph->connect(sheen->output("BSDF"), sum->input("Closure2"));

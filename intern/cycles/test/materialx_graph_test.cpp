@@ -28,9 +28,13 @@
 #include "kernel/svm/map_range.h"
 #include "kernel/svm/math.h"
 #include "kernel/svm/color_util.h"
+#include "device/device.h"
 #include "scene/constant_fold.h"
+#include "scene/scene.h"
 #include "scene/shader_graph.h"
 #include "scene/shader_nodes.h"
+#include "util/profiling.h"
+#include "util/stats.h"
 #include "util/color.h"
 #include "util/colorspace.h"
 #include "util/image_metadata.h"
@@ -13283,8 +13287,14 @@ TEST(materialx_graph, standard_surface_mix_helpers_do_not_capture_authored_names
   ASSERT_NE(coat_sum, nullptr);
   ASSERT_NE(native_mix, nullptr);
   ASSERT_NE(coat_sum->input("Closure1")->link, nullptr);
+  /* fix-sheen-layering-20261125: the sheen layering Mix sits between the Principled base
+   * and the additive lobe sum. */
+  auto *sheen_layer = dynamic_cast<MixClosureNode *>(coat_sum->input("Closure1")->link->parent);
+  ASSERT_NE(sheen_layer, nullptr);
+  EXPECT_EQ(sheen_layer->name, "Coated.standard_surface_sheen_layer");
+  ASSERT_NE(sheen_layer->input("Closure1")->link, nullptr);
   auto *coated_base = dynamic_cast<PrincipledBsdfNode *>(
-      coat_sum->input("Closure1")->link->parent);
+      sheen_layer->input("Closure1")->link->parent);
   ASSERT_NE(coated_base, nullptr);
   EXPECT_NE(coated_base->input("Base Color")->link, nullptr);
   ASSERT_NE(native_mix->input("Closure1")->link, nullptr);
@@ -20818,6 +20828,7 @@ TEST(materialx_graph, lowers_standard_surface_to_native_closure_composition)
   MaterialXGlassBsdfNode *transmission = nullptr;
   MixClosureNode *transmission_mix = nullptr;
   AddClosureNode *sheen_sum = nullptr;
+  MixClosureNode *sheen_layer = nullptr;
   size_t glossy_count = 0;
   for (ShaderNode *node : graph.nodes) {
     principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
@@ -20830,6 +20841,9 @@ TEST(materialx_graph, lowers_standard_surface_to_native_closure_composition)
     }
     if (node->name == "StandardSurface.standard_surface_sheen_sum") {
       sheen_sum = dynamic_cast<AddClosureNode *>(node);
+    }
+    if (node->name == "StandardSurface.standard_surface_sheen_layer") {
+      sheen_layer = dynamic_cast<MixClosureNode *>(node);
     }
   }
   ASSERT_NE(principled, nullptr);
@@ -20873,11 +20887,311 @@ TEST(materialx_graph, lowers_standard_surface_to_native_closure_composition)
   EXPECT_EQ(principled->get_coat_tint(), make_float3(0.7f, 0.8f, 0.9f));
   EXPECT_FLOAT_EQ(principled->get_coat_roughness(), 0.12f);
   EXPECT_FLOAT_EQ(principled->get_coat_ior(), 1.6f);
-  EXPECT_EQ(sheen_sum->input("Closure1")->link, principled->output("BSDF"));
+  /* fix-sheen-layering-20261125 (ruling Q26): the sheen lobe LAYERS: the base is
+   * attenuated by 1 - sheen * dirAlbedo(NdotV, sheen_roughness) through a MixClosure
+   * with an unconnected second closure before the additive lobe. */
+  ASSERT_NE(sheen_layer, nullptr);
+  EXPECT_EQ(sheen_layer->input("Closure1")->link, principled->output("BSDF"));
+  EXPECT_EQ(sheen_layer->input("Closure2")->link, nullptr);
+  EXPECT_NE(sheen_layer->input("Fac")->link, nullptr);
+  EXPECT_EQ(sheen_sum->input("Closure1")->link, sheen_layer->output("Closure"));
   EXPECT_EQ(sheen_sum->input("Closure2")->link, sheen->output("BSDF"));
   EXPECT_EQ(transmission_mix->input("Closure1")->link, sheen_sum->output("Closure"));
   EXPECT_EQ(transmission_mix->input("Closure2")->link, transmission->output("BSDF"));
   EXPECT_EQ(graph.output()->input("Surface")->link, transmission_mix->output("Closure"));
+}
+
+/* fix-sheen-layering-20261125 (ruling Q26): standard_surface.mtlx composes sheen as
+ * layer(top: sheen_bsdf(sheen, sheen_color, sheen_roughness), base: ...), and a sheen_bsdf
+ * top ATTENUATES its base: the genglsl reference (libraries/pbrlib/genglsl/
+ * mx_sheen_bsdf.glsl) multiplies the base by throughput = 1 - weight * dirAlbedo, with
+ * dirAlbedo the Conty-Kulla directional albedo rational fit
+ * mx_imageworks_sheen_dir_albedo_analytic(NdotV, roughness) clamped to [0, 1]
+ * (libraries/pbrlib/genglsl/lib/mx_microfacet_sheen.glsl). The lowering previously ADDED
+ * the sheen lobe beside the unattenuated base. It now inserts a MixClosure with an
+ * unconnected second closure (base * (1 - Fac)) whose Fac = sheen * dirAlbedo is built
+ * from stock Geometry/Math/VectorMath nodes; literal inputs fold the roughness terms of
+ * the fit into the quadratics' coefficients at lowering time, linked inputs build them
+ * from Math nodes that constant-fold when their sources are constant. The RAW
+ * sheen_roughness feeds the albedo fit (the lobe itself keeps the Conty-Kulla ->
+ * microfiber energy remap, a different term). */
+TEST(materialx_graph, standard_surface_sheen_layers_base_attenuation)
+{
+  const float w = 0.6f, r = 0.45f;
+  /* mx_imageworks_sheen_dir_albedo_analytic coefficients: numerator / denominator of a
+   * rational quadratic in x = NdotV with roughness-dependent constant and linear terms. */
+  const float a0 = 13.67300f + (799.08825f + 1086.96473f * r) * r;
+  const float a1 = -68.78018f + -905.00061f * r;
+  const float b0 = 1.0f + (442.78211f + 3045.55075f * r) * r;
+  const float b1 = 61.57746f + 2597.49308f * r;
+  {
+    /* Literal sheen inputs: the roughness terms are folded; only NdotV is runtime. */
+    materialx::Node surface;
+    surface.name = "SS";
+    surface.nodedef = "ND_standard_surface_surfaceshader";
+    surface.inputs["sheen"] = w;
+    surface.color3_inputs["sheen_color"] = make_float3(0.5f, 0.6f, 0.7f);
+    surface.inputs["sheen_roughness"] = r;
+    surface.outputs["out"] = materialx::Type::SurfaceShader;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+    PrincipledBsdfNode *principled = nullptr;
+    MixClosureNode *layer = nullptr;
+    AddClosureNode *sum = nullptr;
+    GeometryNode *geometry = nullptr;
+    VectorMathNode *ndotv = nullptr;
+    std::unordered_map<std::string, MathNode *> math;
+    for (ShaderNode *node : graph.nodes) {
+      principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+      geometry = geometry ? geometry : dynamic_cast<GeometryNode *>(node);
+      if (node->name == "SS.standard_surface_sheen_layer") {
+        layer = dynamic_cast<MixClosureNode *>(node);
+      }
+      /* The sum is the outermost closure here, so it carries the surface name "SS". */
+      sum = sum ? sum : dynamic_cast<AddClosureNode *>(node);
+      if (node->name == "SS.standard_surface_sheen_layer.ndotv") {
+        ndotv = dynamic_cast<VectorMathNode *>(node);
+      }
+      if (auto *m = dynamic_cast<MathNode *>(node)) {
+        math.emplace(node->name.string(), m);
+      }
+    }
+    ASSERT_NE(principled, nullptr);
+    ASSERT_NE(layer, nullptr);
+    ASSERT_NE(sum, nullptr);
+    ASSERT_NE(geometry, nullptr);
+    ASSERT_NE(ndotv, nullptr);
+    /* Composition: base -> Mix(Closure1, Closure2 unconnected) -> AddClosure with the lobe. */
+    EXPECT_EQ(layer->input("Closure1")->link, principled->output("BSDF"));
+    EXPECT_EQ(layer->input("Closure2")->link, nullptr);
+    EXPECT_EQ(sum->input("Closure1")->link, layer->output("Closure"));
+    EXPECT_EQ(graph.output()->input("Surface")->link, sum->output("Closure"));
+    /* NdotV = clamp(|dot(N, Incoming)|, 0, 1): GeometryNode "Incoming" is sd->wi, the
+     * direction toward the viewer, the genglsl V. ShaderGraph::connect() auto-inserts a
+     * Normal->Vector ConvertNode on the Normal output. */
+    EXPECT_EQ(ndotv->get_math_type(), NODE_VECTOR_MATH_DOT_PRODUCT);
+    ASSERT_NE(ndotv->input("Vector1")->link, nullptr);
+    {
+      auto *convert = dynamic_cast<ConvertNode *>(ndotv->input("Vector1")->link->parent);
+      ASSERT_NE(convert, nullptr);
+      ASSERT_FALSE(convert->inputs.empty());
+      EXPECT_EQ(convert->inputs[0]->link, geometry->output("Normal"));
+    }
+    EXPECT_EQ(ndotv->input("Vector2")->link, geometry->output("Incoming"));
+    MathNode *clamp = math.count("SS.standard_surface_sheen_layer.ndotv_clamp") ?
+                          math.at("SS.standard_surface_sheen_layer.ndotv_clamp") :
+                          nullptr;
+    ASSERT_NE(clamp, nullptr);
+    EXPECT_EQ(clamp->get_math_type(), NODE_MATH_ABSOLUTE);
+    EXPECT_TRUE(clamp->get_use_clamp());
+    EXPECT_EQ(clamp->input("Value1")->link, ndotv->output("Value"));
+    /* Horner quadratics with the literal-roughness-folded coefficients. */
+    struct Half {
+      const char *inner, *outer;
+      float c2, c1, c0;
+    };
+    MathNode *num_outer = nullptr, *den_outer = nullptr;
+    for (const Half &half : {Half{"SS.standard_surface_sheen_layer.albedo_num_x1",
+                                  "SS.standard_surface_sheen_layer.albedo_num",
+                                  60.28956f,
+                                  a1,
+                                  a0},
+                             Half{"SS.standard_surface_sheen_layer.albedo_den_x1",
+                                  "SS.standard_surface_sheen_layer.albedo_den",
+                                  121.81241f,
+                                  b1,
+                                  b0}})
+    {
+      SCOPED_TRACE(half.outer);
+      MathNode *inner = math.count(half.inner) ? math.at(half.inner) : nullptr;
+      MathNode *outer = math.count(half.outer) ? math.at(half.outer) : nullptr;
+      ASSERT_NE(inner, nullptr);
+      ASSERT_NE(outer, nullptr);
+      EXPECT_EQ(inner->get_math_type(), NODE_MATH_MULTIPLY_ADD);
+      EXPECT_EQ(inner->input("Value1")->link, clamp->output("Value"));
+      EXPECT_FLOAT_EQ(inner->get_value2(), half.c2);
+      EXPECT_EQ(inner->input("Value3")->link, nullptr);
+      EXPECT_FLOAT_EQ(inner->get_value3(), half.c1);
+      EXPECT_EQ(outer->get_math_type(), NODE_MATH_MULTIPLY_ADD);
+      EXPECT_EQ(outer->input("Value1")->link, inner->output("Value"));
+      EXPECT_EQ(outer->input("Value2")->link, clamp->output("Value"));
+      EXPECT_EQ(outer->input("Value3")->link, nullptr);
+      EXPECT_FLOAT_EQ(outer->get_value3(), half.c0);
+      (half.outer == string("SS.standard_surface_sheen_layer.albedo_num") ? num_outer :
+                                                                            den_outer) = outer;
+    }
+    MathNode *albedo = math.count("SS.standard_surface_sheen_layer.albedo") ?
+                           math.at("SS.standard_surface_sheen_layer.albedo") :
+                           nullptr;
+    MathNode *albedo_max = math.count("SS.standard_surface_sheen_layer.albedo_max") ?
+                               math.at("SS.standard_surface_sheen_layer.albedo_max") :
+                               nullptr;
+    MathNode *zeltner = math.count("SS.standard_surface_sheen_layer.zeltner") ?
+                            math.at("SS.standard_surface_sheen_layer.zeltner") :
+                            nullptr;
+    MathNode *zeltner_t = math.count("SS.standard_surface_sheen_layer.zeltner_t") ?
+                              math.at("SS.standard_surface_sheen_layer.zeltner_t") :
+                              nullptr;
+    MathNode *fac = math.count("SS.standard_surface_sheen_layer.fac") ?
+                        math.at("SS.standard_surface_sheen_layer.fac") :
+                        nullptr;
+    ASSERT_NE(albedo, nullptr);
+    ASSERT_NE(albedo_max, nullptr);
+    ASSERT_NE(zeltner, nullptr);
+    ASSERT_NE(zeltner_t, nullptr);
+    ASSERT_NE(fac, nullptr);
+    EXPECT_EQ(albedo->get_math_type(), NODE_MATH_DIVIDE);
+    EXPECT_TRUE(albedo->get_use_clamp());
+    EXPECT_EQ(albedo->input("Value1")->link, num_outer->output("Value"));
+    EXPECT_EQ(albedo->input("Value2")->link, den_outer->output("Value"));
+    /* The max() energy guard: the zeltner albedo of the actual microfiber lobe at the
+     * remapped roughness, with the literal s/m/o rationals folded at lowering time. */
+    {
+      const float y = std::clamp(0.7019f + 0.0859f * std::log(r), 0.0f, 1.0f);
+      const float s = y * (0.0206607f + 1.58491f * y) / (0.0379424f + y * (1.32227f + y));
+      const float m = y * (-0.193854f + y * (-1.14885f + y * (1.7932f - 0.95943f * y * y))) /
+                      (0.046391f + y);
+      const float o = y * (0.000654023f + (-0.0207818f + 0.119681f * y) * y) /
+                      (1.26264f + y * (-1.92021f + y));
+      EXPECT_EQ(zeltner_t->get_math_type(), NODE_MATH_MULTIPLY_ADD);
+      EXPECT_EQ(zeltner_t->input("Value1")->link, clamp->output("Value"));
+      EXPECT_FLOAT_EQ(zeltner_t->get_value2(), 1.0f / s);
+      EXPECT_FLOAT_EQ(zeltner_t->get_value3(), -m / s);
+      EXPECT_EQ(zeltner->get_math_type(), NODE_MATH_MULTIPLY_ADD);
+      EXPECT_FLOAT_EQ(zeltner->get_value2(), 0.398942280f / s);
+      EXPECT_FLOAT_EQ(zeltner->get_value3(), o);
+    }
+    EXPECT_EQ(albedo_max->get_math_type(), NODE_MATH_MAXIMUM);
+    EXPECT_TRUE(albedo_max->get_use_clamp());
+    EXPECT_EQ(albedo_max->input("Value1")->link, albedo->output("Value"));
+    EXPECT_EQ(albedo_max->input("Value2")->link, zeltner->output("Value"));
+    EXPECT_EQ(fac->get_math_type(), NODE_MATH_MULTIPLY);
+    EXPECT_TRUE(fac->get_use_clamp());
+    EXPECT_EQ(fac->input("Value1")->link, albedo_max->output("Value"));
+    EXPECT_EQ(fac->input("Value2")->link, nullptr);
+    EXPECT_FLOAT_EQ(fac->get_value2(), w);
+    EXPECT_EQ(layer->input("Fac")->link, fac->output("Value"));
+  }
+  {
+    /* Linked sheen, sheen_roughness and normal: the roughness-dependent coefficients are
+     * Math nodes that constant-fold to the literal values; the lobe normal source feeds
+     * the NdotV dot product. */
+    materialx::Graph source;
+    materialx::Node surface;
+    surface.name = "SS";
+    surface.nodedef = "ND_standard_surface_surfaceshader";
+    surface.color3_inputs["sheen_color"] = one_float3();
+    for (const auto &[name, value] : {std::pair<const char *, float>{"SheenWeight", w},
+                                      std::pair<const char *, float>{"SheenRoughness", r}})
+    {
+      materialx::Node constant;
+      constant.name = name;
+      constant.nodedef = "ND_constant_float";
+      constant.inputs["value"] = value;
+      constant.outputs["out"] = materialx::Type::Float;
+      source.nodes.push_back(constant);
+    }
+    materialx::Node normal;
+    normal.name = "NormalSource";
+    normal.nodedef = "ND_constant_vector3";
+    normal.vector3_inputs["value"] = make_float3(0.0f, 0.6f, 0.8f);
+    normal.outputs["out"] = materialx::Type::Vector3;
+    source.nodes.push_back(normal);
+    surface.links["sheen"] = {"SheenWeight", "out", materialx::Type::Float};
+    surface.links["sheen_roughness"] = {"SheenRoughness", "out", materialx::Type::Float};
+    surface.links["normal"] = {"NormalSource", "out", materialx::Type::Vector3};
+    surface.outputs["out"] = materialx::Type::SurfaceShader;
+    source.nodes.push_back(surface);
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower(source, &graph));
+    MixClosureNode *layer = nullptr;
+    VectorMathNode *ndotv = nullptr;
+    std::unordered_map<std::string, MathNode *> math;
+    for (ShaderNode *node : graph.nodes) {
+      if (node->name == "SS.standard_surface_sheen_layer") {
+        layer = dynamic_cast<MixClosureNode *>(node);
+      }
+      if (node->name == "SS.standard_surface_sheen_layer.ndotv") {
+        ndotv = dynamic_cast<VectorMathNode *>(node);
+      }
+      if (auto *m = dynamic_cast<MathNode *>(node)) {
+        math.emplace(node->name.string(), m);
+      }
+    }
+    ASSERT_NE(layer, nullptr);
+    ASSERT_NE(ndotv, nullptr);
+    EXPECT_EQ(layer->input("Closure2")->link, nullptr);
+    /* The linked normal feeds Vector1 (through whatever the source lowers to). */
+    EXPECT_NE(ndotv->input("Vector1")->link, nullptr);
+    /* Linked-roughness coefficient nodes exist before folding. */
+    for (const char *name : {"SS.standard_surface_sheen_layer.albedo_num_r0",
+                             "SS.standard_surface_sheen_layer.albedo_num_r1",
+                             "SS.standard_surface_sheen_layer.albedo_den_r0",
+                             "SS.standard_surface_sheen_layer.albedo_den_r1"})
+    {
+      EXPECT_EQ(math.count(name), 1u) << name;
+    }
+    MathNode *fac = math.count("SS.standard_surface_sheen_layer.fac") ?
+                        math.at("SS.standard_surface_sheen_layer.fac") :
+                        nullptr;
+    ASSERT_NE(fac, nullptr);
+    EXPECT_NE(fac->input("Value2")->link, nullptr);
+    Stats stats;
+    Profiler profiler;
+    DeviceInfo info;
+    unique_ptr<Device> device(Device::create(info, stats, profiler, true));
+    Scene scene(SceneParams(), device.get());
+    graph.finalize(&scene);
+    /* Constant sources fold: the Horner nodes carry the same folded coefficients as the
+     * literal lowering, and the weight folds into the fac multiply. */
+    MathNode *num_x1 = math.at("SS.standard_surface_sheen_layer.albedo_num_x1");
+    MathNode *num = math.at("SS.standard_surface_sheen_layer.albedo_num");
+    MathNode *den_x1 = math.at("SS.standard_surface_sheen_layer.albedo_den_x1");
+    MathNode *den = math.at("SS.standard_surface_sheen_layer.albedo_den");
+    EXPECT_EQ(num_x1->input("Value3")->link, nullptr);
+    EXPECT_NEAR(num_x1->get_value3(), a1, 1e-3f);
+    EXPECT_EQ(num->input("Value3")->link, nullptr);
+    EXPECT_NEAR(num->get_value3(), a0, 1e-3f);
+    EXPECT_EQ(den_x1->input("Value3")->link, nullptr);
+    EXPECT_NEAR(den_x1->get_value3(), b1, 1e-3f);
+    EXPECT_EQ(den->input("Value3")->link, nullptr);
+    EXPECT_NEAR(den->get_value3(), b0, 1e-3f);
+    /* The zeltner guard's linked s/m/o chains fold to the same literal rationals. */
+    MathNode *zeltner = math.at("SS.standard_surface_sheen_layer.zeltner");
+    EXPECT_EQ(zeltner->input("Value3")->link, nullptr);
+    {
+      const float y = std::clamp(0.7019f + 0.0859f * std::log(r), 0.0f, 1.0f);
+      const float o = y * (0.000654023f + (-0.0207818f + 0.119681f * y) * y) /
+                      (1.26264f + y * (-1.92021f + y));
+      EXPECT_NEAR(zeltner->get_value3(), o, 1e-5f);
+    }
+    EXPECT_EQ(fac->input("Value2")->link, nullptr);
+    EXPECT_FLOAT_EQ(fac->get_value2(), w);
+  }
+  {
+    /* No active weight (sheen_color only; the NodeDef sheen default is 0): no layer Mix,
+     * the base feeds the additive sum directly, exactly as before the fix. */
+    materialx::Node surface;
+    surface.name = "SS";
+    surface.nodedef = "ND_standard_surface_surfaceshader";
+    surface.color3_inputs["sheen_color"] = one_float3();
+    surface.outputs["out"] = materialx::Type::SurfaceShader;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+    PrincipledBsdfNode *principled = nullptr;
+    AddClosureNode *sum = nullptr;
+    size_t mix_count = 0;
+    for (ShaderNode *node : graph.nodes) {
+      principled = principled ? principled : dynamic_cast<PrincipledBsdfNode *>(node);
+      /* The sum is the outermost closure here, so it carries the surface name "SS". */
+      sum = sum ? sum : dynamic_cast<AddClosureNode *>(node);
+      mix_count += dynamic_cast<MixClosureNode *>(node) != nullptr;
+    }
+    ASSERT_NE(principled, nullptr);
+    ASSERT_NE(sum, nullptr);
+    EXPECT_EQ(mix_count, 0u);
+    EXPECT_EQ(sum->input("Closure1")->link, principled->output("BSDF"));
+  }
 }
 
 /* fix-ss-coat-20261124: the standard_surface coat is Principled's native, layered coat

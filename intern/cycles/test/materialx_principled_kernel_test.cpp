@@ -3045,4 +3045,285 @@ TEST_F(materialx_principled_kernel, standard_surface_sheen_conty_kulla_energy_on
   EXPECT_LT(microfiber_eavg(0.3f) / conty_kulla_eavg(0.3), 0.5);
 }
 
+/* fix-sheen-layering-20261125 (ruling Q26): the standard_surface sheen lobe LAYERS over the
+ * base. The genglsl reference (libraries/pbrlib/genglsl/mx_sheen_bsdf.glsl) multiplies the
+ * base by throughput = 1 - weight * dirAlbedo(NdotV, roughness), dirAlbedo being the
+ * rational-quadratic fit mx_imageworks_sheen_dir_albedo_analytic clamped to [0, 1]
+ * (libraries/pbrlib/genglsl/lib/mx_microfacet_sheen.glsl). The lowering builds
+ * fac = weight * dirAlbedo from stock Geometry/Math/VectorMath nodes into a MixClosure whose
+ * second closure is unconnected: the kernel then weights the base by 1 - saturate(fac)
+ * (svm/closure.h svm_node_mix_closure). These helpers evaluate the ACTUAL lowered chain with
+ * the ACTUAL kernel math (svm_math / svm_vector_math) at a chosen shading geometry. */
+namespace {
+float3 sheen_layer_eval_vector(ShaderOutput *out, const float3 N, const float3 I);
+
+float sheen_layer_eval_value(ShaderOutput *out, const float3 N, const float3 I)
+{
+  if (auto *value = dynamic_cast<ValueNode *>(out->parent)) {
+    return value->get_value();
+  }
+  if (auto *math = dynamic_cast<MathNode *>(out->parent)) {
+    auto operand = [&](const char *name, const float literal) {
+      ShaderInput *input = math->input(name);
+      return input->link ? sheen_layer_eval_value(input->link, N, I) : literal;
+    };
+    const float result = svm_math(math->get_math_type(),
+                                  operand("Value1", math->get_value1()),
+                                  operand("Value2", math->get_value2()),
+                                  operand("Value3", math->get_value3()));
+    return math->get_use_clamp() ? saturatef(result) : result;
+  }
+  if (auto *vector_math = dynamic_cast<VectorMathNode *>(out->parent)) {
+    auto operand = [&](const char *name, const float3 literal) {
+      ShaderInput *input = vector_math->input(name);
+      return input->link ? sheen_layer_eval_vector(input->link, N, I) : literal;
+    };
+    float value = 0.0f;
+    float3 vector = zero_float3();
+    svm_vector_math(&value,
+                    &vector,
+                    vector_math->get_math_type(),
+                    operand("Vector1", vector_math->get_vector1()),
+                    operand("Vector2", vector_math->get_vector2()),
+                    operand("Vector3", vector_math->get_vector3()),
+                    vector_math->get_scale());
+    return value;
+  }
+  ADD_FAILURE() << "unexpected scalar chain node " << out->parent->name.string();
+  return 0.0f;
+}
+
+float3 sheen_layer_eval_vector(ShaderOutput *out, const float3 N, const float3 I)
+{
+  if (dynamic_cast<GeometryNode *>(out->parent) != nullptr) {
+    if (out->name() == "Normal") {
+      return N;
+    }
+    if (out->name() == "Incoming") {
+      return I;
+    }
+  }
+  /* ShaderGraph::connect() auto-inserts Normal->Vector ConvertNodes: pass through. */
+  if (auto *convert = dynamic_cast<ConvertNode *>(out->parent)) {
+    if (!convert->inputs.empty() && convert->inputs[0]->link != nullptr) {
+      return sheen_layer_eval_vector(convert->inputs[0]->link, N, I);
+    }
+  }
+  ADD_FAILURE() << "unexpected vector chain node " << out->parent->name.string();
+  return zero_float3();
+}
+
+/* The MaterialX reference terms, in double (libraries/pbrlib/genglsl/lib/
+ * mx_microfacet_sheen.glsl): clamp(numerator / denominator, 0, 1) of
+ * mx_imageworks_sheen_dir_albedo_analytic (rational quadratic in x = NdotV and r), and
+ * mx_zeltner_sheen_dir_albedo (Gaussian fit in x with rationals of y, the lobe roughness). */
+double sheen_dir_albedo_reference(const double x, const double r)
+{
+  const double numerator = 13.67300 - 68.78018 * x + 60.28956 * x * x + 799.08825 * r -
+                           905.00061 * x * r + 1086.96473 * r * r;
+  const double denominator = 1.0 + 61.57746 * x + 121.81241 * x * x + 442.78211 * r +
+                             2597.49308 * x * r + 3045.55075 * r * r;
+  return std::clamp(numerator / denominator, 0.0, 1.0);
+}
+
+double zeltner_dir_albedo_reference(const double x, const double y)
+{
+  const double s = y * (0.0206607 + 1.58491 * y) / (0.0379424 + y * (1.32227 + y));
+  const double m = y * (-0.193854 + y * (-1.14885 + y * (1.7932 - 0.95943 * y * y))) /
+                   (0.046391 + y);
+  const double o = y * (0.000654023 + (-0.0207818 + 0.119681 * y) * y) /
+                   (1.26264 + y * (-1.92021 + y));
+  return std::exp(-0.5 * (x - m) * (x - m) / (s * s)) / (s * std::sqrt(2.0 * M_PI)) + o;
+}
+
+/* The lowered Fac: weight * max(conty_kulla dirAlbedo at the authored roughness,
+ * zeltner dirAlbedo at the remapped lobe roughness), per the max() energy guard
+ * documented at connect_standard_surface_sheen_layer_attenuation(). */
+double sheen_layer_fac_reference(const double x, const double w, const double r)
+{
+  const double lobe_roughness = std::clamp(0.7019 + 0.0859 * std::log(std::max(r, 0.005)),
+                                           0.0,
+                                           1.0);
+  const double albedo = std::clamp(
+      std::max(sheen_dir_albedo_reference(x, r), zeltner_dir_albedo_reference(x, lobe_roughness)),
+      0.0,
+      1.0);
+  return std::clamp(w * albedo, 0.0, 1.0);
+}
+
+/* Lower a sheen-only standard_surface and return the lowered pieces of the layering. */
+struct SheenLayerLowering {
+  ShaderGraph graph;
+  PrincipledBsdfNode *principled = nullptr;
+  SheenBsdfNode *sheen = nullptr;
+  MixClosureNode *layer = nullptr;
+  AddClosureNode *sum = nullptr;
+};
+
+void lower_sheen_layer(const float weight, const float roughness, const bool linked,
+                       SheenLayerLowering *lowering)
+{
+  materialx::Graph source;
+  materialx::Node surface;
+  surface.name = "SS";
+  surface.nodedef = "ND_standard_surface_surfaceshader";
+  surface.color3_inputs["base_color"] = one_float3();
+  surface.inputs["specular_roughness"] = 0.5f;
+  surface.color3_inputs["sheen_color"] = one_float3();
+  if (linked) {
+    for (const auto &[name, input, value] :
+         {std::tuple<const char *, const char *, float>{"SheenWeight", "sheen", weight},
+          std::tuple<const char *, const char *, float>{
+              "SheenRoughness", "sheen_roughness", roughness}})
+    {
+      materialx::Node constant;
+      constant.name = name;
+      constant.nodedef = "ND_constant_float";
+      constant.inputs["value"] = value;
+      constant.outputs["out"] = materialx::Type::Float;
+      source.nodes.push_back(constant);
+      surface.links[input] = {name, "out", materialx::Type::Float};
+    }
+  }
+  else {
+    surface.inputs["sheen"] = weight;
+    surface.inputs["sheen_roughness"] = roughness;
+  }
+  surface.outputs["out"] = materialx::Type::SurfaceShader;
+  source.nodes.push_back(surface);
+  ASSERT_TRUE(materialx::lower(source, &lowering->graph));
+  for (ShaderNode *node : lowering->graph.nodes) {
+    lowering->principled = lowering->principled ? lowering->principled :
+                                                  dynamic_cast<PrincipledBsdfNode *>(node);
+    lowering->sheen = lowering->sheen ? lowering->sheen : dynamic_cast<SheenBsdfNode *>(node);
+    if (node->name == "SS.standard_surface_sheen_layer") {
+      lowering->layer = dynamic_cast<MixClosureNode *>(node);
+    }
+    /* The sum is the outermost closure of this sheen-only surface, so it carries the
+     * surface name "SS", not the ".standard_surface_sheen_sum" suffix. */
+    lowering->sum = lowering->sum ? lowering->sum : dynamic_cast<AddClosureNode *>(node);
+  }
+  ASSERT_NE(lowering->principled, nullptr);
+  ASSERT_NE(lowering->sheen, nullptr);
+  ASSERT_NE(lowering->layer, nullptr);
+  ASSERT_NE(lowering->sum, nullptr);
+  /* base -> Mix(Closure2 unconnected) -> AddClosure(lobe): base weight is 1 - saturate(fac). */
+  ASSERT_EQ(lowering->layer->input("Closure1")->link, lowering->principled->output("BSDF"));
+  ASSERT_EQ(lowering->layer->input("Closure2")->link, nullptr);
+  ASSERT_NE(lowering->layer->input("Fac")->link, nullptr);
+  ASSERT_EQ(lowering->sum->input("Closure1")->link, lowering->layer->output("Closure"));
+  ASSERT_EQ(lowering->sum->input("Closure2")->link, lowering->sheen->output("BSDF"));
+}
+}  // namespace
+
+/* The lowered Fac chain, evaluated with the actual kernel math, equals the MaterialX
+ * reference base-attenuation term weight * dirAlbedo(NdotV, roughness) at several sheen
+ * weights, roughnesses and view angles, for literal and linked inputs. */
+TEST_F(materialx_principled_kernel, standard_surface_sheen_layer_fac_matches_reference_term)
+{
+  for (const bool linked : {false, true}) {
+    SCOPED_TRACE(linked ? "linked" : "literal");
+    for (const float w : {0.25f, 0.6f, 1.0f}) {
+      for (const float r : {0.0361f, 0.3f, 0.45f, 1.0f}) {
+        SCOPED_TRACE(testing::Message() << "w=" << w << " r=" << r);
+        SheenLayerLowering lowering;
+        lower_sheen_layer(w, r, linked, &lowering);
+        if (testing::Test::HasFatalFailure()) {
+          return;
+        }
+        ShaderOutput *fac = lowering.layer->input("Fac")->link;
+        for (const float mu : {1.0f, 0.7f, 0.4f, 0.15f, 0.0f}) {
+          SCOPED_TRACE(mu);
+          const float3 N = make_float3(0.0f, 0.0f, 1.0f);
+          const float3 I = make_float3(sqrtf(1.0f - mu * mu), 0.0f, mu);
+          const float actual = sheen_layer_eval_value(fac, N, I);
+          const double expected = sheen_layer_fac_reference(mu, w, r);
+          EXPECT_NEAR(actual, expected, 2.0e-4);
+        }
+      }
+    }
+  }
+}
+
+/* White furnace bound: at sheen = 1 the composed albedo
+ * (1 - saturate(fac)) * principled_base + sheen_lobe stays <= 1 at several view angles and
+ * roughnesses, on the ACTUAL compiled Principled SVM, the actual sheen LUT and the actual
+ * lowered Fac chain, while the base is visibly attenuated (fac equals the reference
+ * dirAlbedo) and the OLD additive composition violated the bound. */
+TEST_F(materialx_principled_kernel, standard_surface_sheen_layering_is_energy_bounded)
+{
+  for (const float r : {0.0361f, 0.3f, 0.6f}) {
+    for (const float mu : {1.0f, 0.7f, 0.4f, 0.15f}) {
+      SCOPED_TRACE(testing::Message() << "r=" << r << " mu=" << mu);
+      SheenLayerLowering lowering;
+      lower_sheen_layer(1.0f, r, false, &lowering);
+      if (testing::Test::HasFatalFailure()) {
+        return;
+      }
+      ShaderData sd{};
+      sd.N = sd.Ng = make_float3(0.0f, 0.0f, 1.0f);
+      sd.wi = make_float3(sqrtf(1.0f - mu * mu), 0.0f, mu);
+      /* Base albedo: the actual compiled Principled, all closures. */
+      CapturePrincipledSVM compiler(scene.get(), progress, &lowering.graph);
+      std::array<float, SVM_STACK_SIZE> stack{};
+      const std::vector<uint> words = compiler.capture(lowering.principled);
+      const size_t header_words = 1 + sizeof(SVMNodeClosureBsdf) / sizeof(uint);
+      ASSERT_EQ(words.size(), header_words + sizeof(SVMNodePrincipledBsdfData) / sizeof(uint));
+      SVMNodeClosureBsdf header;
+      memcpy(&header, words.data() + 1, sizeof(header));
+      globals.svm_nodes.data = words.data();
+      globals.svm_nodes.width = int(words.size());
+      ThreadKernelGlobalsCPU kg(globals, nullptr, profiler, 0);
+      sd.num_closure = 0;
+      sd.num_closure_left = MAX_CLOSURE;
+      svm_node_closure_bsdf<KERNEL_FEATURE_NODE_BSDF, SHADER_TYPE_SURFACE>(
+          &kg,
+          &sd,
+          stack.data(),
+          one_spectrum(),
+          header,
+          PATH_RAY_VISIBILITY_CAMERA,
+          0,
+          int(header_words));
+      float base_albedo = 0.0f;
+      for (int i = 0; i < sd.num_closure; ++i) {
+        const ShaderClosure *sc = &sd.closure[i];
+        if (CLOSURE_IS_BSDF(sc->type)) {
+          base_albedo += average(bsdf_albedo(&kg, &sd, sc, true, true));
+        }
+      }
+      /* Sheen lobe albedo: the actual LUT at the roughness and color the lowering wrote. */
+      ShaderData sheen_sd{};
+      sheen_sd.N = sheen_sd.Ng = sd.N;
+      sheen_sd.wi = sd.wi;
+      SheenBsdf sheen_bsdf{};
+      sheen_bsdf.N = sd.N;
+      sheen_bsdf.roughness = lowering.sheen->get_roughness();
+      sheen_bsdf.weight = rgb_to_spectrum(lowering.sheen->get_color());
+      sheen_bsdf.sample_weight = 1.0f;
+      const int sheen_flag = bsdf_sheen_setup(&kg, &sheen_sd, &sheen_bsdf);
+      const float sheen_albedo = sheen_flag != 0 ? average(sheen_bsdf.weight) : 0.0f;
+      /* The lowered attenuation, from the actual chain. */
+      const float fac = saturatef(
+          sheen_layer_eval_value(lowering.layer->input("Fac")->link, sd.N, sd.wi));
+      /* Furnace bound. The residual above 1.0 is the Cycles LTC sheen table versus the
+       * genglsl zeltner fit the guard evaluates at the same remapped roughness: measured
+       * at most +0.0023 over this sweep (fit error, not composition energy creation). */
+      const float layered = (1.0f - fac) * base_albedo + sheen_albedo;
+      EXPECT_LE(layered, 1.0f + 5e-3f);
+      /* The base is attenuated by exactly the lowered formula, and visibly so at the
+       * grazing angle, where the pure Conty-Kulla reference term dominates the guard. */
+      EXPECT_NEAR(fac, sheen_layer_fac_reference(mu, 1.0, r), 2.0e-4);
+      if (mu <= 0.15f) {
+        EXPECT_GT(fac, 0.4f);
+      }
+      /* The defect this replaces: ADDING the lobe beside the unattenuated base exceeded
+       * the furnace bound at the grazing angle. */
+      if (mu <= 0.15f) {
+        EXPECT_GT(base_albedo + sheen_albedo, 1.0f + 1e-3f);
+      }
+    }
+  }
+}
+
 CCL_NAMESPACE_END
