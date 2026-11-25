@@ -28826,12 +28826,11 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
       for (const char *channel : {"Red", "Green", "Blue"}) {
         ShaderInput *socket = combine->input(channel);
         if (input == nullptr || socket == nullptr) {
-          /* lower() has no error channel, which is the root defect behind every
-           * silent Cycles fallback -- stderr is the only way to name this. */
-          fprintf(stderr,
-                  "MATERIALX_LOWER_NULL_SOCKET node=%s channel=%s input=%s\n",
-                  node.name.c_str(), channel, input == nullptr ? "null" : "ok");
-          return rollback();
+          rollback();
+          return fail("MaterialX node '" + node.name + "' could not be wired: " +
+                      (input == nullptr ? string("its lowered source output is null") :
+                                          string("the combine node has no '") + channel +
+                                              "' input"));
         }
         graph->connect(input, socket);
       }
