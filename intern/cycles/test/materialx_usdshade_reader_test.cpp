@@ -15778,12 +15778,12 @@ TEST(materialx_usdshade_reader, reads_and_lowers_top_to_bottom_color_ramp)
   EXPECT_EQ(mix->input("Fac")->link->parent->input("Value")->link, coordinate->output("Y"));
 }
 
-/* Real exact91 corpus documents (e.g. ND_normal_vector3.mtlx, ND_texcoord_vector2.mtlx,
- * ND_UsdPrimvarReader_float.mtlx, ND_geomcolor_color4.mtlx) author a <convert> node with no
+/* Real-world MaterialX documents (e.g. ones exercising ND_normal_vector3, ND_texcoord_vector2,
+ * ND_UsdPrimvarReader_float, ND_geomcolor_color4) author a <convert> node with no
  * explicit `nodedef=` attribute feeding standard_surface's `base_color`. The literal MaterialX
- * document tag for that node is just "convert", so the honest structural USD translation of the
- * document (scripts/blender/exact91_cycles/mtlx_to_usda.py's `nodedef = child.get("nodedef") or
- * ("ND_" + child.tag)`) authors `info:id = "ND_convert"` -- a generic, untyped id, not one of the
+ * document tag for that node is just "convert", so a structural MaterialX-to-USD translation
+ * that derives the id from the tag ("ND_" + tag when no nodedef is given)
+ * authors `info:id = "ND_convert"` -- a generic, untyped id, not one of the
  * specific `ND_convert_<T>_color3` ids this reader already recognized. Real MaterialX resolves
  * this generic `<convert>` node to a concrete nodedef by the types of its connected `in` source
  * and its own declared output type; this reader must do the same at the UsdShade level using the
@@ -28102,10 +28102,9 @@ TEST(materialx_usdshade_reader, reads_and_lowers_lama_surface_terminal)
 
   ShaderGraph lowered;
   ASSERT_TRUE(materialx::lower(source, &lowered));
-  /* User ruling 2026-11-22 Q8 "align it" (policy-rulings-20261122c.receipt.json):
-   * the connected materialBack no longer produces a Geometry.Backfacing split; the
+  /* The connected materialBack no longer produces a Geometry.Backfacing split; the
    * front closure shades both faces, as in the MaterialX 1.39.4 OSL/GLSL/MDL back
-   * ends. The ruling replaces the former side/geometry assertions with these. */
+   * ends. This replaces the former side/geometry assertions. */
   MixClosureNode *presence = nullptr;
   ShaderNode *front_native = nullptr;
   ShaderNode *back_native = nullptr;
@@ -30151,9 +30150,8 @@ void b53_expect_no_backfacing_split(ShaderGraph &graph)
 
 TEST(materialx_usdshade_reader, lowers_surfacematerial_back_surface_front_on_both_faces)
 {
-  /* MaterialX 1.39 ND_surfacematerial with a connected backsurfaceshader. User
-   * rulings 2026-11-22 Q9 "Yes, align it" / Q9b "Align and recertify" (receipt
-   * policy-rulings-20261122c) replace the former Backfacing split assertions:
+  /* MaterialX 1.39 ND_surfacematerial with a connected backsurfaceshader.
+   * The former Backfacing split assertions are replaced:
    * the front surfaceshader drives Surface on both faces, matching genosl/genglsl/
    * genmsl (back never emitted) and genmdl/OVRTX (back only when thin_walled).
    * The back operand is still read and lowered but feeds nothing; displacement is
@@ -30240,9 +30238,7 @@ TEST(materialx_usdshade_reader, surfacematerial_back_surface_contract_refusals)
   }
 }
 
-/* Batch 53: user rulings 2026-11-22 Q9 "Yes, align it" and Q9b "Align and
- * recertify (Recommended)" (out/continuous-finish/hermes-divide-zero-fix-20261014/
- * policy-rulings-20261122c.receipt.json): ND_surfacematerial with a connected
+/* ND_surfacematerial with a connected
  * backsurfaceshader renders the FRONT surface on both faces in Cycles -- no
  * Geometry.Backfacing split -- matching MaterialX 1.39.4 genosl/genglsl/genmsl
  * (back never emitted) and genmdl/OVRTX (back used only when thin_walled). */
@@ -31899,12 +31895,11 @@ TEST(materialx_usdshade_reader, rejects_gltf_pbr_sheen_with_clearcoat_naming_lay
 
 TEST(materialx_usdshade_reader, admits_gltf_pbr_active_sheen_with_active_emission)
 {
-  /* Batch 55, user ruling policy-rulings-20261122c Q6 ("Measure, then
-   * decide"): literal or connected emissive x active or inactive sheen x
-   * literal-0 emissive_strength. The batch-50 refusal of active sheen with
+  /* Literal or connected emissive x active or inactive sheen x
+   * literal-0 emissive_strength. The earlier refusal of active sheen with
    * active emission is removed: Principled attenuates emission by the sheen
-   * layer (the reference does not), but the measured dimming (lane
-   * loc-20261122 q6v2-evaluation.json, sheen 0.846-0.981 at 0 and 60 degrees,
+   * layer (the reference does not), but the measured dimming
+   * (sheen 0.846-0.981 at 0 and 60 degrees,
    * measured on a native Principled diagnostic, not a lowered gltf_pbr graph)
    * is inside the 0.5-2x band. Every combination now reads, validates and
    * lowers, and active sheen reaches Principled together with the emission. */
@@ -32085,8 +32080,8 @@ TEST(materialx_usdshade_reader, reads_and_lowers_nd_volume_uniform_edf_emission_
    * input maps onto VolumeCoefficientsNode's "Emission Coefficients"
    * socket, which already existed natively but was previously always
    * hardcoded to zero regardless of what the reader discovered. This is
-   * exactly the shape of the real exact91 ND_volume corpus document
-   * (semantic-documents/documents/ND_volume.mtlx), which connects both
+   * exactly the shape of a real-world ND_volume document,
+   * which connects both
    * 'vdf' (ND_absorption_vdf) and 'edf' (ND_uniform_edf). */
   const pxr::UsdStageRefPtr stage = pxr::UsdStage::CreateInMemory();
   ASSERT_TRUE(stage);
@@ -43954,9 +43949,8 @@ TEST(materialx_usdshade_reader, materialx_multiply_all_carriers_fold_nan_and_mat
  * This does not execute a renderer or assert GPU attribute-buffer contents. */
 TEST(materialx_usdshade_reader, retained_multiply_float_r2_dual_point_links_survive_folding)
 {
-  /* Retained copy of hermes-divide-zero-fix-20261014 multiply-float-operand-probe-windows-gpu-r2-run
-   * .cycles-first.tile01.actual-transport.usda; content identical, LF line endings
-   * (CRLF original sha256 9d6c0aee...2a1cefa, LF 92655bfa...ce8686792). */
+  /* Retained copy of a USDA document captured from an actual import that
+   * reproduced the dual-point-link shape; content identical, LF line endings. */
   const std::string path = std::string(CYCLES_MATERIALX_TEST_SOURCE_DIR) +
                            "/materialx_multiply_float_r2_dual_point_links.usda";
   auto stage = pxr::UsdStage::Open(path);
@@ -47376,7 +47370,7 @@ TEST(materialx_usdshade_reader, batch3_usd_preview_surface_accepts_vector3f_defa
  * MaterialX lets every control (amplitude, pivot, octaves, lacunarity,
  * diminish) be a literal, a connection (constant or varying) or omitted, and
  * gives texcoord defaultgeomprop=UV0 / position defaultgeomprop=Pobject.
- * An Omnistation MCP sweep (nzx-20261113) showed literals match the exact
+ * A rendered sweep showed literals match the exact
  * CPU reference while Cycles refused every connected (K), varying (V) and
  * omitted-coordinate (D) contract. */
 namespace {
@@ -48223,9 +48217,9 @@ TEST(materialx_usdshade_reader, convert_surfaceshader_lowers_exact_unit_emission
   }
 }
 
-/* Lineage merge 2026-11-13: refused-at-Sync cases from the q4b T2 sample that the earlier
- * private native hosts accepted. Each fixture mirrors the shape of the retained imported
- * USDA (out/continuous-finish/.../geo2-20261025) reduced to the node under test. */
+/* Refused-at-Sync cases that an earlier
+ * revision of this reader accepted. Each fixture mirrors the shape of a retained imported
+ * USDA document reduced to the node under test. */
 namespace {
 bool lineage_lower_usda(const string &usda, ShaderGraph *lowered, string *error)
 {
@@ -51789,8 +51783,8 @@ TEST(materialx_usdshade_reader, hextilednormalmap_general_path_refusals)
 /* Batch 36: a two-sided ND_surfacematerial with OpenPBR front and back
  * (the retained next-surfacematerial-current585-v1 back-surface graph shape) is
  * admitted; a non-unit or linked back geometry_opacity and an unsupported
- * non-default OpenPBR input stay refused. Batch 53 (user rulings 2026-11-22
- * Q9/Q9b, policy-rulings-20261122c): the former MixClosure(Fac = Backfacing)
+ * non-default OpenPBR input stay refused.
+ * The former MixClosure(Fac = Backfacing)
  * assertions are replaced -- the FRONT Principled (base_weight 1) drives Surface
  * on both faces; the back Principled (base_weight 0.5) is lowered but unconnected. */
 TEST(materialx_usdshade_reader, two_sided_surfacematerial_admits_unit_opacity_open_pbr)

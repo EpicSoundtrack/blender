@@ -27358,10 +27358,8 @@ bool read_displacement_shader(const pxr::UsdShadeShader &displacement,
  * "<material's parent>/Graphs/Root/Nested" NodeGraph exposing a plain
  * (non-"mtlx"-render-context) output under the same name
  * ("surface"/"displacement"/"volume"). This is the shape
- * materialx_authoring's own "controlled USD" grammar authors (see
- * extensions/materialx_authoring/materialx_authoring/usdshade.py's
- * export_usdshade_ascii and scripts/blender/exact91_ovrtx/mtlx_to_graph.py /
- * closure_recipe_to_graph.py) -- an intentionally empty Material prim with
+ * some external MaterialX authoring tools emit -- an intentionally empty
+ * Material prim with
  * no outputs:mtlx:* connections at all, real graph content living in this
  * disconnected sibling scope instead. A private, add-on-specific authoring
  * convention, not a MaterialX/UsdShade standard -- consulted only as a
@@ -29489,7 +29487,7 @@ bool read_gltf_pbr_literal_normal(const pxr::UsdShadeShader &surface,
   return true;
 }
 
-/* --- Generic <surface> closure-graph readers (hermes-generic-surface) --- */
+/* --- Generic <surface> closure-graph readers --- */
 bool read_surface_float_input(const pxr::UsdShadeShader &shader,
                               const char *nodedef,
                               const char *input_name,
@@ -29692,8 +29690,7 @@ bool b51_resolve_connection(const pxr::UsdShadeConnectionSourceInfo &start,
   return false;
 }
 
-/* ND_chiang_hair_bsdf roughness_R/TT/TRT linked from ND_chiang_hair_roughness
- * (findings out/continuous-finish/chiang-hair-curves-20261122 B5).
+/* ND_chiang_hair_bsdf roughness_R/TT/TRT linked from ND_chiang_hair_roughness.
  *
  * MaterialX 1.39.4 pbrlib/genglsl/mx_chiang_hair_bsdf.glsl mx_chiang_hair_roughness:
  *   lr = clamp(longitudinal, 0.001, 1), ar = clamp(azimuthal, 0.001, 1),
@@ -30196,7 +30193,7 @@ bool read_connected_surface_closure(
      * SheenBsdfNode); subsurface -> subsurface_bssrdf; conductor ->
      * conductor_bsdf/MetallicBsdfNode physical-conductor; dielectric ->
      * dielectric_bsdf/GlassBsdfNode for the explicit scatter_mode="RT" case.
-     * Unsupported siblings in this exact91 batch (generalized
+     * Unsupported sibling closures (generalized
      * Schlick, Chiang hair, layer, conical/measured/generalized EDF) remain
      * absent from surface_closure_kind() and fail closed by name. */
     const char *id = closure_node.nodedef.c_str();
@@ -32708,7 +32705,7 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
    * has no registered Semantic Lowerer yet in this delivery phase, and
    * fails closed with a complete, named boundary record rather than being
    * silently coerced into OpenPBR or crashing. Registry-driven support for
-   * every exact91 surface model is Phase 6 per the design spec, not Task 3. */
+   * the remaining surface models is planned follow-up work. */
   pxr::TfToken surface_id;
   surface.GetShaderId(&surface_id);
   const bool is_open_pbr_family = surface_id.GetString() == open_pbr_surface_id ||
@@ -33060,8 +33057,8 @@ bool read_usdshade_graph(const pxr::UsdShadeMaterial &material,
                 "sheen above the coat (refused, not approximated)");
       return false;
     }
-    /* Active sheen with active emission is admitted (batch 55, user ruling
-     * policy-rulings-20261122c Q6): Principled attenuates emission by the sheen
+    /* Active sheen with active emission is admitted:
+     * Principled attenuates emission by the sheen
      * layer while the reference adds it beside the BSDF layers, but the measured
      * dimming stays inside the 0.5-2x band (graph.cpp gltf_pbr_sheen_active()). */
     if (sheen_active &&

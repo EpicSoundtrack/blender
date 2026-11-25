@@ -2626,15 +2626,14 @@ double mx_uncompensated_response(const double nv_raw,
 }
 }  // namespace
 
-/* Batch 55 (user ruling policy-rulings-20261122d Q11, "Document approximation"):
+/* Documented approximation:
  * ND_oren_nayar_diffuse_bsdf energy_compensation=false (the nodedef default) and
  * ND_standard_surface diffuse_roughness > 0 lower to Cycles' compensated Oren-Nayar
  * closure. This pins the measured energy envelope of that approximation: the directional
  * albedo of the actual CPU closure (set up as svm_node_materialx_closure_bsdf does:
  * weight = albedo = colour) over the transcribed MaterialX 1.39.4 uncompensated lobe.
- * Grid and bounds are those of out/continuous-finish/oren-nayar-ec-audit-20261122
- * (findings.json / ratio-grid.json: roughness 0.05-1, N.V 0.1-1, albedo 0.18-0.99, 160x160
- * midpoint), each per-roughness band widened by 0.01. Beyond roughness 1 Cycles clamps
+ * Grid and bounds: roughness 0.05-1, N.V 0.1-1, albedo 0.18-0.99, 160x160
+ * midpoint, each per-roughness band widened by 0.01. Beyond roughness 1 Cycles clamps
  * sigma while MaterialX does not; the ratio must still stay below 2 (D2 0.5-2x). */
 TEST(materialx_oren_nayar_reference, uncompensated_lobe_envelope_vs_materialx_1_39_4)
 {

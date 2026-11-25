@@ -3517,9 +3517,9 @@ float sheen_microfiber_literal_roughness(const Node &node)
  * channel to 0 and saturates the layer throughput; the reference does
  * neither.
  *
- * Emission under sheen or clearcoat is a documented APPROXIMATION (user ruling
- * policy-rulings-20261122c Q6, "Measure, then decide": keep both admitted if
- * inside the 0.5-2x energy band). Principled attenuates its emission by the
+ * Emission under sheen or clearcoat is a documented APPROXIMATION, accepted
+ * because the measured emission energy ratio stays inside the 0.5-2x
+ * band. Principled attenuates its emission by the
  * sheen and coat layers (closure.h "Emission (attenuated by sheen and coat)");
  * the reference adds the edf beside the BSDF layer stack (unattenuated per the
  * MaterialX source; the reference side was not rendered). Measured in Cycles
@@ -15000,10 +15000,8 @@ bool validate(const Graph &source,
          * not bit-exact. energy_compensation=false
          * (the classic qualitative Oren-Nayar, A/B = 1-0.5s2/(s2+0.33), 0.45s2/(s2+0.09))
          * has no separate Cycles closure and lowers to the same compensated
-         * closure as a documented APPROXIMATION (identical at roughness 0; user
-         * ruling policy-rulings-20261122d Q11, "Document approximation"). Measured
-         * (audit out/continuous-finish/oren-nayar-ec-audit-20261122/findings.json,
-         * ports of bsdf_oren_nayar.h and MaterialX 1.39.4 mx_microfacet_diffuse.glsl
+         * closure as a documented APPROXIMATION (identical at roughness 0). Measured
+         * (numerical ports of bsdf_oren_nayar.h and MaterialX 1.39.4 mx_microfacet_diffuse.glsl
          * mx_oren_nayar_diffuse): directional albedo Cycles / MaterialX-uncompensated
          * is in [0.981, 1.595] for roughness 0-1 (N.V 0.1-1, albedo 0.18-0.99), i.e.
          * Cycles is up to ~27% brighter at roughness <= 0.5 and up to ~59% at
@@ -26158,7 +26156,7 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           principled->set_metallic(input->second);
         }
         if (const auto input = node.inputs.find("diffuse_roughness"); input != node.inputs.end()) {
-          /* Documented APPROXIMATION (user ruling policy-rulings-20261122d Q11):
+          /* Documented APPROXIMATION:
            * Standard Surface's diffuse lobe is the UNcompensated oren_nayar_diffuse_bsdf
            * (libraries/bxdf/standard_surface.mtlx, energy_compensation false), while
            * Principled Diffuse Roughness > 0 uses Cycles' compensated Oren-Nayar
@@ -33666,10 +33664,8 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     }
 
     if (node.nodedef == surface_material_id) {
-      /* surfaceshader shades BOTH faces even with backsurfaceshader connected
-       * (user rulings 2026-11-22 Q9 "Yes, align it" and Q9b "Align and recertify",
-       * receipt out/continuous-finish/hermes-divide-zero-fix-20261014/
-       * policy-rulings-20261122c.receipt.json). No MaterialX 1.39.4 reference back
+      /* surfaceshader shades BOTH faces even with backsurfaceshader connected,
+       * matching the MaterialX 1.39.4 reference back ends. No reference back
        * end renders the back surface here:
        *  - genosl stdlib/genosl/mx_surfacematerial.osl:1-5 takes `back` but never
        *    reads it;
@@ -33728,10 +33724,8 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
     }
 
     if (node.nodedef == lama_surface_id) {
-      /* materialFront shades BOTH faces, whether or not materialBack is connected
-       * (user ruling 2026-11-22 Q8 "align it", receipt
-       * out/continuous-finish/hermes-divide-zero-fix-20261014/
-       * policy-rulings-20261122c.receipt.json). NG_lama_surface wires
+      /* materialFront shades BOTH faces, whether or not materialBack is connected,
+       * matching the MaterialX 1.39.4 reference back ends. NG_lama_surface wires
        * materialBack into surfacematerial.backsurfaceshader, but no MaterialX
        * 1.39.4 reference back end renders that back surface here:
        *  - genosl stdlib/genosl/mx_surfacematerial.osl:1-5 never reads `back`;

@@ -13385,11 +13385,10 @@ TEST(materialx_graph, lowers_lama_surface_front_back_and_presence)
   ShaderGraph graph;
   ASSERT_TRUE(materialx::lower({{front, back, surface}}, &graph));
 
-  /* User ruling 2026-11-22 Q8 "align it" (policy-rulings-20261122c.receipt.json):
-   * materialFront shades both faces even with materialBack connected, as the
+  /* materialFront shades both faces even with materialBack connected, as the
    * MaterialX 1.39.4 OSL/GLSL/MDL back ends do. This test previously pinned a
-   * Geometry.Backfacing split (Closure1=front, Closure2=back); the ruling replaces
-   * exactly those three side assertions with "no split, front into presence". */
+   * Geometry.Backfacing split (Closure1=front, Closure2=back); that was replaced
+   * with "no split, front into presence" to match the reference back ends. */
   MixClosureNode *presence = nullptr;
   TransparentBsdfNode *transparent = nullptr;
   MaterialXDiffuseBsdfNode *front_native = nullptr;
@@ -15455,9 +15454,9 @@ TEST(materialx_graph, lowers_measured_colorcorrect_literal_samples_without_alpha
   EXPECT_FLOAT_EQ(alpha->get_value2(), 0.0f);
 }
 
-TEST(materialx_graph, lowers_blnd02_shard_reference_adjustment_and_switch_nodes)
+TEST(materialx_graph, lowers_vector4_reference_adjustment_and_switch_nodes)
 {
-  /* This coverage intentionally stays inside the blnd02 modulo-1 shard:
+  /* This coverage intentionally stays inside one family group:
    * ND_contrast_vector4, ND_range_vector4FA, ND_remap_vector4,
    * ND_smoothstep_color4FA, and ND_switch_color4I.  The adjustment formulas
    * are the stdlib_ng.mtlx component-wise definitions; switch_color4I folds the
@@ -21579,11 +21578,10 @@ TEST(materialx_graph, validates_gltf_pbr_sheen_link_types_and_refuses_sheen_with
 
 TEST(materialx_graph, validates_gltf_pbr_admits_active_sheen_with_active_emission)
 {
-  /* Batch 55, user ruling policy-rulings-20261122c Q6 ("Measure, then
-   * decide"): the batch-50 refusal of active sheen with active emission is
+  /* The earlier refusal of active sheen with active emission is
    * removed. Principled still attenuates emission by the sheen layer (the
-   * reference does not), but the measured dimming (lane loc-20261122
-   * q6v2-evaluation.json: clearcoat 0.910-0.986 on gltf_pbr; sheen 0.846-0.981
+   * reference does not), but the measured dimming
+   * (clearcoat 0.910-0.986 on gltf_pbr; sheen 0.846-0.981
    * on a native Principled diagnostic, not a lowered gltf_pbr graph; at 0 and
    * 60 degrees) is inside the 0.5-2x band, so it is a documented
    * approximation. The former refusal matrix now has to validate AND lower
@@ -24467,8 +24465,8 @@ TEST(materialx_graph, standard_surface_base_literal_preserves_original_rough_dif
 
 TEST(materialx_graph, b55_uncompensated_oren_nayar_lowers_as_documented_approximation)
 {
-  /* Batch 55, user ruling policy-rulings-20261122d Q11 ("Document approximation"):
-   * behaviour unchanged, now pinned. ND_oren_nayar_diffuse_bsdf with
+  /* Documented approximation, behaviour unchanged, now pinned.
+   * ND_oren_nayar_diffuse_bsdf with
    * energy_compensation false (explicit 0, or unauthored = the nodedef default) at
    * roughness > 0, literal or linked, validates and lowers to the same (compensated)
    * Cycles diffuse closure as energy_compensation 1, with the roughness passed through.
@@ -31255,8 +31253,7 @@ materialx::Node b51_surface_over(const string &bsdf_name)
 }
 }  // namespace
 
-/* Batch 51 item 1 (findings out/continuous-finish/chiang-hair-curves-20261122 B4):
- * PrincipledHairBsdfNode has no Normal socket (scene/shader_nodes.cpp
+/* PrincipledHairBsdfNode has no Normal socket (scene/shader_nodes.cpp
  * NODE_DEFINE(PrincipledHairBsdfNode)), so a linked chiang `normal` has no Cycles
  * equivalent. validate() must refuse it in both IR flavours. */
 TEST(materialx_graph, b51_rejects_chiang_hair_linked_normal_in_validate)
@@ -31337,9 +31334,8 @@ TEST(materialx_graph, b51_chiang_hair_linked_absorption_still_lowers)
  * the front surface on both sides, which is what this lowering already does. This test
  * pins that behaviour.
  *
- * RULED (user ruling 2026-11-22 Q8 "align it", policy-rulings-20261122c.receipt.json;
- * this resolves the open ruling from review b51-review-20261122-7c4e): front on both
- * faces in every case. Batch 52 verified genglsl too: MaterialX 1.39.4
+ * Resolved: front on both
+ * faces in every case. genglsl behaves the same way: MaterialX 1.39.4
  * MaterialNode::emitFunctionCall emits only `surfaceshader`, ignoring the back surface.
  * The connected-materialBack case is pinned by the b52_ tests below. Assertions here
  * are unchanged. */
@@ -31378,9 +31374,7 @@ TEST(materialx_graph, b51_lama_surface_unconnected_back_keeps_front_on_both_face
   EXPECT_FLOAT_EQ(presence->get_fac(), 0.5f);
 }
 
-/* Batch 52: user ruling 2026-11-22 Q8 "align it" (receipt
- * out/continuous-finish/hermes-divide-zero-fix-20261014/policy-rulings-20261122c.receipt.json).
- * ND_lama_surface renders materialFront on both faces even with materialBack CONNECTED,
+/* ND_lama_surface renders materialFront on both faces even with materialBack CONNECTED,
  * matching MaterialX 1.39.4 genosl (mx_surfacematerial.osl ignores `back`), genglsl
  * (MaterialNode::emitFunctionCall emits only `surfaceshader`) and genmdl/OVRTX
  * (stdlib_1_6.mdl `backface` is used only when thin_walled, false in NG_lama_surface). */
