@@ -21169,6 +21169,35 @@ TEST(materialx_graph, standard_surface_sheen_layers_base_attenuation)
     EXPECT_FLOAT_EQ(fac->get_value2(), w);
   }
   {
+    /* A LITERAL authored `normal` is a pre-existing dead store on the lobes (their
+     * LINK_NORMAL sockets are force-linked to the shading normal by default_inputs), so
+     * the attenuation chain must use the shading normal too, not the literal
+     * (sheenlayer-code-review-20261125-a3f7c21e F1). */
+    materialx::Node surface;
+    surface.name = "SS";
+    surface.nodedef = "ND_standard_surface_surfaceshader";
+    surface.inputs["sheen"] = w;
+    surface.vector3_inputs["normal"] = make_float3(0.0f, 0.6f, 0.8f);
+    surface.outputs["out"] = materialx::Type::SurfaceShader;
+    ShaderGraph graph;
+    ASSERT_TRUE(materialx::lower({{surface}}, &graph));
+    GeometryNode *geometry = nullptr;
+    VectorMathNode *ndotv = nullptr;
+    for (ShaderNode *node : graph.nodes) {
+      geometry = geometry ? geometry : dynamic_cast<GeometryNode *>(node);
+      if (node->name == "SS.standard_surface_sheen_layer.ndotv") {
+        ndotv = dynamic_cast<VectorMathNode *>(node);
+      }
+    }
+    ASSERT_NE(geometry, nullptr);
+    ASSERT_NE(ndotv, nullptr);
+    ASSERT_NE(ndotv->input("Vector1")->link, nullptr);
+    auto *convert = dynamic_cast<ConvertNode *>(ndotv->input("Vector1")->link->parent);
+    ASSERT_NE(convert, nullptr);
+    ASSERT_FALSE(convert->inputs.empty());
+    EXPECT_EQ(convert->inputs[0]->link, geometry->output("Normal"));
+  }
+  {
     /* No active weight (sheen_color only; the NodeDef sheen default is 0): no layer Mix,
      * the base feeds the additive sum directly, exactly as before the fix. */
     materialx::Node surface;

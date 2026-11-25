@@ -3530,8 +3530,13 @@ float sheen_microfiber_literal_roughness(const Node &node)
  *  - x = clamp(|dot(N, Incoming)|, 0, 1). GeometryNode "Incoming" is sd->wi, the genglsl
  *    V; |.| is the reference's forward-facing normal, and the clamp matches the
  *    reference's clamp(NdotV, eps, 1) except for the negligible eps floor (the fit is
- *    finite and smooth at x = 0). N is the lobe's normal source: the linked or literal
- *    standard_surface `normal`, else the shading normal.
+ *    finite and smooth at x = 0). N is what the LOBES actually shade with: the linked
+ *    standard_surface `normal`, else the shading normal (GeometryNode "Normal"). A
+ *    LITERAL authored `normal` is a pre-existing dead store on the lobes -- their Normal
+ *    sockets are LINK_NORMAL, which ShaderGraph::default_inputs force-links to the
+ *    shading normal when unlinked -- so the chain deliberately uses the shading normal
+ *    too, keeping the attenuation consistent with the lobe it attenuates
+ *    (sheenlayer-code-review-20261125-a3f7c21e F1).
  *  - The RAW sheen_roughness feeds the fit (the reference evaluates its own roughness);
  *    the Conty-Kulla -> microfiber energy remap applies to the Cycles lobe only.
  *  - A literal roughness folds the r terms into the two quadratics' coefficients here; a
@@ -3561,10 +3566,13 @@ float sheen_microfiber_literal_roughness(const Node &node)
  * reference throughput only where the pre-existing lobe approximation would otherwise
  * create energy); the scalar throughput attenuates the whole Principled base INCLUDING
  * its emission (the reference layers BSDFs only; Cycles' own native Principled sheen
- * attenuates emission the same way, svm/closure.h principled_bsdf_emission); and the
- * sheen layer stays composed outside Principled, so it is not under the coat (the
- * reference nests sheen under the coat; same pre-existing composition-order
- * approximation documented at the coat lowering). */
+ * attenuates emission the same way, svm/closure.h principled_bsdf_emission) and
+ * including the specular/metal lobes, which standard_surface.mtlx composes ABOVE the
+ * sheen layer (also matching Cycles' native Principled sheen layering); the sheen layer
+ * stays composed outside Principled, so it is not under the coat (the reference nests
+ * sheen under the coat; same pre-existing composition-order approximation documented at
+ * the coat lowering); and fac is saturated (MixClosure semantics), where the reference
+ * throughput 1 - weight * dirAlbedo can go negative for out-of-spec weights > 1. */
 constexpr float sheen_dir_albedo_c0[2] = {13.67300f, 1.0f};
 constexpr float sheen_dir_albedo_cx[2] = {-68.78018f, 61.57746f};
 constexpr float sheen_dir_albedo_cx2[2] = {60.28956f, 121.81241f};
@@ -3575,7 +3583,6 @@ constexpr float sheen_dir_albedo_cr2[2] = {1086.96473f, 3045.55075f};
 void connect_standard_surface_sheen_layer_attenuation(ShaderGraph *graph,
                                                       const string &name,
                                                       ShaderOutput *normal,
-                                                      const float3 *literal_normal,
                                                       ShaderOutput *roughness,
                                                       const float literal_roughness,
                                                       ShaderOutput *lobe_roughness,
@@ -3592,10 +3599,9 @@ void connect_standard_surface_sheen_layer_attenuation(ShaderGraph *graph,
   if (normal != nullptr) {
     graph->connect(normal, ndotv->input("Vector1"));
   }
-  else if (literal_normal != nullptr) {
-    ndotv->set_vector1(*literal_normal);
-  }
   else {
+    /* Unlinked (unauthored OR literal) `normal`: the lobes' LINK_NORMAL sockets shade
+     * with the shading normal (default_inputs), so the chain must too. */
     graph->connect(geometry->output("Normal"), ndotv->input("Vector1"));
   }
   graph->connect(geometry->output("Incoming"), ndotv->input("Vector2"));
@@ -33618,7 +33624,6 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
           MixClosureNode *layer = graph->create_node<MixClosureNode>();
           layer->name = node.name + ".standard_surface_sheen_layer";
           const auto normal_link = node.links.find("normal");
-          const auto literal_normal = node.vector3_inputs.find("normal");
           const auto roughness_link = node.links.find("sheen_roughness");
           const float literal_roughness = node.inputs.contains("sheen_roughness") ?
                                               node.inputs.at("sheen_roughness") :
@@ -33633,7 +33638,6 @@ static bool lower_nodes(const Graph &source, ShaderGraph *graph, string *error_m
               normal_link != node.links.end() ?
                   lowered_output(normal_link->second, nodes_by_name, lowered_nodes) :
                   nullptr,
-              literal_normal != node.vector3_inputs.end() ? &literal_normal->second : nullptr,
               roughness_link != node.links.end() ?
                   lowered_output(roughness_link->second, nodes_by_name, lowered_nodes) :
                   nullptr,
